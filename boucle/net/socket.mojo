@@ -2,7 +2,11 @@
 
 Wraps an OwnedHandle and provides convenience constructors for common
 socket configurations. All sockets are created with NONBLOCK and
-CLOEXEC flags by default.
+CLOEXEC flags by default, with one exception: `tcp_connect` and
+`udp_connect` deliberately return BLOCKING sockets, since their public
+contract is "connect and hand back a usable blocking client." Set
+non-blocking manually if you need to thread the result into a
+CompletionLoop or ReadinessLoop.
 """
 
 from boucle.handle import RawHandle, OwnedHandle
@@ -163,7 +167,12 @@ struct Socket:
 
     @staticmethod
     def tcp_connect(ref addr: SocketAddrV4) raises -> Self:
-        """Blocking TCP client to an IPv4 address."""
+        """Blocking TCP client to an IPv4 address.
+
+        Returns a BLOCKING socket suitable for direct blocking send/recv.
+        Set non-blocking manually if you need to thread the result into a
+        CompletionLoop or ReadinessLoop.
+        """
         var handle = _sys_socket(
             AddrFamily.INET,
             SocketType.STREAM,
@@ -176,7 +185,12 @@ struct Socket:
 
     @staticmethod
     def tcp_connect(ref addr: SocketAddrV6) raises -> Self:
-        """Blocking TCP client to an IPv6 address."""
+        """Blocking TCP client to an IPv6 address.
+
+        Returns a BLOCKING socket suitable for direct blocking send/recv.
+        Set non-blocking manually if you need to thread the result into a
+        CompletionLoop or ReadinessLoop.
+        """
         var handle = _sys_socket(
             AddrFamily.INET6,
             SocketType.STREAM,
@@ -189,7 +203,12 @@ struct Socket:
 
     @staticmethod
     def udp_connect(ref addr: SocketAddrV4) raises -> Self:
-        """Blocking UDP client to an IPv4 address (sets default peer)."""
+        """Blocking UDP client to an IPv4 address (sets default peer).
+
+        Returns a BLOCKING socket suitable for direct blocking send/recv.
+        Set non-blocking manually if you need to thread the result into a
+        CompletionLoop or ReadinessLoop.
+        """
         var handle = _sys_socket(
             AddrFamily.INET,
             SocketType.DGRAM,
@@ -202,7 +221,12 @@ struct Socket:
 
     @staticmethod
     def udp_connect(ref addr: SocketAddrV6) raises -> Self:
-        """Blocking UDP client to an IPv6 address (sets default peer)."""
+        """Blocking UDP client to an IPv6 address (sets default peer).
+
+        Returns a BLOCKING socket suitable for direct blocking send/recv.
+        Set non-blocking manually if you need to thread the result into a
+        CompletionLoop or ReadinessLoop.
+        """
         var handle = _sys_socket(
             AddrFamily.INET6,
             SocketType.DGRAM,
