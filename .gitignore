@@ -9,8 +9,17 @@ specs/
 research/
 docs/project-context.md
 
-# Local agent guide — kept local
+# Local agent guide and config
 CLAUDE.md
+.claude/
+
+# Secrets and credentials — never commit
+.env
+.env.*
+*.pem
+*.key
+*.crt
+credentials.*
 
 # Local git backups (e.g. .git.bak.YYYY-MM-DD-*)
 .git.bak.*
