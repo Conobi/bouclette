@@ -2,7 +2,7 @@
 name = "boucle"
 version = "0.1.0"
 description = "Platform-agnostic I/O library for Mojo"
-license = "Apache-2.0"
+license = "MIT"
 requires-python = ">=3.11"
 dependencies = [
     "mojox>=0.2",

@@ -134,4 +134,4 @@ The `_sys/` tree is private — never import from it directly. The backend is se
 
 ## License
 
-Apache-2.0. See [`LICENSE`](LICENSE).
+MIT. See [`LICENSE`](LICENSE).
