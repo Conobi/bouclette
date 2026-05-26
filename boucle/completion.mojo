@@ -24,6 +24,7 @@ from boucle._sys.linux.raw import (
 from boucle.handle import RawHandle
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.sys.info import size_of
 from std.sys.intrinsics import _RegisterPackType
 
 
@@ -43,6 +44,45 @@ from std.sys.intrinsics import _RegisterPackType
 
 comptime _IO_URING_BUF_SIZE: Int = 16
 comptime _IO_URING_BUF_TAIL_OFFSET: Int = 14
+
+# Named field offsets for self-documenting _write_entry code.
+# struct io_uring_buf { __u64 addr; __u32 len; __u16 bid; __u16 resv; }
+comptime _BUF_ADDR_OFFSET: Int = 0
+comptime _BUF_LEN_OFFSET: Int = 8
+comptime _BUF_BID_OFFSET: Int = 12
+
+
+def _verify_io_uring_buf_layout():
+    """Compile-time layout verification for struct io_uring_buf.
+
+    struct io_uring_buf { __u64 addr; __u32 len; __u16 bid; __u16 resv; }
+    Total: 8 + 4 + 2 + 2 = 16 bytes.
+    Tail overlay: bid(12) + resv(14) -- tail is at offset 14 within slot 0.
+    """
+    comptime assert size_of[UInt64]() == 8, "UInt64 size mismatch"
+    comptime assert size_of[UInt32]() == 4, "UInt32 size mismatch"
+    comptime assert size_of[UInt16]() == 2, "UInt16 size mismatch"
+    comptime assert (
+        _IO_URING_BUF_SIZE
+        == size_of[UInt64]()
+        + size_of[UInt32]()
+        + size_of[UInt16]()
+        + size_of[UInt16]()
+    ), "io_uring_buf size mismatch"
+    comptime assert (
+        _IO_URING_BUF_TAIL_OFFSET
+        == size_of[UInt64]() + size_of[UInt32]() + size_of[UInt16]()
+    ), "io_uring_buf tail offset mismatch"
+    comptime assert _BUF_ADDR_OFFSET == 0, "BUF_ADDR_OFFSET mismatch"
+    comptime assert (
+        _BUF_LEN_OFFSET == size_of[UInt64]()
+    ), "BUF_LEN_OFFSET mismatch"
+    comptime assert (
+        _BUF_BID_OFFSET == size_of[UInt64]() + size_of[UInt32]()
+    ), "BUF_BID_OFFSET mismatch"
+
+
+comptime _LAYOUT_VERIFIED: None = _verify_io_uring_buf_layout()
 
 
 struct BufRing(Movable):
@@ -69,6 +109,10 @@ struct BufRing(Movable):
         buf_base: UnsafePointer[UInt8, MutAnyOrigin],
         buf_size: UInt32,
     ):
+        debug_assert(
+            ring_entries > 0 and (ring_entries & (ring_entries - 1)) == 0,
+            "ring_entries must be a power of 2",
+        )
         self.ring_addr = ring_addr
         self.ring_entries = ring_entries
         self.mask = ring_entries - UInt32(1)
@@ -123,27 +167,35 @@ struct BufRing(Movable):
         len: UInt32,
         bid: UInt16,
     ):
-        # struct io_uring_buf { __u64 addr; __u32 len; __u16 bid; __u16 resv; }
+        """Write a single io_uring_buf entry into the ring at `slot`.
+
+        struct io_uring_buf { __u64 addr; __u32 len; __u16 bid; __u16 resv; }
+        Field offsets verified at compile time by _verify_io_uring_buf_layout.
+        """
         var ent = self._entry_ptr(slot)
-        # Store addr at offset 0 (8 bytes)
+        # Store addr at _BUF_ADDR_OFFSET (8 bytes)
         UnsafePointer[UInt64, MutAnyOrigin](
-            unsafe_from_address=Int(ent)
+            unsafe_from_address=Int(ent) + _BUF_ADDR_OFFSET
         )[] = addr
-        # len at offset 8 (4 bytes)
+        # len at _BUF_LEN_OFFSET (4 bytes)
         UnsafePointer[UInt32, MutAnyOrigin](
-            unsafe_from_address=Int(ent) + 8
+            unsafe_from_address=Int(ent) + _BUF_LEN_OFFSET
         )[] = len
-        # bid at offset 12 (2 bytes)
+        # bid at _BUF_BID_OFFSET (2 bytes)
         UnsafePointer[UInt16, MutAnyOrigin](
-            unsafe_from_address=Int(ent) + 12
+            unsafe_from_address=Int(ent) + _BUF_BID_OFFSET
         )[] = bid
-        # resv at offset 14 — DO NOT touch when slot == 0 (overlays tail).
-        # When slot != 0, leaving it as whatever the previous tail value
-        # was is harmless (kernel ignores resv).
+        # resv at _IO_URING_BUF_TAIL_OFFSET — DO NOT touch when slot == 0
+        # (overlays tail). When slot != 0, leaving it as whatever the
+        # previous tail value was is harmless (kernel ignores resv).
 
     def add_buffer(mut self, buf_id: UInt16):
         """Return a buffer (identified by `buf_id` from a recv CQE) to
         the ring so the kernel can pick it for a future arrival."""
+        debug_assert(
+            UInt32(buf_id) < self.ring_entries,
+            "buf_id exceeds ring capacity",
+        )
         var tp = self._tail_ptr()
         var current_tail = tp[]
         var slot = UInt32(current_tail) & self.mask
@@ -508,6 +560,10 @@ struct CompletionLoop[Handler: CompletionHandler]:
         at `buf_base + i * buf_size` (i = 0..count-1).
         """
         var entries = UInt32(_next_pow2(count))
+        debug_assert(
+            Int(entries) <= Int(UInt32.MAX) // _IO_URING_BUF_SIZE,
+            "ring too large",
+        )
         var ring_bytes = Int(entries) * _IO_URING_BUF_SIZE
         var ring_mem = _heap_alloc[UInt8](ring_bytes).as_any_origin()
         for i in range(ring_bytes):
