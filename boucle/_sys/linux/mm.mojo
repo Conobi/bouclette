@@ -55,7 +55,6 @@ from boucle._sys.linux.raw import (
 )
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw.utils import is_64bit
-from std.ffi import external_call
 from std.memory import UnsafePointer
 
 
@@ -204,19 +203,6 @@ def mprotect(
     """
     var res = syscall[__NR_mprotect, Scalar[DType.int64]](unsafe_ptr, len, prot)
     unsafe_decode_none(res)
-
-
-@always_inline
-def get_page_size() -> UInt32:
-    """Returns the system page size via sysconf(_SC_PAGESIZE).
-
-    Returns:
-        The page size in bytes.
-    """
-    comptime _SC_PAGESIZE: Int32 = 30
-    var res = external_call["sysconf", Int64](_SC_PAGESIZE)
-    debug_assert(res > 0, "sysconf(_SC_PAGESIZE) failed")
-    return UInt32(res)
 
 
 struct MapFlags(TrivialRegisterPassable, Defaultable):

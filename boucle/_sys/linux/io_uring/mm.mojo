@@ -149,7 +149,7 @@ struct MemoryMapping[sqe: SQE, cqe: CQE](Movable):
             flags=params.flags.value,
             cq_entries_param=params.cq_entries,
         )
-        var page_size = get_page_size()
+        var page_size = UInt32(get_page_size())
         sqes_size = _checked_mul(entries.sq_entries, UInt32(Self.sqe.size))
         sq_array_size = (
             UInt32(0) if params.flags
