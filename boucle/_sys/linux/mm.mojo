@@ -54,7 +54,14 @@ from boucle._sys.linux.raw import (
 )
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw.utils import is_64bit
+from std.ffi import external_call
 from std.memory import UnsafePointer
+
+
+@always_inline
+def get_page_size() -> UInt:
+    """Returns the system page size via libc getpagesize()."""
+    return UInt(external_call["getpagesize", Int32]())
 
 
 @always_inline
