@@ -150,6 +150,7 @@ from boucle._sys.linux.raw import (
     IORING_OP_SENDMSG_ZC,
     IORING_MSG_DATA,
     IORING_MSG_SEND_FD,
+    EINVAL,
     io_sqring_offsets,
     io_cqring_offsets,
 )
@@ -1023,8 +1024,13 @@ struct OwnedFd[is_registered: Bool = False](
             try:
                 var res = io_uring_register(self, arg)
                 debug_assert(res == 1, "failed to unregister file descriptor")
-            except:
-                pass
+            except e:
+                # EINVAL (-22) is expected when the ring is already torn
+                # down; only fire the diagnostic for unexpected errors.
+                debug_assert(
+                    String(e) == String(-Int(EINVAL)),
+                    "OwnedFd.__del__: io_uring_register failed: " + String(e),
+                )
         else:
             close_unchecked(unsafe_fd=self._fd)
 

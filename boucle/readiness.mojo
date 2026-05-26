@@ -69,6 +69,11 @@ struct ReadinessLoop[Handler: ReadinessHandler]:
         self._handler = handler^
 
     def __del__(deinit self):
+        """Frees the event buffer and closes the epoll fd.
+
+        Errors from close() are detected only in debug builds
+        (via debug_assert inside close/unsafe_fd_as_arg).
+        """
         self._events.free()
         close_unchecked(unsafe_fd=self._epfd)
 
