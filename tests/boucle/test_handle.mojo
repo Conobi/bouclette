@@ -17,5 +17,13 @@ def main() raises:
     var handle2 = handle^
     assert_true(handle2.raw() > -1)
 
+    # OwnedHandle.__init__ raises on negative raw handle
+    var caught_neg = False
+    try:
+        _ = OwnedHandle(raw=Int32(-1))
+    except:
+        caught_neg = True
+    assert_true(caught_neg)
+
     # handle2 goes out of scope here and __del__ closes the fd automatically.
     print("All handle tests passed.")

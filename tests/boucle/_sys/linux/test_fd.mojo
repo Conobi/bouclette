@@ -14,7 +14,23 @@ def main() raises:
     var validated = unsafe_fd_as_arg(fd)
     assert_true(validated == fd)
 
-    # Close the duped fd
+    # unsafe_fd_as_arg raises on negative fd
+    var caught_neg = False
+    try:
+        _ = unsafe_fd_as_arg(Int32(-1))
+    except:
+        caught_neg = True
+    assert_true(caught_neg)
+
+    # Close the duped fd (checked version)
     close(unsafe_fd=fd)
+
+    # close raises on invalid (negative) fd
+    var caught_close = False
+    try:
+        close(unsafe_fd=Int32(-1))
+    except:
+        caught_close = True
+    assert_true(caught_close)
 
     print("All fd tests passed.")

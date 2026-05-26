@@ -6,7 +6,7 @@ IoUringParams, and the three io_uring syscalls (setup, enter, register).
 """
 
 from boucle._sys.linux.raw.ctypes import c_void
-from boucle._sys.linux.fd import UnsafeFd, close
+from boucle._sys.linux.fd import UnsafeFd, close, close_unchecked
 from boucle._sys.linux.errno import is_eintr, unsafe_decode_result
 from boucle._sys.linux.utils import _aligned_u64, _align_eq, _size_eq
 from boucle._sys.linux.raw import (
@@ -1026,7 +1026,7 @@ struct OwnedFd[is_registered: Bool = False](
             except:
                 pass
         else:
-            close(unsafe_fd=self._fd)
+            close_unchecked(unsafe_fd=self._fd)
 
     # ===------------------------------------------------------------------=== #
     # Trait implementations

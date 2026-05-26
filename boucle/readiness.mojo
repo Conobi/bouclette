@@ -18,7 +18,7 @@ from boucle._sys.linux.epoll.syscalls import (
     EpollOp,
 )
 from boucle._sys.linux.raw import epoll_event, EPOLLRDHUP
-from boucle._sys.linux.fd import close
+from boucle._sys.linux.fd import close, close_unchecked
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
@@ -70,7 +70,7 @@ struct ReadinessLoop[Handler: ReadinessHandler]:
 
     def __del__(deinit self):
         self._events.free()
-        close(unsafe_fd=self._epfd)
+        close_unchecked(unsafe_fd=self._epfd)
 
     def register(self, fd: Int32, interest: Interest, token: Token) raises:
         """Add a file descriptor to the interest list."""

@@ -1,6 +1,11 @@
 """Portable I/O resource handle types."""
 
-from boucle._sys.linux.fd import UnsafeFd, close, unsafe_fd_as_arg
+from boucle._sys.linux.fd import (
+    UnsafeFd,
+    close,
+    close_unchecked,
+    unsafe_fd_as_arg,
+)
 
 comptime RawHandle = UnsafeFd
 """A raw, unowned file descriptor / handle value. Alias for Int32."""
@@ -16,8 +21,14 @@ struct OwnedHandle(Movable):
     var _raw: RawHandle
 
     @always_inline("nodebug")
-    def __init__(out self, *, raw: RawHandle):
-        debug_assert(raw > -1, "invalid handle")
+    def __init__(out self, *, raw: RawHandle) raises:
+        """Creates an OwnedHandle from a raw handle value.
+
+        Raises:
+            If `raw` is negative.
+        """
+        if raw < 0:
+            raise "invalid handle"
         self._raw = raw
 
     @always_inline("nodebug")
@@ -26,9 +37,13 @@ struct OwnedHandle(Movable):
 
     @always_inline("nodebug")
     def __del__(deinit self):
-        close(unsafe_fd=self._raw)
+        close_unchecked(unsafe_fd=self._raw)
 
     @always_inline("nodebug")
-    def raw(self) -> RawHandle:
-        """Returns the underlying raw handle value."""
+    def raw(self) raises -> RawHandle:
+        """Returns the underlying raw handle value.
+
+        Raises:
+            If the stored handle is somehow invalid (negative).
+        """
         return unsafe_fd_as_arg(self._raw)

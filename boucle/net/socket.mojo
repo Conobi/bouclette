@@ -238,6 +238,10 @@ struct Socket:
         return Self(handle^)
 
     @always_inline
-    def raw(self) -> RawHandle:
-        """Returns the underlying raw handle value."""
+    def raw(self) raises -> RawHandle:
+        """Returns the underlying raw handle value.
+
+        Raises:
+            If the stored handle is somehow invalid (negative).
+        """
         return self._handle.raw()

@@ -23,6 +23,7 @@ from boucle._sys.linux.fd import (
     NoFd,
     unsafe_fd_as_arg,
     close,
+    close_unchecked,
     dup,
 )
 

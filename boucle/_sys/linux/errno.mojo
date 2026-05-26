@@ -67,18 +67,31 @@ struct Errno(TrivialRegisterPassable, Writable):
 
     @always_inline("nodebug")
     def __init__(out self, *, errno: UInt16):
-        self = Self(negated_errno=-Int16(errno))
+        """Creates an Errno from a positive errno number.
 
-    @always_inline("nodebug")
-    def __init__(out self, *, error: Error) raises:
-        self = Self(negated_errno=Int16(Int(String(error))))
-
-    @always_inline("nodebug")
-    def __init__(out self, *, negated_errno: Int16):
-        self.id = negated_errno
+        Used by comptime constants. The range is validated via debug_assert
+        since comptime evaluation cannot call raising functions.
+        """
+        self.id = -Int16(errno)
         debug_assert(
             self.id >= -4095 and self.id < 0, "error number out of range"
         )
+
+    @always_inline("nodebug")
+    def __init__(out self, *, error: Error) raises:
+        """Creates an Errno from an Error whose string is a negated errno."""
+        self = Self(negated_errno=Int16(Int(String(error))))
+
+    @always_inline("nodebug")
+    def __init__(out self, *, negated_errno: Int16) raises:
+        """Creates an Errno from a negated errno value.
+
+        Raises:
+            If `negated_errno` is outside the valid Linux range [-4095, 0).
+        """
+        self.id = negated_errno
+        if not (self.id >= -4095 and self.id < 0):
+            raise "error number out of range"
 
     @always_inline("nodebug")
     def __is__(self, rhs: Self) -> Bool:
@@ -105,8 +118,15 @@ def is_eintr(neg_errno: Scalar[DType.int64]) -> Bool:
 
 @always_inline("nodebug")
 def _check_for_errors(raw: Scalar[DType.int64]) raises:
+    """Raises when `raw` is a negated errno from a Linux syscall.
+
+    Raises:
+        If `raw` is negative but outside [-4095, 0) (kernel contract violation).
+        If `raw` is a valid negated errno, raises its string representation.
+    """
     if raw < 0:
-        debug_assert(raw >= -4095, "error number out of range")
+        if raw < -4095:
+            raise "error number out of range: " + String(raw)
         raise String(raw)
 
 
@@ -119,9 +139,16 @@ def _zero_result(raw: Scalar[DType.int64]):
 def unsafe_decode_result[
     type: DType
 ](raw: Scalar[DType.int64]) raises -> Scalar[type]:
+    """Checks for errors and converts `raw` to the given scalar type.
+
+    Raises:
+        If `raw` is a negated errno (via `_check_for_errors`).
+        If the conversion to `type` is lossy.
+    """
     _check_for_errors(raw)
     var res = raw.cast[type]()
-    debug_assert(res.cast[DType.int64]() == raw, "conversion is not lossless")
+    if res.cast[DType.int64]() != raw:
+        raise "conversion is not lossless"
     return res
 
 
@@ -134,6 +161,13 @@ def unsafe_decode_ptr(
 
 @always_inline("nodebug")
 def unsafe_decode_none(raw: Scalar[DType.int64]) raises:
+    """Checks that `raw` is zero (success) or a valid negated errno.
+
+    Raises:
+        If `raw` is non-zero but outside [-4095, 0) (kernel contract violation).
+        If `raw` is a valid negated errno, raises its string representation.
+    """
     if raw != 0:
-        debug_assert(raw >= -4095 and raw < 0, "error number out of range")
+        if not (raw >= -4095 and raw < 0):
+            raise "error number out of range: " + String(raw)
         raise String(raw)
