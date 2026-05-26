@@ -7,6 +7,7 @@ Linux x86_64 only. Uses POSIX ucontext_t via external_call.
 Bridge until Modular ships native waker APIs.
 """
 
+from std.os import abort
 from std.memory import UnsafePointer, memset
 from std.memory.unsafe_pointer import alloc
 from boucle._sys.linux.ucontext import (
@@ -145,11 +146,9 @@ def _coro_trampoline(inner_addr: Int64):
     var inner = UnsafePointer[_CoroInner, MutExternalOrigin](
         unsafe_from_address=Int(inner_addr)
     )
-    # Validate canary before any dereference
-    debug_assert(
-        inner[].magic == CORO_MAGIC,
-        "corrupted _CoroInner: bad magic number",
-    )
+    # Always-on canary: a corrupt pointer here means unrecoverable state.
+    if inner[].magic != CORO_MAGIC:
+        abort("corrupted _CoroInner: bad magic number")
     var yielder = CoroYielder(inner)
     try:
         inner[].body(yielder)

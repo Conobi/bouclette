@@ -101,7 +101,7 @@ struct Region(Movable):
         comptime assert align_of[T]() > 0
         comptime assert size_of[c_void]() == 1
 
-        if _checked_add(offset, count * UInt32(size_of[T]())) > UInt32(self.len):
+        if _checked_add(offset, _checked_mul(count, UInt32(size_of[T]()))) > UInt32(self.len):
             raise "offset is out of bounds"
         ptr = self.ptr + offset
         if Int(ptr) & (align_of[T]() - 1):
