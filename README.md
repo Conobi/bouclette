@@ -1,24 +1,42 @@
-![CI](https://github.com/Conobi/boucle/actions/workflows/ci.yml/badge.svg)
+<h1 align="center">
+  🔁<br/>
+  Boucle
+</h1>
 
-# Boucle
+<p align="center">
+  <i>Platform-agnostic I/O foundation for Mojo: completion and readiness loops over shared portable types.</i>
+</p>
 
-Boucle is a platform-agnostic I/O foundation for Mojo. It exposes two explicit async I/O models — **completion** (submit work, get notified when done) and **readiness** (get notified when I/O is possible, do it yourself) — over shared portable types (sockets, buffers, handles, addresses). Boucle is sans-I/O compatible: protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level. Today's backends are Linux io_uring (completion) and Linux epoll (readiness), with macOS kqueue and Windows IOCP planned.
+> [!WARNING]
+> **Active development — not production-ready.**
+> APIs are unstable, and the only supported backends are `io_uring` and `epoll` on Linux.
+---
 
-## When to use which model
+## Why Boucle
 
-### Prefer completion when
-- Bulk data transfer (file serving, streaming)
-- Batching many operations (databases, storage engines)
-- Cancellation is rare
-- Heavy disk I/O (io_uring does real async file I/O)
+Most I/O libraries pick one model and emulate the other. Boucle exposes both as first-class APIs over shared types, so you pick the model that fits your workload — not the one your library chose for you.
 
-### Prefer readiness when
-- Multiplexed connections (HTTP/2, HTTP/3, QUIC)
-- Frequent cancellation (timeouts, request racing, hedging)
-- Fine-grained stream prioritization
-- Many idle connections (classic C10K)
+- **Two models, one type system.** Completion (submit work, get notified) and readiness (get notified, do it yourself) share Socket, Buffer, Token, SocketAddr. No adapter layers.
+- **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
+- **Linear types for completion safety.** Submitted operations return a `PendingOp` that must be awaited or cancelled. You can't drop it and leak the buffer.
+- **`_sys/` is private.** The backend is selected at compile time. Platform-specific features (sendmmsg, SO_REUSEPORT) require an explicit `_sys/` import — the path makes the portability trade-off visible.
+- **Both models on every platform.** On macOS, CompletionLoop emulates over kqueue. On Windows, ReadinessLoop emulates over IOCP. Not optimal, but always portable.
+- **Structured async alignment.** Coroutine, Waker, Executor traits align with the [structured async proposal](https://github.com/modular/modular/issues/3945). CompletionLoop and ReadinessLoop can serve as executor backends when async/await lands in Mojo.
 
-## Install & build
+### Platform coverage
+
+| Backend | Model | Platform | Status |
+|---|---|---|---|
+| io_uring | Completion | Linux | ✅ |
+| epoll | Readiness | Linux | ✅ |
+| kqueue | Readiness | macOS | Planned |
+| kqueue (emulated) | Completion | macOS | Planned |
+| IOCP | Completion | Windows | Planned |
+| IOCP (emulated) | Readiness | Windows | Planned |
+
+---
+
+## Install / build
 
 ```bash
 uv sync                                # Install dev dependencies
@@ -41,97 +59,76 @@ uv run -- mojo run -I . -D ASSERT=all tests/<path>.mojo
 
 Each example is a self-contained, runnable Mojo program. They live in `examples/` and are not in the test runner — invoke them directly.
 
-### Completion echo (loopback TCP via io_uring)
+| Example | What it does |
+|---|---|
+| [`completion_echo.mojo`](examples/completion_echo.mojo) | Loopback TCP echo via io_uring (accept, connect, send, recv). |
+| [`readiness_echo.mojo`](examples/readiness_echo.mojo) | Pipe echo via epoll (register, poll, read). |
+| [`coro_echo.mojo`](examples/coro_echo.mojo) | Stackful coroutine yield/resume. |
 
-```mojo
-var loop = CompletionLoop(EchoTracker(), sq_entries=8)
-loop.submit_accept(server.raw(), token=_TOK_ACCEPT)
-loop.submit_connect(client.raw(), addr_ptr, addr_len, token=_TOK_CONNECT)
-loop.run()
-
-loop.submit_send(client.raw(), send_buf, UInt(_MSG_LEN), token=_TOK_SEND)
-loop.submit_recv(accepted_fd, recv_ptr, UInt(16), token=_TOK_RECV)
-loop.run()
-
-assert_equal(loop._handler.bytes_recvd, Int32(_MSG_LEN))
-```
+Same run pattern for all of them:
 
 ```bash
 uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 ```
 
-### Readiness echo (pipe via epoll)
+## Use as a library
+
+You write a handler that implements `CompletionHandler` or `ReadinessHandler`; the loop owns the kernel interface:
 
 ```mojo
-var loop = ReadinessLoop(EchoHandler(read_fd), max_events=16)
-loop.register(read_fd, Interest.READABLE, Token(42))
+from boucle.completion import CompletionLoop, CompletionHandler
 
-# Write the message; the kernel will mark the read end readable.
-_ = syscall[1, Scalar[DType.int64]](write_fd, msg_ptr, UInt64(_MSG_LEN))
+comptime _TOK_RECV: UInt64 = 4
 
-loop.poll(timeout_ms=1000)
-assert_equal(loop._handler.bytes_read, _MSG_LEN)
+struct EchoTracker(CompletionHandler):
+    var bytes_recvd: Int32
+
+    def __init__(out self):
+        self.bytes_recvd = 0
+
+    def __init__(out self, *, deinit take: Self):
+        self.bytes_recvd = take.bytes_recvd
+
+    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
+        if token == _TOK_RECV:
+            self.bytes_recvd = result
 ```
 
-```bash
-uv run -- mojo run -I . -D ASSERT=all examples/readiness_echo.mojo
-```
+The same handler shape drives `ReadinessHandler` for epoll. For the full wiring (socket setup, submit/run cycle, assertions) see [`examples/completion_echo.mojo`](examples/completion_echo.mojo).
 
-### Coro echo (stackful yield/resume)
+---
 
-```mojo
-def _echo_body(mut y: CoroYielder) raises:
-    print("in coro")
-    y.yield_to_caller()
-    print("resumed")
-
-var coro = CoroHandle(_echo_body)
-print("before resume")
-coro.resume()
-print("after first resume")
-coro.resume()
-assert_true(coro.is_done())
-```
-
-```bash
-uv run -- mojo run -I . -D ASSERT=all examples/coro_echo.mojo
-```
-
-## Architecture
+## Project layout
 
 ```
-boucle/                              # Public API — what developers import
-├── completion.mojo                  # CompletionLoop, CompletionHandler
-├── readiness.mojo                   # ReadinessLoop, ReadinessHandler
-├── waker.mojo                       # Waker trait (bridges I/O → executor)
-├── coroutine.mojo                   # Coroutine trait (aligned with structured async proposal)
-├── executor.mojo                    # Executor traits wrapping loops
-├── pending.mojo                     # Linear PendingOp for safe completion cancellation
-├── handle.mojo                      # ResourceHandle, OwnedHandle, RawHandle
-├── buffer.mojo                      # Buffer types (owned, borrowed, ring)
-├── token.mojo                       # Token for event correlation
-├── interest.mojo                    # Interest flags (READABLE, WRITABLE)
-├── readiness_state.mojo             # Readiness flags (is_readable, is_writable)
-├── error.mojo                       # Unified I/O error types
-├── net/                             # Platform-agnostic networking types
-│   ├── socket.mojo                  # Socket (TCP, UDP, Unix) — portable API
-│   ├── addr.mojo                    # SocketAddrV4, SocketAddrV6
-│   ├── ip.mojo                      # IpAddrV4, IpAddrV6
-│   └── options.mojo                 # Portable socket options only
-├── time/                            # Timeout, Deadline
-└── _sys/                            # Private platform backends (never import directly)
+boucle/        Mojo source (public API)
+├── completion.mojo      CompletionLoop, CompletionHandler
+├── readiness.mojo       ReadinessLoop, ReadinessHandler
+├── waker.mojo           Waker trait (bridges I/O → executor)
+├── coroutine.mojo       Coroutine trait (structured async)
+├── executor.mojo        Executor traits wrapping loops
+├── pending.mojo         Linear PendingOp for safe cancellation
+├── handle.mojo          ResourceHandle, OwnedHandle, RawHandle
+├── buffer.mojo          Buffer types (owned, borrowed, ring)
+├── token.mojo           Token for event correlation
+├── interest.mojo        Interest flags (READABLE, WRITABLE)
+├── readiness_state.mojo Readiness flags
+├── error.mojo           Unified I/O error types
+├── net/                 Platform-agnostic networking types
+│   ├── socket.mojo      Socket (TCP, UDP, Unix)
+│   ├── addr.mojo        SocketAddrV4, SocketAddrV6
+│   ├── ip.mojo          IpAddrV4, IpAddrV6
+│   └── options.mojo     Portable socket options
+├── time/                Timeout, Deadline
+└── _sys/                Private platform backends
     ├── linux/
-    │   ├── raw/                     # Syscalls, ctypes (x86_64)
-    │   ├── io_uring/                # CompletionLoop backend
-    │   └── epoll/                   # ReadinessLoop backend
-    ├── darwin/                      # Future
-    │   └── kqueue/                  # ReadinessLoop backend
-    └── windows/                     # Future
-        └── iocp/                    # CompletionLoop backend
+    │   ├── raw/         Syscalls, ctypes (x86_64)
+    │   ├── io_uring/    CompletionLoop backend
+    │   └── epoll/       ReadinessLoop backend
+    ├── darwin/          Future
+    └── windows/         Future
 ```
-
-The `_sys/` tree is private — never import from it directly. The backend is selected at compile time based on platform. Platform-specific features (sendmmsg, SO_REUSEPORT) require explicit opt-in from `_sys/` so the import path makes the portability trade-off visible.
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+[MIT](LICENSE)
