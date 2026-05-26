@@ -2,6 +2,7 @@ from .cq import Cq, CqPtr
 from .sq import Sq, SqPtr
 from .modes import PollingMode, NOPOLL, IOPOLL, SQPOLL
 from .mm import MemoryMapping, Region
+from .utils import _checked_add, _checked_mul
 from .params import Params
 from boucle._sys.linux.io_uring.types import (
     Sqe,
@@ -75,8 +76,8 @@ struct IoUring[
             fd = io_uring_setup[Self.is_registered](sq_entries, params)
             if not params.features & IoUringFeatureFlags.SINGLE_MMAP:
                 raise "system outdated"
-            sq_len = params.sq_off.array + params.sq_entries * UInt32(size_of[UInt32]())
-            cq_len = params.cq_off.cqes + params.cq_entries * UInt32(Self.cqe.size)
+            sq_len = _checked_add(params.sq_off.array, _checked_mul(params.sq_entries, UInt32(size_of[UInt32]())))
+            cq_len = _checked_add(params.cq_off.cqes, _checked_mul(params.cq_entries, UInt32(Self.cqe.size)))
             sq_cq_mem = Region(
                 fd=fd.unsafe_fd(),
                 offset=IORING_OFF_SQ_RING,
@@ -85,7 +86,7 @@ struct IoUring[
             sqes_mem = Region(
                 fd=fd.unsafe_fd(),
                 offset=IORING_OFF_SQES,
-                len=UInt(params.sq_entries * UInt32(Self.sqe.size)),
+                len=UInt(_checked_mul(params.sq_entries, UInt32(Self.sqe.size))),
             )
             self.fd = fd^
             self.mem = MemoryMapping[Self.sqe, Self.cqe](

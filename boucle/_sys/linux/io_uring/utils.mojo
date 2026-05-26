@@ -158,3 +158,26 @@ def _checked_add(lhs: UInt32, rhs: UInt32) raises -> UInt32:
     if unlikely(res.overflow):
         raise "integer overflow"
     return res.value
+
+
+@always_inline("nodebug")
+def _checked_mul(lhs: UInt32, rhs: UInt32) raises -> UInt32:
+    """Computes `lhs * rhs` with overflow detection.
+
+    Args:
+        lhs: The lhs value.
+        rhs: The rhs value.
+
+    Returns:
+        `lhs * rhs` value.
+
+    Raises:
+        If an overflow occurs.
+    """
+    res = llvm_intrinsic[
+        "llvm.umul.with.overflow",
+        _AddOverflowResult,
+    ](lhs, rhs)
+    if unlikely(res.overflow):
+        raise "integer overflow"
+    return res.value

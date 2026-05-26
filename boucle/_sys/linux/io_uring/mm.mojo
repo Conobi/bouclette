@@ -1,5 +1,5 @@
 from .params import Entries
-from .utils import _checked_add
+from .utils import _checked_add, _checked_mul
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.io_uring.types import (
     Sqe,
@@ -14,6 +14,7 @@ from boucle._sys.linux.mm import (
     mmap_anonymous,
     munmap,
     madvise,
+    get_page_size,
     ProtFlags,
     MapFlags,
     Advice,
@@ -40,7 +41,8 @@ struct Region(Movable):
             fd=fd,
             offset=offset,
         )
-        debug_assert(Int(self.ptr) != 0, "null pointer")
+        if Int(self.ptr) == 0:
+            raise "mmap returned null pointer"
         self.len = len
 
     @always_inline
@@ -54,15 +56,16 @@ struct Region(Movable):
             | MapFlags.POPULATE
             | flags,
         )
-        debug_assert(Int(self.ptr) != 0, "null pointer")
+        if Int(self.ptr) == 0:
+            raise "mmap returned null pointer"
         self.len = len
 
     @always_inline
     def __del__(deinit self):
         try:
             munmap(unsafe_ptr=self.ptr, len=self.len)
-        except:
-            pass
+        except e:
+            debug_assert(False, "Region.__del__: munmap failed: " + String(e))
 
     @always_inline
     def __init__(out self, *, deinit take: Self):
@@ -146,16 +149,18 @@ struct MemoryMapping[sqe: SQE, cqe: CQE](Movable):
             flags=params.flags.value,
             cq_entries_param=params.cq_entries,
         )
-        # FIXME: Get the actual page size value at runtime.
-        comptime page_size = 4096
-        sqes_size = entries.sq_entries * UInt32(Self.sqe.size)
+        var page_size = get_page_size()
+        sqes_size = _checked_mul(entries.sq_entries, UInt32(Self.sqe.size))
         sq_array_size = (
-            0 if params.flags
-            & IoUringSetupFlags.NO_SQARRAY else entries.sq_entries
-            * UInt32(size_of[UInt32]())
+            UInt32(0) if params.flags
+            & IoUringSetupFlags.NO_SQARRAY else _checked_mul(entries.sq_entries, UInt32(size_of[UInt32]()))
         )
-        sq_cq_size = (
-            UInt32(Self.cqe.rings_size) + entries.cq_entries * UInt32(Self.cqe.size) + sq_array_size
+        sq_cq_size = _checked_add(
+            _checked_add(
+                UInt32(Self.cqe.rings_size),
+                _checked_mul(entries.cq_entries, UInt32(Self.cqe.size)),
+            ),
+            sq_array_size,
         )
 
         comptime HUGE_PAGE_SIZE = 1 << 21
