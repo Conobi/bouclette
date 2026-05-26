@@ -20,10 +20,10 @@ from boucle._sys.linux.ucontext import (
 from boucle._sys.linux.mm import (
     mmap_anonymous,
     mprotect,
+    get_page_size,
     MapFlags,
     ProtFlags,
 )
-from boucle._sys.linux.raw import PAGE_SIZE
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw import __NR_munmap
 from boucle._sys.linux.raw.ctypes import c_void
@@ -37,6 +37,9 @@ comptime CORO_DONE: UInt8 = 3
 
 # Default stack size (64 KB usable)
 comptime DEFAULT_STACK_SIZE: UInt = 65536
+
+# Magic canary for _CoroInner integrity validation
+comptime CORO_MAGIC: UInt64 = 0xC0C0_CAFE_B0C1_E000
 
 # Body function type: receives a mutable CoroYielder, may raise
 comptime CoroBody = def (mut CoroYielder) thin raises -> None
@@ -87,6 +90,7 @@ struct _CoroInner(Movable):
     Stable address -- survives CoroHandle moves.
     """
 
+    var magic: UInt64
     var caller_ctx: UnsafePointer[UInt8, MutExternalOrigin]
     var coro_ctx: UnsafePointer[UInt8, MutExternalOrigin]
     var stack_base: UnsafePointer[c_void, StaticConstantOrigin]
@@ -104,6 +108,7 @@ struct _CoroInner(Movable):
         stack_base: UnsafePointer[c_void, StaticConstantOrigin],
         stack_total: UInt,
     ):
+        self.magic = CORO_MAGIC
         self.caller_ctx = alloc_ucontext()
         self.coro_ctx = alloc_ucontext()
         self.stack_base = stack_base
@@ -115,6 +120,7 @@ struct _CoroInner(Movable):
         self.error_msg = String()
 
     def __init__(out self, *, deinit take: Self):
+        self.magic = take.magic
         self.caller_ctx = take.caller_ctx
         self.coro_ctx = take.coro_ctx
         self.stack_base = take.stack_base
@@ -139,6 +145,11 @@ def _coro_trampoline(inner_addr: Int64):
     var inner = UnsafePointer[_CoroInner, MutExternalOrigin](
         unsafe_from_address=Int(inner_addr)
     )
+    # Validate canary before any dereference
+    debug_assert(
+        inner[].magic == CORO_MAGIC,
+        "corrupted _CoroInner: bad magic number",
+    )
     var yielder = CoroYielder(inner)
     try:
         inner[].body(yielder)
@@ -154,6 +165,7 @@ def _coro_trampoline(inner_addr: Int64):
 # ── CoroHandle ───────────────────────────────────────────────────────────
 
 
+@explicit_destroy("must call destroy() to release coroutine resources")
 struct CoroHandle(Movable):
     """Stackful coroutine. Caller-side handle.
 
@@ -162,6 +174,8 @@ struct CoroHandle(Movable):
     Create with a body function and optional user_data pointer.
     Call resume() to start or continue the coroutine.
     The body calls CoroYielder.yield_to_caller() to suspend.
+
+    Linear type: callers must explicitly call destroy() when done.
     """
 
     var _inner: UnsafePointer[_CoroInner, MutExternalOrigin]
@@ -172,8 +186,13 @@ struct CoroHandle(Movable):
         user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
         stack_size: UInt = DEFAULT_STACK_SIZE,
     ) raises:
+        # Overflow check: ensure guard page + stack_size won't wrap
+        var page_size = get_page_size()
+        if stack_size > UInt.MAX - page_size:
+            raise "stack size overflow: too large for guard page allocation"
+
         # Allocate stack: guard page + usable
-        var total = UInt(PAGE_SIZE) + stack_size
+        var total = page_size + stack_size
         var stack_base = mmap_anonymous(
             len=total,
             prot=ProtFlags.READ | ProtFlags.WRITE,
@@ -182,7 +201,7 @@ struct CoroHandle(Movable):
         try:
             mprotect(
                 unsafe_ptr=stack_base,
-                len=UInt(PAGE_SIZE),
+                len=page_size,
                 prot=ProtFlags.NONE,
             )
         except e:
@@ -198,7 +217,7 @@ struct CoroHandle(Movable):
 
         # Set up the coroutine context
         var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
-            unsafe_from_address=Int(stack_base) + PAGE_SIZE
+            unsafe_from_address=Int(stack_base) + Int(page_size)
         )
         try:
             uc_getcontext(self._inner[].coro_ctx)
@@ -217,18 +236,19 @@ struct CoroHandle(Movable):
                 arg_addr=Int(self._inner),
             )
         except e:
-            # Cleanup inner state if context setup fails
-            free_ucontext(self._inner[].caller_ctx)
-            free_ucontext(self._inner[].coro_ctx)
-            _ = syscall[__NR_munmap, Scalar[DType.int64]](stack_base, total)
-            self._inner.destroy_pointee()
-            self._inner.free()
+            # Cleanup: destroy self explicitly (satisfies @explicit_destroy)
+            self^.destroy()
             raise e^
 
     def __init__(out self, *, deinit take: Self):
         self._inner = take._inner
 
-    def __del__(deinit self):
+    def destroy(deinit self):
+        """Explicitly release all coroutine resources.
+
+        Must be called by the owner -- the compiler enforces this
+        via @explicit_destroy.
+        """
         debug_assert(
             self._inner[].phase == CORO_CREATED
             or self._inner[].phase == CORO_DONE,
@@ -299,10 +319,12 @@ struct CoroHandle(Movable):
         self._inner[].error_msg = String()
         self._inner[].phase = CORO_CREATED
 
+        var page_size = get_page_size()
         var stack_total = self._inner[].stack_total
-        var stack_size = stack_total - UInt(PAGE_SIZE)
+        debug_assert(stack_total >= page_size, "corrupted stack_total")
+        var stack_size = stack_total - page_size
         var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
-            unsafe_from_address=Int(self._inner[].stack_base) + PAGE_SIZE
+            unsafe_from_address=Int(self._inner[].stack_base) + Int(page_size)
         )
         uc_getcontext(self._inner[].coro_ctx)
         var trampoline_fn = _coro_trampoline
@@ -358,7 +380,7 @@ struct CoroutinePool(Movable):
     def __del__(deinit self):
         for i in range(len(self._free)):
             var ptr = self._free[i]
-            ptr.destroy_pointee()
+            ptr.take_pointee().destroy()
             ptr.free()
 
     def acquire(
@@ -382,7 +404,7 @@ struct CoroutinePool(Movable):
         """Return a (DONE) `CoroHandle` to the pool. Beyond `capacity`
         idle handles, the surplus is destroyed instead of cached."""
         if len(self._free) >= self._capacity:
-            ptr.destroy_pointee()
+            ptr.take_pointee().destroy()
             ptr.free()
             return
         self._free.append(ptr)

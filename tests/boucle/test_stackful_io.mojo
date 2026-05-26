@@ -7,6 +7,7 @@ and be resumed by the handler once the kernel signals done.
 from boucle.stackful import CoroHandle, CoroYielder
 from boucle.completion import CompletionLoop, CompletionHandler
 from std.memory import UnsafePointer
+from std.memory.unsafe_pointer import alloc
 from std.testing import assert_true, assert_equal
 
 
@@ -100,29 +101,31 @@ def test_coro_with_completion_loop() raises:
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
 
-    # Declare coro BEFORE loop — Mojo destroys in reverse declaration order,
-    # ensuring the handler's coro_ptr stays valid for the entire loop.run().
-    var coro = CoroHandle(coro_body, user_data=state_ptr)
+    # Allocate CoroHandle on heap so @explicit_destroy doesn't conflict
+    # with raising calls in the test body. Cleanup via take_pointee + destroy.
+    var coro_heap = alloc[CoroHandle](1).as_any_origin()
+    var h = CoroHandle(coro_body, user_data=state_ptr)
+    coro_heap.init_pointee_move(h^)
 
     # Wire the handler to shared state
     var loop = CompletionLoop(IoHandler(state_for_handler), sq_entries=8)
 
     # Store coro address so the handler can call resume()
     state.coro_ptr = UnsafePointer[CoroHandle, MutExternalOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=coro))
+        unsafe_from_address=Int(coro_heap)
     )
 
     # First resume: coroutine runs until yield_to_caller()
-    coro.resume()
-    assert_true(coro.can_resume(), "coro should be SUSPENDED after first resume")
-    assert_true(not coro.is_done(), "coro must not be done yet")
+    coro_heap[].resume()
+    assert_true(coro_heap[].can_resume(), "coro should be SUSPENDED after first resume")
+    assert_true(not coro_heap[].is_done(), "coro must not be done yet")
 
     # Submit nop; on_complete will resume the coroutine
     loop.submit_nop(token=UInt64(77))
     loop.run()
 
     # After loop.run() the handler has fired and resumed the coro to completion
-    assert_true(coro.is_done(), "coro must be DONE after loop.run()")
+    assert_true(coro_heap[].is_done(), "coro must be DONE after loop.run()")
     assert_equal(state.io_token, UInt64(77))
     assert_equal(state.io_result, Int32(0))
     assert_equal(state.coro_saw_result, Int32(0))
@@ -130,6 +133,10 @@ def test_coro_with_completion_loop() raises:
         state.coro_completed,
         "coroutine body must have set coro_completed",
     )
+
+    # Explicit cleanup
+    coro_heap.take_pointee().destroy()
+    coro_heap.free()
 
 
 def main() raises:

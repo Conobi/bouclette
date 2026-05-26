@@ -1,5 +1,6 @@
 from boucle.stackful import CoroHandle, CoroYielder
 from std.memory import UnsafePointer
+from std.memory.unsafe_pointer import alloc
 from std.testing import assert_equal, assert_true
 
 
@@ -46,6 +47,54 @@ struct _ErrorAfterYieldState:
 
     def __init__(out self, step: Int):
         self.step = step
+
+
+# ── Test helper ──────────────────────────────────────────────────────────
+
+
+struct TestCoro(Movable):
+    """Wraps a CoroHandle behind a pointer to manage lifetime manually.
+
+    Since CoroHandle is @explicit_destroy, holding it directly in a
+    raises-function causes the compiler to flag every raising call as a
+    potential leak point. This wrapper stores the handle on the heap and
+    provides the same resume/query API, with explicit cleanup via close().
+    """
+
+    var _ptr: UnsafePointer[CoroHandle, MutAnyOrigin]
+
+    def __init__(
+        out self,
+        body: def (mut CoroYielder) thin raises -> None,
+        user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
+        stack_size: UInt = 65536,
+    ) raises:
+        self._ptr = alloc[CoroHandle](1).as_any_origin()
+        var h = CoroHandle(body, user_data, stack_size)
+        self._ptr.init_pointee_move(h^)
+
+    def __init__(out self, *, deinit take: Self):
+        self._ptr = take._ptr
+
+    def __del__(deinit self):
+        self._ptr.take_pointee().destroy()
+        self._ptr.free()
+
+    def resume(mut self) raises:
+        """Forward resume to the underlying CoroHandle."""
+        self._ptr[].resume()
+
+    def is_done(self) -> Bool:
+        """Forward is_done to the underlying CoroHandle."""
+        return self._ptr[].is_done()
+
+    def can_resume(self) -> Bool:
+        """Forward can_resume to the underlying CoroHandle."""
+        return self._ptr[].can_resume()
+
+    def raw_ptr(self) -> UnsafePointer[CoroHandle, MutAnyOrigin]:
+        """Access the raw pointer (for tests that need the address)."""
+        return self._ptr
 
 
 # ── Body functions ────────────────────────────────────────────────────────
@@ -95,10 +144,10 @@ def _error_after_yield_body(mut y: CoroYielder) raises:
 
 
 def test_create_destroy() raises:
-    var coro = CoroHandle(_run_to_completion_body)
+    var coro = TestCoro(_run_to_completion_body)
     assert_true(coro.can_resume())
     assert_true(not coro.is_done())
-    # coro goes out of scope in CREATED state -- __del__ should handle it
+    # coro goes out of scope in CREATED state -- __del__ handles cleanup
 
 
 def test_single_yield() raises:
@@ -106,7 +155,7 @@ def test_single_yield() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_single_yield_body, user_data=state_ptr)
+    var coro = TestCoro(_single_yield_body, user_data=state_ptr)
     coro.resume()
     assert_equal(state.step, 1)
     coro.resume()
@@ -119,7 +168,7 @@ def test_run_to_completion() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_run_to_completion_body, user_data=state_ptr)
+    var coro = TestCoro(_run_to_completion_body, user_data=state_ptr)
     coro.resume()
     assert_equal(state.value, 42)
     assert_true(coro.is_done())
@@ -130,7 +179,7 @@ def test_multiple_yields() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_multiple_yields_body, user_data=state_ptr)
+    var coro = TestCoro(_multiple_yields_body, user_data=state_ptr)
     for i in range(1, 6):
         coro.resume()
         assert_equal(state.counter, i)
@@ -143,7 +192,7 @@ def test_shared_state() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_cumulative_body, user_data=state_ptr)
+    var coro = TestCoro(_cumulative_body, user_data=state_ptr)
     coro.resume()
     assert_equal(state.total, 10)
     coro.resume()
@@ -154,7 +203,7 @@ def test_shared_state() raises:
 
 
 def test_error_propagation() raises:
-    var coro = CoroHandle(_error_immediate_body)
+    var coro = TestCoro(_error_immediate_body)
     var caught = False
     try:
         coro.resume()
@@ -169,7 +218,7 @@ def test_error_after_yield() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_error_after_yield_body, user_data=state_ptr)
+    var coro = TestCoro(_error_after_yield_body, user_data=state_ptr)
     coro.resume()
     assert_equal(state.step, 1)
     var caught = False
@@ -188,7 +237,7 @@ def test_move_handle() raises:
     var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var coro = CoroHandle(_multiple_yields_body, user_data=state_ptr)
+    var coro = TestCoro(_multiple_yields_body, user_data=state_ptr)
     coro.resume()
     assert_equal(state.counter, 1)
     # Move into a new variable
@@ -228,9 +277,9 @@ def test_multiple_live_coros() raises:
     var ptr_c = UnsafePointer[NoneType, MutExternalOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state_c))
     )
-    var coro_a = CoroHandle(_alternation_body, user_data=ptr_a)
-    var coro_b = CoroHandle(_alternation_body, user_data=ptr_b)
-    var coro_c = CoroHandle(_alternation_body, user_data=ptr_c)
+    var coro_a = TestCoro(_alternation_body, user_data=ptr_a)
+    var coro_b = TestCoro(_alternation_body, user_data=ptr_b)
+    var coro_c = TestCoro(_alternation_body, user_data=ptr_c)
 
     # Round 1: resume all — each increments to 1 and yields
     coro_a.resume()
@@ -267,7 +316,7 @@ def test_custom_stack_size() raises:
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
     # 16KB stack — well above what these trivial bodies need
-    var coro = CoroHandle(
+    var coro = TestCoro(
         _run_to_completion_body, user_data=state_ptr, stack_size=16384
     )
     coro.resume()
