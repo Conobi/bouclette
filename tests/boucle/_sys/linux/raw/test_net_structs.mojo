@@ -11,7 +11,7 @@ from boucle._sys.linux.raw.x86_64.epoll import epoll_event
 from boucle._sys.linux.raw.x86_64.io_uring import (
     io_uring_buf, io_sqring_offsets, io_cqring_offsets,
 )
-from testing import assert_equal
+from std.testing import assert_equal
 from std.sys.info import size_of
 
 

@@ -26,7 +26,7 @@ from boucle._sys.linux.raw.aarch64.general import (
     __NR_io_uring_enter,
     __NR_io_uring_register,
 )
-from testing import assert_equal
+from std.testing import assert_equal
 
 
 def main() raises:

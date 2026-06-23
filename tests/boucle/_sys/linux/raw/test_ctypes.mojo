@@ -7,7 +7,7 @@ from boucle._sys.linux.raw.ctypes import (
     c_float, c_double,
     c_void,
 )
-from testing import assert_equal
+from std.testing import assert_equal
 from std.sys.info import size_of
 
 

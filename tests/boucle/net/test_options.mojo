@@ -2,7 +2,7 @@ from boucle.net.options import (
     SocketType, SocketFlags, AddrFamily, Protocol, Backlog, Shutdown,
     SendFlags, RecvFlags,
 )
-from testing import assert_equal, assert_true
+from std.testing import assert_equal, assert_true
 
 
 def main() raises:
