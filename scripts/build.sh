@@ -13,7 +13,7 @@ echo "Removing stale .mojopkg files..."
 rm -f *.mojopkg
 
 echo "Building boucle (arch=$ARCH)..."
-mojo package boucle -o boucle.mojopkg
+uv run mojo package boucle -o boucle.mojopkg
 
 echo "All packages built."
 ls -lh *.mojopkg

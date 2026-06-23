@@ -200,7 +200,7 @@ for test in "${TESTS[@]}"; do
         continue
     fi
     echo "--- Running: $test ---"
-    if mojo run -I . -D ASSERT=all "$test"; then
+    if uv run mojo run -I . -D ASSERT=all "$test"; then
         echo "--- PASSED: $test ---"
         PASS=$((PASS + 1))
     else
