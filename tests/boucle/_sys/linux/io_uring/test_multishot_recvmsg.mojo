@@ -138,7 +138,7 @@ def test_multishot_recvmsg() raises:
     #   offset 40: msg_controllen (8 bytes, size_t)
     #   offset 48: msg_flags    (4 bytes, int)
     #   offset 52: pad          (4 bytes)
-    var msghdr_mem = _heap_alloc[UInt8](56).as_any_origin()
+    var msghdr_mem = _heap_alloc[UInt8](56).as_unsafe_any_origin()
     for i in range(56):
         msghdr_mem[i] = 0
     # msg_namelen = 28 at offset 8

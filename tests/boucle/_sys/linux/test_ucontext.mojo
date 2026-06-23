@@ -44,11 +44,11 @@ def _trampoline_write42(args_raw: Int):
 
     args_raw -> Int[2]: [caller_ctx_addr, shared_addr].
     """
-    var args = UnsafePointer[Int, MutExternalOrigin](unsafe_from_address=args_raw)
-    var caller_ctx = UnsafePointer[UInt8, MutExternalOrigin](
+    var args = UnsafePointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
+    var caller_ctx = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=args[0]
     )
-    var shared = UnsafePointer[Int, MutExternalOrigin](
+    var shared = UnsafePointer[Int, MutUntrackedOrigin](
         unsafe_from_address=args[1]
     )
     shared[] = 42
@@ -64,11 +64,11 @@ def _trampoline_pingpong(args_raw: Int):
 
     args_raw -> Int[2]: [caller_ctx_addr, counter_addr].
     """
-    var args = UnsafePointer[Int, MutExternalOrigin](unsafe_from_address=args_raw)
-    var caller_ctx = UnsafePointer[UInt8, MutExternalOrigin](
+    var args = UnsafePointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
+    var caller_ctx = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=args[0]
     )
-    var counter = UnsafePointer[Int, MutExternalOrigin](
+    var counter = UnsafePointer[Int, MutUntrackedOrigin](
         unsafe_from_address=args[1]
     )
 
@@ -126,7 +126,7 @@ def test_ucontext_round_trip() raises:
         flags=MapFlags.PRIVATE,
     )
     mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
-    var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
+    var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(stack_mem) + PAGE_SIZE
     )
 
@@ -183,7 +183,7 @@ def test_pingpong() raises:
         flags=MapFlags.PRIVATE,
     )
     mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
-    var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
+    var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(stack_mem) + PAGE_SIZE
     )
 

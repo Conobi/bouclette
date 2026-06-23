@@ -120,7 +120,7 @@ def test_register_buf_ring() raises:
     # --- 4. Allocate buffer pool: 4 × 1024 ---
     comptime BUF_SIZE = 1024
     comptime BUF_COUNT = 4
-    var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT).as_any_origin()
+    var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT).as_unsafe_any_origin()
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[i] = UInt8(0)
 

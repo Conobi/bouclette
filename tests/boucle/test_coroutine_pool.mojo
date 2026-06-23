@@ -34,7 +34,7 @@ def _body(mut y: CoroYielder) raises -> None:
 def test_pool_acquire_runs_body() raises:
     var pool = CoroutinePool(capacity=4)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutExternalOrigin](
+    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(UnsafePointer(to=ctr))
     )
     var h = pool.acquire(_body, ctr_ptr)
@@ -52,7 +52,7 @@ def test_pool_recycles_handle() raises:
     proving the handle (and stack) was recycled, not reallocated."""
     var pool = CoroutinePool(capacity=4)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutExternalOrigin](
+    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(UnsafePointer(to=ctr))
     )
     var h1 = pool.acquire(_body, ctr_ptr)
@@ -74,7 +74,7 @@ def test_pool_capacity_cap() raises:
     """Beyond `capacity`, release destroys the surplus."""
     var pool = CoroutinePool(capacity=2)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutExternalOrigin](
+    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(UnsafePointer(to=ctr))
     )
     var h1 = pool.acquire(_body, ctr_ptr)

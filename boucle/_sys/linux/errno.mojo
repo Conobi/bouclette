@@ -33,7 +33,7 @@ def get_errno() -> Int32:
     use `is_eintr` and `unsafe_decode_result` instead.
     """
     return external_call[
-        "__errno_location", UnsafePointer[Int32, MutExternalOrigin]
+        "__errno_location", UnsafePointer[Int32, MutUntrackedOrigin]
     ]()[]
 
 

@@ -40,7 +40,7 @@ trait ReadinessHandler(Movable, ImplicitlyDestructible):
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutExternalOrigin],
+        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
@@ -56,7 +56,7 @@ struct ReadinessLoop[Handler: ReadinessHandler]:
     """
 
     var _epfd: Int32
-    var _events: UnsafePointer[epoll_event, MutExternalOrigin]
+    var _events: UnsafePointer[epoll_event, MutUntrackedOrigin]
     var _max_events: Int32
     var _handler: Self.Handler
 
@@ -112,7 +112,7 @@ struct ReadinessLoop[Handler: ReadinessHandler]:
             # doesn't alias with the `mut self._handler` borrow below.
             # Safety: the pointer is valid only for the duration of the
             # on_ready call; the loop outlives the handler invocation.
-            var loop_ptr = UnsafePointer[Self, MutExternalOrigin](
+            var loop_ptr = UnsafePointer[Self, MutUntrackedOrigin](
                 unsafe_from_address=Int(UnsafePointer(to=self))
             )
             self._handler.on_ready(

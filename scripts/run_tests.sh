@@ -4,6 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+echo "=== deprecated-origin guard ==="
+"$SCRIPT_DIR/check_no_deprecated_origins.sh"
+
 source "$SCRIPT_DIR/_arch_sub.sh"
 apply_arch_substitution
 

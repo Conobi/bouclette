@@ -20,7 +20,7 @@ from boucle._sys.linux.raw import (
 
 
 @always_inline
-def alloc_ucontext() -> UnsafePointer[UInt8, MutExternalOrigin]:
+def alloc_ucontext() -> UnsafePointer[UInt8, MutUntrackedOrigin]:
     """Allocate a zeroed ucontext_t buffer (968 bytes)."""
     var ctx = alloc[UInt8](UCONTEXT_SIZE)
     memset(ctx, 0, UCONTEXT_SIZE)
@@ -28,13 +28,13 @@ def alloc_ucontext() -> UnsafePointer[UInt8, MutExternalOrigin]:
 
 
 @always_inline
-def free_ucontext(ctx: UnsafePointer[UInt8, MutExternalOrigin]):
+def free_ucontext(ctx: UnsafePointer[UInt8, MutUntrackedOrigin]):
     """Free a ucontext_t buffer."""
     ctx.free()
 
 
 @always_inline
-def uc_getcontext(ctx: UnsafePointer[UInt8, MutExternalOrigin]) raises:
+def uc_getcontext(ctx: UnsafePointer[UInt8, MutUntrackedOrigin]) raises:
     """Initialize a ucontext_t by saving the current context.
 
     Args:
@@ -47,7 +47,7 @@ def uc_getcontext(ctx: UnsafePointer[UInt8, MutExternalOrigin]) raises:
 
 @always_inline
 def uc_swapcontext(
-    save_ctx: UnsafePointer[UInt8, MutExternalOrigin], load_ctx: UnsafePointer[UInt8, MutExternalOrigin]
+    save_ctx: UnsafePointer[UInt8, MutUntrackedOrigin], load_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
 ) raises:
     """Save current context and switch to another.
 
@@ -61,7 +61,7 @@ def uc_swapcontext(
 
 
 def uc_swapcontext_unchecked(
-    save_ctx: UnsafePointer[UInt8, MutExternalOrigin], load_ctx: UnsafePointer[UInt8, MutExternalOrigin]
+    save_ctx: UnsafePointer[UInt8, MutUntrackedOrigin], load_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
 ):
     """Save current context and switch to another (non-raising).
 
@@ -72,9 +72,9 @@ def uc_swapcontext_unchecked(
 
 
 def setup_context(
-    ctx: UnsafePointer[UInt8, MutExternalOrigin],
+    ctx: UnsafePointer[UInt8, MutUntrackedOrigin],
     *,
-    stack_ptr: UnsafePointer[UInt8, MutExternalOrigin],
+    stack_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
     stack_size: UInt,
     entry_addr: Int,
     arg_addr: Int,
@@ -95,7 +95,7 @@ def setup_context(
         arg_addr: First argument value (written to REG_RDI).
     """
     # Write uc_stack fields
-    var ss_sp = (ctx + UC_STACK_SP_OFFSET).bitcast[UnsafePointer[UInt8, MutExternalOrigin]]()
+    var ss_sp = (ctx + UC_STACK_SP_OFFSET).bitcast[UnsafePointer[UInt8, MutUntrackedOrigin]]()
     ss_sp[] = stack_ptr
     var ss_flags = (ctx + UC_STACK_FLAGS_OFFSET).bitcast[Int32]()
     ss_flags[] = 0

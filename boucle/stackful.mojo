@@ -57,9 +57,9 @@ struct CoroYielder:
     use after the body returns.
     """
 
-    var _inner: UnsafePointer[_CoroInner, MutExternalOrigin]
+    var _inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]
 
-    def __init__(out self, inner: UnsafePointer[_CoroInner, MutExternalOrigin]):
+    def __init__(out self, inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]):
         self._inner = inner
 
     def yield_to_caller(mut self):
@@ -78,7 +78,7 @@ struct CoroYielder:
         # When we return here, the caller called resume() again
         self._inner[].phase = CORO_RUNNING
 
-    def user_data(self) -> UnsafePointer[NoneType, MutExternalOrigin]:
+    def user_data(self) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
         """Access the user data pointer passed at CoroHandle creation."""
         return self._inner[].user_data
 
@@ -93,20 +93,20 @@ struct _CoroInner(Movable):
     """
 
     var magic: UInt64
-    var caller_ctx: UnsafePointer[UInt8, MutExternalOrigin]
-    var coro_ctx: UnsafePointer[UInt8, MutExternalOrigin]
+    var caller_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
+    var coro_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
     var stack_base: UnsafePointer[c_void, StaticConstantOrigin]
     var stack_total: UInt
     var phase: UInt8
     var body: CoroBody
-    var user_data: UnsafePointer[NoneType, MutExternalOrigin]
+    var user_data: UnsafePointer[NoneType, MutUntrackedOrigin]
     var has_error: Bool
     var error_msg: String
 
     def __init__(
         out self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin],
+        user_data: UnsafePointer[NoneType, MutUntrackedOrigin],
         stack_base: UnsafePointer[c_void, StaticConstantOrigin],
         stack_total: UInt,
     ):
@@ -144,7 +144,7 @@ def _coro_trampoline(inner_addr: Int64):
     Calls the user's body function, catches errors, marks DONE, swaps back.
     MUST never return normally -- always swaps back to caller.
     """
-    var inner = UnsafePointer[_CoroInner, MutExternalOrigin](
+    var inner = UnsafePointer[_CoroInner, MutUntrackedOrigin](
         unsafe_from_address=Int(inner_addr)
     )
     # Always-on canary: a corrupt pointer here means unrecoverable state.
@@ -178,12 +178,12 @@ struct CoroHandle(Movable):
     Linear type: callers must explicitly call destroy() when done.
     """
 
-    var _inner: UnsafePointer[_CoroInner, MutExternalOrigin]
+    var _inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]
 
     def __init__(
         out self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
+        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
         stack_size: UInt = DEFAULT_STACK_SIZE,
     ) raises:
         # Overflow check: ensure guard page + stack_size won't wrap
@@ -216,7 +216,7 @@ struct CoroHandle(Movable):
         )
 
         # Set up the coroutine context
-        var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
+        var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(stack_base) + Int(page_size)
         )
         try:
@@ -299,7 +299,7 @@ struct CoroHandle(Movable):
     def reset(
         mut self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
+        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
     ) raises:
         """Recycle this coroutine for a new body, reusing its stack and
         ucontext storage. Caller must ensure the coro is CREATED or DONE
@@ -323,7 +323,7 @@ struct CoroHandle(Movable):
         var stack_total = self._inner[].stack_total
         debug_assert(stack_total >= page_size, "corrupted stack_total")
         var stack_size = stack_total - page_size
-        var usable_stack = UnsafePointer[UInt8, MutExternalOrigin](
+        var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(self._inner[].stack_base) + Int(page_size)
         )
         uc_getcontext(self._inner[].coro_ctx)
@@ -386,7 +386,7 @@ struct CoroutinePool(Movable):
     def acquire(
         mut self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
+        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
     ) raises -> UnsafePointer[CoroHandle, MutAnyOrigin]:
         """Return a `CoroHandle` ready to run `body`. Either pops from
         the free list (fast path, just `reset`) or allocates fresh
@@ -395,7 +395,7 @@ struct CoroutinePool(Movable):
             var ptr = self._free.pop()
             ptr[].reset(body, user_data)
             return ptr
-        var ptr = alloc[CoroHandle](1).as_any_origin()
+        var ptr = alloc[CoroHandle](1).as_unsafe_any_origin()
         var h = CoroHandle(body, user_data, self._stack_size)
         ptr.init_pointee_move(h^)
         return ptr

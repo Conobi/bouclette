@@ -566,7 +566,7 @@ struct CompletionLoop[Handler: CompletionHandler]:
             "ring too large",
         )
         var ring_bytes = Int(entries) * _IO_URING_BUF_SIZE
-        var ring_mem = _heap_alloc[UInt8](ring_bytes).as_any_origin()
+        var ring_mem = _heap_alloc[UInt8](ring_bytes).as_unsafe_any_origin()
         for i in range(ring_bytes):
             ring_mem[i] = UInt8(0)
 

@@ -28,7 +28,7 @@ struct Tracker(ReadinessHandler):
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutExternalOrigin],
+        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
@@ -133,7 +133,7 @@ struct SelfDeregister(ReadinessHandler):
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutExternalOrigin],
+        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):

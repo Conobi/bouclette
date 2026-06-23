@@ -22,14 +22,14 @@ struct SharedState:
     pointers that remain valid for the duration of the test.
     """
 
-    var coro_ptr: UnsafePointer[CoroHandle, MutExternalOrigin]
+    var coro_ptr: UnsafePointer[CoroHandle, MutUntrackedOrigin]
     var io_token: UInt64
     var io_result: Int32
     var coro_saw_result: Int32
     var coro_completed: Bool
 
     def __init__(out self):
-        self.coro_ptr = null_ptr[CoroHandle, MutExternalOrigin]()
+        self.coro_ptr = null_ptr[CoroHandle, MutUntrackedOrigin]()
         self.io_token = 0
         self.io_result = -999
         self.coro_saw_result = -999
@@ -62,11 +62,11 @@ def coro_body(mut y: CoroYielder) raises:
 struct IoHandler(CompletionHandler):
     """On completion: store result in shared state and resume the coroutine."""
 
-    var state_ptr: UnsafePointer[SharedState, MutExternalOrigin]
+    var state_ptr: UnsafePointer[SharedState, MutUntrackedOrigin]
 
     def __init__(
         out self,
-        state_ptr: UnsafePointer[SharedState, MutExternalOrigin],
+        state_ptr: UnsafePointer[SharedState, MutUntrackedOrigin],
     ):
         self.state_ptr = state_ptr
 
@@ -93,16 +93,16 @@ def test_coro_with_completion_loop() raises:
     # via raw pointers.  The struct must outlive both.
     var state = SharedState()
 
-    var state_ptr = UnsafePointer[NoneType, MutExternalOrigin](
+    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
-    var state_for_handler = UnsafePointer[SharedState, MutExternalOrigin](
+    var state_for_handler = UnsafePointer[SharedState, MutUntrackedOrigin](
         unsafe_from_address=Int(UnsafePointer(to=state))
     )
 
     # Allocate CoroHandle on heap so @explicit_destroy doesn't conflict
     # with raising calls in the test body. Cleanup via take_pointee + destroy.
-    var coro_heap = alloc[CoroHandle](1).as_any_origin()
+    var coro_heap = alloc[CoroHandle](1).as_unsafe_any_origin()
     var h = CoroHandle(coro_body, user_data=state_ptr)
     coro_heap.init_pointee_move(h^)
 
@@ -110,7 +110,7 @@ def test_coro_with_completion_loop() raises:
     var loop = CompletionLoop(IoHandler(state_for_handler), sq_entries=8)
 
     # Store coro address so the handler can call resume()
-    state.coro_ptr = UnsafePointer[CoroHandle, MutExternalOrigin](
+    state.coro_ptr = UnsafePointer[CoroHandle, MutUntrackedOrigin](
         unsafe_from_address=Int(coro_heap)
     )
 
