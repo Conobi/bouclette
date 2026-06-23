@@ -1,5 +1,6 @@
 from boucle import CompletionLoop, CompletionHandler
 from boucle.completion import BufRing
+from boucle._sys.ptr import null_ptr
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.raw import (
     IORING_CQE_F_BUFFER,
@@ -111,8 +112,8 @@ def test_register_buf_ring() raises:
     # --- 3. Accept the server-side socket ---
     var server_fd = external_call["accept", Int32](
         listen_fd,
-        UnsafePointer[c_void, StaticConstantOrigin](unsafe_from_address=0),
-        UnsafePointer[Int32, StaticConstantOrigin](unsafe_from_address=0),
+        null_ptr[c_void, StaticConstantOrigin](),
+        null_ptr[Int32, StaticConstantOrigin](),
     )
     assert_true(Int(server_fd) >= 0, "accept() failed")
 

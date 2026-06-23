@@ -1,4 +1,5 @@
 from boucle.stackful import CoroHandle, CoroYielder
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc
 from std.testing import assert_equal, assert_true
@@ -66,7 +67,7 @@ struct TestCoro(Movable):
     def __init__(
         out self,
         body: def (mut CoroYielder) thin raises -> None,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
+        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
         stack_size: UInt = 65536,
     ) raises:
         self._ptr = alloc[CoroHandle](1).as_any_origin()

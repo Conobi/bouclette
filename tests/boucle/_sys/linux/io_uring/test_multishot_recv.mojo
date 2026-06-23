@@ -1,4 +1,5 @@
 from boucle import CompletionLoop, CompletionHandler
+from boucle._sys.ptr import null_ptr
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.raw import (
     IORING_CQE_F_BUFFER,
@@ -118,8 +119,8 @@ def test_multishot_recv() raises:
     # --- 3. Accept on the listener (blocking) ---
     var server_fd = external_call["accept", Int32](
         listen_fd,
-        UnsafePointer[c_void, StaticConstantOrigin](unsafe_from_address=0),
-        UnsafePointer[Int32, StaticConstantOrigin](unsafe_from_address=0),
+        null_ptr[c_void, StaticConstantOrigin](),
+        null_ptr[Int32, StaticConstantOrigin](),
     )
     print("server_fd=", server_fd)
     assert_true(Int(server_fd) >= 0, "accept() failed")

@@ -4,6 +4,7 @@ from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrStorV6
+from boucle._sys.ptr import null_ptr
 from boucle._sys.linux.raw import (
     SOL_SOCKET,
     SO_REUSEADDR,
@@ -55,12 +56,8 @@ def _check_listener_opts(ref s: Socket) raises:
 def _assert_in_listen_state(ref s: Socket) raises:
     # accept4 on a listening socket with no pending connection returns -1
     # with errno=EAGAIN. A non-LISTEN socket returns -1 with errno=EINVAL.
-    var null_addr = UnsafePointer[Int8, StaticConstantOrigin](
-        unsafe_from_address=0
-    )
-    var null_len = UnsafePointer[UInt32, StaticConstantOrigin](
-        unsafe_from_address=0
-    )
+    var null_addr = null_ptr[Int8, StaticConstantOrigin]()
+    var null_len = null_ptr[UInt32, StaticConstantOrigin]()
     var res = external_call["accept4", Int32](
         s.raw(), null_addr, null_len, SOCK_NONBLOCK | SOCK_CLOEXEC,
     )

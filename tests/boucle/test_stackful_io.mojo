@@ -6,6 +6,7 @@ and be resumed by the handler once the kernel signals done.
 
 from boucle.stackful import CoroHandle, CoroYielder
 from boucle.completion import CompletionLoop, CompletionHandler
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc
 from std.testing import assert_true, assert_equal
@@ -28,9 +29,7 @@ struct SharedState:
     var coro_completed: Bool
 
     def __init__(out self):
-        self.coro_ptr = UnsafePointer[CoroHandle, MutExternalOrigin](
-            unsafe_from_address=0
-        )
+        self.coro_ptr = null_ptr[CoroHandle, MutExternalOrigin]()
         self.io_token = 0
         self.io_result = -999
         self.coro_saw_result = -999
