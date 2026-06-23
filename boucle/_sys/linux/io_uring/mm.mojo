@@ -20,6 +20,7 @@ from boucle._sys.linux.mm import (
     Advice,
 )
 from std.sys.info import align_of, size_of
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 
 
@@ -34,7 +35,7 @@ struct Region(Movable):
     @always_inline
     def __init__(out self, *, fd: Int32, offset: UInt64, len: UInt) raises:
         self.ptr = mmap(
-            unsafe_ptr=UnsafePointer[c_void, StaticConstantOrigin](unsafe_from_address=0),
+            unsafe_ptr=null_ptr[c_void, StaticConstantOrigin](),
             len=len,
             prot=ProtFlags.READ | ProtFlags.WRITE,
             flags=MapFlags.SHARED | MapFlags.POPULATE,

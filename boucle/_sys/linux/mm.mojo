@@ -55,6 +55,7 @@ from boucle._sys.linux.raw import (
 )
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw.utils import is_64bit
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 
 
@@ -133,9 +134,9 @@ def mmap_anonymous(
     """
     comptime assert is_64bit()
 
-    var null_ptr = UnsafePointer[c_void, StaticConstantOrigin](unsafe_from_address=0)
+    var null_addr = null_ptr[c_void, StaticConstantOrigin]()
     var res = syscall[__NR_mmap, UnsafePointer[c_void, StaticConstantOrigin]](
-        null_ptr, len, prot, flags | MapFlags(MAP_ANONYMOUS), Int32(-1), UInt64(0)
+        null_addr, len, prot, flags | MapFlags(MAP_ANONYMOUS), Int32(-1), UInt64(0)
     )
     unsafe_decode_ptr(res)
     return res

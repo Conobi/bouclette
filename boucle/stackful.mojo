@@ -28,6 +28,7 @@ from boucle._sys.linux.mm import (
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw import __NR_munmap
 from boucle._sys.linux.raw.ctypes import c_void
+from boucle._sys.ptr import null_ptr
 
 
 # Phase constants
@@ -182,7 +183,7 @@ struct CoroHandle(Movable):
     def __init__(
         out self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
+        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
         stack_size: UInt = DEFAULT_STACK_SIZE,
     ) raises:
         # Overflow check: ensure guard page + stack_size won't wrap
@@ -298,7 +299,7 @@ struct CoroHandle(Movable):
     def reset(
         mut self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
+        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
     ) raises:
         """Recycle this coroutine for a new body, reusing its stack and
         ucontext storage. Caller must ensure the coro is CREATED or DONE
@@ -385,7 +386,7 @@ struct CoroutinePool(Movable):
     def acquire(
         mut self,
         body: CoroBody,
-        user_data: UnsafePointer[NoneType, MutExternalOrigin] = UnsafePointer[NoneType, MutExternalOrigin](unsafe_from_address=0),
+        user_data: UnsafePointer[NoneType, MutExternalOrigin] = null_ptr[NoneType, MutExternalOrigin](),
     ) raises -> UnsafePointer[CoroHandle, MutAnyOrigin]:
         """Return a `CoroHandle` ready to run `body`. Either pops from
         the free list (fast path, just `reset`) or allocates fresh

@@ -161,6 +161,7 @@ from boucle._sys.linux.raw import (
 )
 from boucle._sys.linux.raw import syscall
 from boucle._sys.linux.raw.utils import DTypeArray
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 
 
@@ -1080,9 +1081,7 @@ struct EnterArg[size: UInt, flags: IoUringEnterFlags, origin: ImmutOrigin](
 
 
 comptime NO_ENTER_ARG = EnterArg[0, IoUringEnterFlags(), StaticConstantOrigin](
-    arg_unsafe_ptr=UnsafePointer[c_void, StaticConstantOrigin](
-        unsafe_from_address=0
-    )
+    arg_unsafe_ptr=null_ptr[c_void, StaticConstantOrigin]()
 )
 
 
@@ -1133,9 +1132,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
 struct NoRegisterArg:
     comptime ENABLE_RINGS = RegisterArg[MutAnyOrigin](
         opcode=IoUringRegisterOp.REGISTER_ENABLE_RINGS,
-        arg_unsafe_ptr=UnsafePointer[c_void, StaticConstantOrigin](
-            unsafe_from_address=0
-        ),
+        arg_unsafe_ptr=null_ptr[c_void, StaticConstantOrigin](),
         nr_args=0,
     )
 

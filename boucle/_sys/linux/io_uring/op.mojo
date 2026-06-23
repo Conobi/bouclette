@@ -10,6 +10,7 @@ from boucle._sys.linux.io_uring.types import (
 )
 from boucle._sys.linux.fd import UnsafeFd, NoFd
 from boucle._sys.linux.raw.ctypes import c_void
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 
 
@@ -508,12 +509,8 @@ struct Accept[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         self = Self(
             sqe,
             fd,
-            UnsafePointer[c_void, StaticConstantOrigin](
-                unsafe_from_address=0
-            ),
-            UnsafePointer[c_void, StaticConstantOrigin](
-                unsafe_from_address=0
-            ),
+            null_ptr[c_void, StaticConstantOrigin](),
+            null_ptr[c_void, StaticConstantOrigin](),
         )
 
     @always_inline

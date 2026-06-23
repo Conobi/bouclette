@@ -13,6 +13,7 @@ from boucle._sys.linux.io_uring.types import (
     addr3_struct,
 )
 from boucle._sys.linux.utils import _size_eq, _align_eq
+from boucle._sys.ptr import null_ptr
 from std.memory import UnsafePointer
 
 
@@ -84,7 +85,7 @@ struct Sq[type: SQE, polling: PollingMode](Movable, Sized, Boolable):
             raise "invalid sq ring_mask value"
 
         if params.flags & IoUringSetupFlags.NO_SQARRAY:
-            self.array = UnsafePointer[UInt32, StaticConstantOrigin](unsafe_from_address=0)
+            self.array = null_ptr[UInt32, StaticConstantOrigin]()
         else:
             self.array = sq_cq_mem.unsafe_ptr[UInt32](
                 offset=params.sq_off.array, count=self.ring_entries
