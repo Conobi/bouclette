@@ -1,6 +1,7 @@
 from std.sys.intrinsics import llvm_intrinsic, unlikely
 from std.sys.info import bit_width_of
 from std.memory import UnsafePointer
+from std.atomic import Atomic, Ordering
 
 
 struct _AddOverflowResult(TrivialRegisterPassable):
@@ -36,46 +37,21 @@ struct AtomicOrdering(TrivialRegisterPassable):
 def _atomic_load[
     type: DType, //, ordering: AtomicOrdering
 ](unsafe_ptr: UnsafePointer[Scalar[type], StaticConstantOrigin]) -> Scalar[type]:
-    addr = unsafe_ptr.bitcast[UInt32]().bitcast[
-        __mlir_type.`!pop.scalar<ui32>`
-    ]().address
-
-    # TODO: use atomic load when it becomes available.
     comptime if ordering is AtomicOrdering.ACQUIRE:
-        return UInt32(mlir_value=__mlir_op.`pop.atomic.rmw`[
-            bin_op = __mlir_attr.`#pop<bin_op add>`,
-            ordering = __mlir_attr.`#pop<atomic_ordering acquire>`,
-            _type = __mlir_type.`!pop.scalar<ui32>`,
-        ](
-            addr,
-            UInt32(0)._mlir_value,
-        )).cast[type]()
+        return Atomic[type].load[ordering = Ordering.ACQUIRE](unsafe_ptr)
     elif ordering is AtomicOrdering.RELAXED:
-        return UInt32(mlir_value=__mlir_op.`pop.atomic.rmw`[
-            bin_op = __mlir_attr.`#pop<bin_op add>`,
-            ordering = __mlir_attr.`#pop<atomic_ordering monotonic>`,
-            _type = __mlir_type.`!pop.scalar<ui32>`,
-        ](
-            addr,
-            UInt32(0)._mlir_value,
-        )).cast[type]()
+        return Atomic[type].load[ordering = Ordering.RELAXED](unsafe_ptr)
     else:
         comptime assert False, "unsupported atomic ordering"
         return unsafe_ptr[]
 
 
 @always_inline("nodebug")
-def _atomic_store[type: DType](unsafe_ptr: UnsafePointer[Scalar[type], StaticConstantOrigin], rhs: Scalar[type]):
-    # TODO: use atomic store when it becomes available.
-    _ = __mlir_op.`pop.atomic.rmw`[
-        bin_op = __mlir_attr.`#pop<bin_op xchg>`,
-        ordering = __mlir_attr.`#pop<atomic_ordering release>`,
-        _type = __mlir_type.`!pop.scalar<ui32>`,
-    ](
-        unsafe_ptr.bitcast[UInt32]().bitcast[
-            __mlir_type.`!pop.scalar<ui32>`
-        ]().address,
-        rhs.cast[DType.uint32]()._mlir_value,
+def _atomic_store[
+    type: DType
+](unsafe_ptr: UnsafePointer[Scalar[type], StaticConstantOrigin], rhs: Scalar[type]):
+    Atomic[type].store[ordering = Ordering.RELEASE](
+        unsafe_ptr.unsafe_mut_cast[True](), rhs
     )
 
 
