@@ -123,7 +123,7 @@ struct DTypeArray[
             The element at the given index.
         """
         Self._non_zero_size()
-        comptime assert idx < Self.size, "index must be within bounds"
+        comptime assert idx < UInt(Self.size), "index must be within bounds"
 
         return __mlir_op.`pop.array.get`[
             _type = Scalar[Self.dtype],
@@ -141,7 +141,7 @@ struct DTypeArray[
             The element at the given index.
         """
         Self._non_zero_size()
-        debug_assert(idx < Self.size, "index must be within bounds")
+        debug_assert(idx < UInt(Self.size), "index must be within bounds")
         return UnsafePointer(to=self.array).bitcast[Scalar[Self.dtype]]()[
             Int(idx)
         ]

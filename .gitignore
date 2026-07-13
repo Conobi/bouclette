@@ -1,4 +1,5 @@
 *.mojopkg
+*.mojoc
 plans
 plans/
 docs/superpowers

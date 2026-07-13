@@ -5,6 +5,10 @@ own stack and suspends via `y.yield_to_caller()`; the caller drives it
 forward with `coro.resume()`. Real yield/resume semantics, no state
 machine transform.
 
+CoroHandle is a linear type (@explicit_destroy) — the caller must call
+`destroy()` on every path, including error paths. The try/except below
+ensures the handle is always destroyed before any exception propagates.
+
 Run:
     uv run -- mojo run -I . -D ASSERT=all examples/coro_echo.mojo
 """
@@ -21,12 +25,18 @@ def _echo_body(mut y: CoroYielder) raises:
 
 def main() raises:
     var coro = CoroHandle(_echo_body)
+    try:
+        print("before resume")
+        coro.resume()
+        print("after first resume")
+        coro.resume()
+        print("done")
+    except e:
+        coro^.destroy()
+        raise e^
 
-    print("before resume")
-    coro.resume()
-    print("after first resume")
-    coro.resume()
-    print("done")
+    var done = coro.is_done()
+    coro^.destroy()
+    assert_true(done)
 
-    assert_true(coro.is_done())
     print("OK")

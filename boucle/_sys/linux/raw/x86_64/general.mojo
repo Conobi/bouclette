@@ -1,6 +1,8 @@
 from boucle._sys.linux.raw.ctypes import c_int, c_long, c_ulong, c_longlong
 
 # Syscall numbers (x86_64)
+comptime __NR_read = 0
+comptime __NR_write = 1
 comptime __NR_close = 3
 comptime __NR_mmap = 9
 comptime __NR_mprotect = 10

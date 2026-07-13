@@ -10,9 +10,9 @@ echo "=== deprecated-origin guard ==="
 source "$SCRIPT_DIR/_arch_sub.sh"
 apply_arch_substitution
 
-# Avoid stale-package gotcha: mojo run -I . picks up boucle.mojopkg ahead
-# of source. Wipe it so tests always see the current source.
-rm -f "$PROJECT_DIR/boucle.mojopkg"
+# Avoid stale-package gotcha: mojo run -I . picks up precompiled packages
+# ahead of source. Wipe them so tests always see the current source.
+rm -f "$PROJECT_DIR/boucle.mojopkg" "$PROJECT_DIR/boucle.mojoc"
 
 TESTS=(
     tests/boucle/_sys/linux/raw/test_ctypes.mojo

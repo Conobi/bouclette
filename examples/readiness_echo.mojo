@@ -13,8 +13,7 @@ from boucle.readiness import ReadinessLoop, ReadinessHandler
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
-from boucle._sys.linux.fd import close
-from boucle._sys.linux.raw.x86_64.syscall import syscall
+from boucle._sys.linux.raw import syscall, __NR_read, __NR_write, __NR_close
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
@@ -45,14 +44,13 @@ struct EchoHandler(ReadinessHandler):
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutExternalOrigin],
+        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
         self.got_event = True
         if readiness.is_readable():
-            # syscall 0 == read(2) on x86_64
-            var n = syscall[0, Scalar[DType.int64]](
+            var n = syscall[__NR_read, Scalar[DType.int64]](
                 self.read_fd,
                 UnsafePointer(to=self.buf).bitcast[UInt8](),
                 UInt64(16),
@@ -73,11 +71,10 @@ def main() raises:
     var loop = ReadinessLoop(EchoHandler(read_fd), max_events=16)
     loop.register(read_fd, Interest.READABLE, Token(42))
 
-    # Write the message on the write end — syscall 1 == write(2) on x86_64.
     var msg_ptr = UnsafePointer[UInt8, StaticConstantOrigin](
         unsafe_from_address=Int(_MSG.unsafe_ptr())
     )
-    _ = syscall[1, Scalar[DType.int64]](write_fd, msg_ptr, UInt64(_MSG_LEN))
+    _ = syscall[__NR_write, Scalar[DType.int64]](write_fd, msg_ptr, UInt64(_MSG_LEN))
 
     loop.poll(timeout_ms=1000)
 
@@ -88,7 +85,7 @@ def main() raises:
         assert_equal(Int(loop._handler.buf[i]), Int(_MSG.unsafe_ptr()[i]))
 
     loop.deregister(read_fd)
-    close(unsafe_fd=read_fd)
-    close(unsafe_fd=write_fd)
+    _ = syscall[__NR_close, Scalar[DType.int32]](read_fd)
+    _ = syscall[__NR_close, Scalar[DType.int32]](write_fd)
 
     print("OK")

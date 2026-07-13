@@ -18,10 +18,10 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 
 - **Two models, one type system.** Completion (submit work, get notified) and readiness (get notified, do it yourself) share Socket, Buffer, Token, SocketAddr. No adapter layers.
 - **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
-- **Linear types for completion safety.** Submitted operations return a `PendingOp` that must be awaited or cancelled. You can't drop it and leak the buffer.
+- **Token-based completion routing.** Each submitted operation carries a user token. The loop tracks pending operations and invokes the handler with the token, result, and flags on completion. Coroutines use `@explicit_destroy` — you must call `destroy()`, preventing silent resource leaks.
 - **`_sys/` is private.** The backend is selected at compile time. Platform-specific features (sendmmsg, SO_REUSEPORT) require an explicit `_sys/` import — the path makes the portability trade-off visible.
-- **Both models on every platform.** On macOS, CompletionLoop emulates over kqueue. On Windows, ReadinessLoop emulates over IOCP. Not optimal, but always portable.
-- **Structured async alignment.** Coroutine, Waker, Executor traits align with the [structured async proposal](https://github.com/modular/modular/issues/3945). CompletionLoop and ReadinessLoop can serve as executor backends when async/await lands in Mojo.
+- **Stackful coroutines.** Real yield/resume via `ucontext` — no state machine transform. Coroutines run on their own stack and suspend cooperatively.
+- **Portable by design.** The architecture supports multiple backends per platform. Currently Linux-only (io_uring + epoll); macOS (kqueue) and Windows (IOCP) are planned.
 
 ### Platform coverage
 
@@ -40,7 +40,7 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 
 ```bash
 uv sync                                # Install dev dependencies
-uv run -- bash scripts/build.sh        # Build boucle.mojopkg
+uv run -- bash scripts/build.sh        # Build boucle.mojoc
 ```
 
 ## Run tests
@@ -104,29 +104,24 @@ The same handler shape drives `ReadinessHandler` for epoll. For the full wiring 
 boucle/        Mojo source (public API)
 ├── completion.mojo      CompletionLoop, CompletionHandler
 ├── readiness.mojo       ReadinessLoop, ReadinessHandler
-├── waker.mojo           Waker trait (bridges I/O → executor)
-├── coroutine.mojo       Coroutine trait (structured async)
-├── executor.mojo        Executor traits wrapping loops
-├── pending.mojo         Linear PendingOp for safe cancellation
+├── stackful.mojo        Stackful coroutines (CoroHandle, CoroYielder)
 ├── handle.mojo          ResourceHandle, OwnedHandle, RawHandle
 ├── buffer.mojo          Buffer types (owned, borrowed, ring)
 ├── token.mojo           Token for event correlation
 ├── interest.mojo        Interest flags (READABLE, WRITABLE)
 ├── readiness_state.mojo Readiness flags
 ├── error.mojo           Unified I/O error types
+├── ctypes/              Public bridge for C types (c_void, etc.)
 ├── net/                 Platform-agnostic networking types
 │   ├── socket.mojo      Socket (TCP, UDP, Unix)
 │   ├── addr.mojo        SocketAddrV4, SocketAddrV6
 │   ├── ip.mojo          IpAddrV4, IpAddrV6
 │   └── options.mojo     Portable socket options
-├── time/                Timeout, Deadline
 └── _sys/                Private platform backends
-    ├── linux/
-    │   ├── raw/         Syscalls, ctypes (x86_64)
-    │   ├── io_uring/    CompletionLoop backend
-    │   └── epoll/       ReadinessLoop backend
-    ├── darwin/          Future
-    └── windows/         Future
+    └── linux/
+        ├── raw/         Arch-dispatched syscalls and ctypes
+        ├── io_uring/    CompletionLoop backend
+        └── epoll/       ReadinessLoop backend
 ```
 
 ## License

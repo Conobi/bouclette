@@ -14,7 +14,7 @@ from boucle._sys.linux.errno import get_errno
 
 @fieldwise_init
 struct EpollOp(ImplicitlyCopyable, Movable):
-    """epoll_ctl operation constants."""
+    """Epoll_ctl operation constants."""
     comptime ADD = Self(1)
     comptime DEL = Self(2)
     comptime MOD = Self(3)

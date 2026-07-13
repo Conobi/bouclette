@@ -516,7 +516,7 @@ struct IoUringCqeFlags(TrivialRegisterPassable, Defaultable, Boolable):
         Returns:
             `self >> rhs`.
         """
-        return self.value >> rhs
+        return self.value >> UInt32(rhs)
 
 
 struct IoUringOp(TrivialRegisterPassable):

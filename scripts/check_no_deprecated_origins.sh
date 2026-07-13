@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
-DIRS=(boucle tests)
+DIRS=(boucle tests examples)
 PAT='\b(as_any_origin|ExternalOrigin|ImmutExternalOrigin|MutExternalOrigin)\b'
 # grep (not rg): rg is absent on bash's PATH in CI; grep -rEn is the portable
 # convention already used by run_tests.sh's other gates.

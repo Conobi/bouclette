@@ -143,7 +143,7 @@ struct BufRing(Movable):
         self.buf_base = take.buf_base
         self.buf_size = take.buf_size
         self.owns_ring = take.owns_ring
-        take.owns_ring = False
+        _ = take.owns_ring
 
     def __del__(deinit self):
         if self.owns_ring:

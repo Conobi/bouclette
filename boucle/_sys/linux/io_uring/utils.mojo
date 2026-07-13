@@ -43,7 +43,6 @@ def _atomic_load[
         return Atomic[type].load[ordering = Ordering.RELAXED](unsafe_ptr)
     else:
         comptime assert False, "unsupported atomic ordering"
-        return unsafe_ptr[]
 
 
 @always_inline("nodebug")

@@ -28,6 +28,8 @@ branch inside a function body, where `comptime if` is supported.
 from boucle._sys.linux.raw.x86_64.syscall import syscall
 
 from boucle._sys.linux.raw.x86_64.general import (
+    __NR_read,
+    __NR_write,
     __NR_close,
     __NR_mmap,
     __NR_mprotect,

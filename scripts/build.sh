@@ -9,11 +9,11 @@ apply_arch_substitution
 
 cd "$PROJECT_DIR"
 
-echo "Removing stale .mojopkg files..."
-rm -f *.mojopkg
+echo "Removing stale precompiled packages..."
+rm -f *.mojopkg *.mojoc
 
 echo "Building boucle (arch=$ARCH)..."
-uv run mojo package boucle -o boucle.mojopkg
+uv run mojo precompile boucle -o boucle.mojoc
 
 echo "All packages built."
-ls -lh *.mojopkg
+ls -lh *.mojoc
