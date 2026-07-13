@@ -236,7 +236,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
 
     Submit I/O operations and poll for completions. Each completed
     operation invokes `Handler.on_complete` with the token, result,
-    and flags from the kernel.
+    and flags from the kernel. When Handler also conforms to
+    BatchCompletionHandler, `on_flush` is called once after draining
+    all available CQEs.
     """
 
     var _ring: IoUring[]
@@ -248,13 +250,18 @@ struct CompletionLoop[Handler: CompletionHandler]:
         self._pending = 0
         self._handler = handler^
 
+    @always_inline
+    def _begin_submit(mut self) raises:
+        """Check submission queue capacity and track the pending operation."""
+        if not self._ring.sq():
+            raise "submission queue full"
+        self._pending += 1
+
     def submit_nop(mut self, token: UInt64 = 0) raises:
         """Queue a no-op. Useful for testing and drain synchronisation."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (nop)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Nop(sq.__next__()).user_data(token)
-        self._pending += 1
 
     def submit_read(
         mut self,
@@ -265,11 +272,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         offset: UInt64 = 0,
     ) raises:
         """Queue a read from `fd` into `buf`."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (read)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Read(sq.__next__(), fd, buf, len).user_data(token).offset(offset)
-        self._pending += 1
 
     def submit_write(
         mut self,
@@ -280,11 +285,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         offset: UInt64 = 0,
     ) raises:
         """Queue a write from `buf` to `fd`."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (write)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Write(sq.__next__(), fd, buf, len).user_data(token).offset(offset)
-        self._pending += 1
 
     def submit_recv(
         mut self,
@@ -294,11 +297,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         token: UInt64,
     ) raises:
         """Queue a recv from socket `fd` into `buf`."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recv)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Recv(sq.__next__(), fd, buf, len).user_data(token)
-        self._pending += 1
 
     def submit_send(
         mut self,
@@ -308,19 +309,15 @@ struct CompletionLoop[Handler: CompletionHandler]:
         token: UInt64,
     ) raises:
         """Queue a send on socket `fd` from `buf`."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (send)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Send(sq.__next__(), fd, buf, len).user_data(token)
-        self._pending += 1
 
     def submit_accept(mut self, fd: RawHandle, token: UInt64) raises:
         """Queue an accept on listening socket `fd`."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (accept)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd).user_data(token)
-        self._pending += 1
 
     def submit_accept_multishot(mut self, fd: RawHandle, token: UInt64) raises:
         """Queue a multishot accept on listening socket `fd`.
@@ -329,11 +326,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         CQE flags lack IORING_CQE_F_MORE (multishot ended).
         Requires kernel >= 5.19.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (accept_multishot)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd).ioprio(IoUringAcceptFlags.MULTISHOT.value).user_data(token)
-        self._pending += 1
 
     def submit_connect(
         mut self,
@@ -347,13 +342,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         The memory pointed to by `addr_unsafe_ptr` must remain valid
         until the completion fires.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (connect)"
-        _ = Connect(sq.__next__(), fd, addr_unsafe_ptr, addr_len).user_data(
-            token
-        )
-        self._pending += 1
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
+        _ = Connect(sq.__next__(), fd, addr_unsafe_ptr, addr_len).user_data(token)
 
     def submit_recvmsg(
         mut self,
@@ -367,13 +358,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         The memory pointed to by `msghdr_ptr` (and all buffers it
         references) must remain valid until the completion fires.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recvmsg)"
-        _ = RecvMsg(sq.__next__(), fd, msghdr_ptr).recv_flags(flags).user_data(
-            token
-        )
-        self._pending += 1
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
+        _ = RecvMsg(sq.__next__(), fd, msghdr_ptr).recv_flags(flags).user_data(token)
 
     def submit_sendmsg(
         mut self,
@@ -387,13 +374,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         The memory pointed to by `msghdr_ptr` (and all buffers it
         references) must remain valid until the completion fires.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (sendmsg)"
-        _ = SendMsg(sq.__next__(), fd, msghdr_ptr).send_flags(flags).user_data(
-            token
-        )
-        self._pending += 1
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
+        _ = SendMsg(sq.__next__(), fd, msghdr_ptr).send_flags(flags).user_data(token)
 
     def submit_timeout(
         mut self,
@@ -406,11 +389,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         The memory pointed to by `ts_ptr` must remain valid until
         the completion fires.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (timeout)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = Timeout(sq.__next__(), ts_ptr).user_data(token)
-        self._pending += 1
 
     def submit_cancel(
         mut self,
@@ -428,11 +409,9 @@ struct CompletionLoop[Handler: CompletionHandler]:
         `flags` accepts `IORING_ASYNC_CANCEL_*` bits (0 = match a single op
         by `target_user_data`).
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (cancel)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = AsyncCancel(sq.__next__(), target_user_data).cancel_flags(flags).user_data(token)
-        self._pending += 1
 
     def provide_buffers(
         mut self,
@@ -448,9 +427,8 @@ struct CompletionLoop[Handler: CompletionHandler]:
         Buffers are contiguous: buf_base[i * buf_size .. (i+1) * buf_size].
         Each buffer gets ID base_buf_id + i.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (provide_buffers)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
             unsafe_from_address=Int(buf_base)
         )
@@ -462,7 +440,6 @@ struct CompletionLoop[Handler: CompletionHandler]:
             group_id,
             base_buf_id,
         ).user_data(token)
-        self._pending += 1
 
     def reprovide_buffer(
         mut self,
@@ -473,9 +450,8 @@ struct CompletionLoop[Handler: CompletionHandler]:
         token: UInt64 = 0,
     ) raises:
         """Re-provide a single buffer after processing its data."""
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (reprovide_buffer)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         var ptr = UnsafePointer[c_void, StaticConstantOrigin](
             unsafe_from_address=Int(buf_ptr)
         )
@@ -487,7 +463,6 @@ struct CompletionLoop[Handler: CompletionHandler]:
             group_id,
             buf_id,
         ).user_data(token)
-        self._pending += 1
 
     def submit_recvmsg_multishot(
         mut self,
@@ -502,15 +477,13 @@ struct CompletionLoop[Handler: CompletionHandler]:
         CQE.flags >> 16 when IORING_CQE_F_BUFFER is set.
         Re-submit when CQE flags lack IORING_CQE_F_MORE.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recvmsg_multishot)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         _ = RecvMsg(sq.__next__(), fd, msghdr_ptr)
             .ioprio(UInt16(IORING_RECV_MULTISHOT))
             .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
             .buf_group(buf_group)
             .user_data(token)
-        self._pending += 1
 
     def submit_recv_multishot(
         mut self,
@@ -530,16 +503,14 @@ struct CompletionLoop[Handler: CompletionHandler]:
         Buffer pointer (NULL) and length (0) are placeholders — the
         kernel ignores them when BUFFER_SELECT is set.
         """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recv_multishot)"
+        self._begin_submit()
+        var sq = self._ring.unsynced_sq()
         var null_addr = null_ptr[c_void, StaticConstantOrigin]()
         _ = Recv(sq.__next__(), fd, null_addr, UInt(0))
             .ioprio(UInt16(IORING_RECV_MULTISHOT))
             .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
             .buf_group(buf_group)
             .user_data(token)
-        self._pending += 1
 
     def register_buf_ring(
         mut self,
@@ -603,6 +574,8 @@ struct CompletionLoop[Handler: CompletionHandler]:
         """Submit queued SQEs and drain available completions.
 
         Calls `Handler.on_complete` for each completed operation.
+        When Handler conforms to BatchCompletionHandler, also calls
+        `Handler.on_flush` once after all CQEs are drained.
         """
         _ = self._ring.submit_and_wait(wait_nr=wait_nr)
         var cq = self._ring.cq(wait_nr=0)
@@ -615,6 +588,8 @@ struct CompletionLoop[Handler: CompletionHandler]:
             if (flags & IORING_CQE_F_MORE) == 0:
                 self._pending -= 1
         cq^.__del__()
+        comptime if conforms_to(Self.Handler, BatchCompletionHandler):
+            self._handler.on_flush()
 
     def run(mut self) raises:
         """Run until all pending operations complete."""
@@ -633,265 +608,10 @@ trait BatchCompletionHandler(CompletionHandler):
         ...
 
 
-struct BatchCompletionLoop[Handler: BatchCompletionHandler]:
-    """Event loop that drains all available completions before flushing.
+comptime BatchCompletionLoop = CompletionLoop
+"""CompletionLoop with batch flush — use with a BatchCompletionHandler.
 
-    Same submit API as CompletionLoop. The poll() method waits for at
-    least 1 CQE, drains all available CQEs via on_complete(), then
-    calls on_flush() once for batch processing.
-    """
-
-    var _ring: IoUring[]
-    var _pending: UInt32
-    var _handler: Self.Handler
-
-    def __init__(out self, var handler: Self.Handler, sq_entries: UInt32 = 64) raises:
-        self._ring = IoUring[](sq_entries=sq_entries)
-        self._pending = 0
-        self._handler = handler^
-
-    def submit_nop(mut self, token: UInt64 = 0) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (nop)"
-        _ = Nop(sq.__next__()).user_data(token)
-        self._pending += 1
-
-    def submit_read(
-        mut self,
-        fd: RawHandle,
-        buf: UnsafePointer[Int8, StaticConstantOrigin],
-        len: UInt,
-        token: UInt64,
-        offset: UInt64 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (read)"
-        _ = Read(sq.__next__(), fd, buf, len).user_data(token).offset(offset)
-        self._pending += 1
-
-    def submit_write(
-        mut self,
-        fd: RawHandle,
-        buf: UnsafePointer[Int8, StaticConstantOrigin],
-        len: UInt,
-        token: UInt64,
-        offset: UInt64 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (write)"
-        _ = Write(sq.__next__(), fd, buf, len).user_data(token).offset(offset)
-        self._pending += 1
-
-    def submit_recv(
-        mut self,
-        fd: RawHandle,
-        buf: UnsafePointer[Int8, StaticConstantOrigin],
-        len: UInt,
-        token: UInt64,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recv)"
-        _ = Recv(sq.__next__(), fd, buf, len).user_data(token)
-        self._pending += 1
-
-    def submit_send(
-        mut self,
-        fd: RawHandle,
-        buf: UnsafePointer[Int8, StaticConstantOrigin],
-        len: UInt,
-        token: UInt64,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (send)"
-        _ = Send(sq.__next__(), fd, buf, len).user_data(token)
-        self._pending += 1
-
-    def submit_accept(mut self, fd: RawHandle, token: UInt64) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (accept)"
-        _ = Accept(sq.__next__(), fd).user_data(token)
-        self._pending += 1
-
-    def submit_accept_multishot(mut self, fd: RawHandle, token: UInt64) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (accept_multishot)"
-        _ = Accept(sq.__next__(), fd).ioprio(IoUringAcceptFlags.MULTISHOT.value).user_data(token)
-        self._pending += 1
-
-    def submit_connect(
-        mut self,
-        fd: RawHandle,
-        addr_unsafe_ptr: UnsafePointer[Int8, StaticConstantOrigin],
-        addr_len: UInt64,
-        token: UInt64,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (connect)"
-        _ = Connect(sq.__next__(), fd, addr_unsafe_ptr, addr_len).user_data(token)
-        self._pending += 1
-
-    def submit_recvmsg(
-        mut self,
-        fd: RawHandle,
-        msghdr_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        token: UInt64,
-        flags: UInt32 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recvmsg)"
-        _ = RecvMsg(sq.__next__(), fd, msghdr_ptr).recv_flags(flags).user_data(token)
-        self._pending += 1
-
-    def submit_sendmsg(
-        mut self,
-        fd: RawHandle,
-        msghdr_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        token: UInt64,
-        flags: UInt32 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (sendmsg)"
-        _ = SendMsg(sq.__next__(), fd, msghdr_ptr).send_flags(flags).user_data(token)
-        self._pending += 1
-
-    def submit_timeout(
-        mut self,
-        ts_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        token: UInt64,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (timeout)"
-        _ = Timeout(sq.__next__(), ts_ptr).user_data(token)
-        self._pending += 1
-
-    def submit_cancel(
-        mut self,
-        token: UInt64,
-        target_user_data: UInt64,
-        flags: UInt32 = 0,
-    ) raises:
-        """Cancel a previously submitted op matched by `target_user_data`.
-
-        See `CompletionLoop.submit_cancel` for semantics.
-        """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (cancel)"
-        _ = AsyncCancel(sq.__next__(), target_user_data).cancel_flags(flags).user_data(token)
-        self._pending += 1
-
-    def provide_buffers(
-        mut self,
-        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
-        buf_size: Int,
-        count: Int,
-        group_id: UInt16,
-        base_buf_id: UInt16,
-        token: UInt64 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (provide_buffers)"
-        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
-            unsafe_from_address=Int(buf_base)
-        )
-        _ = ProvideBuffers(
-            sq.__next__(), buf_ptr, UInt32(buf_size), UInt32(count),
-            group_id, base_buf_id,
-        ).user_data(token)
-        self._pending += 1
-
-    def reprovide_buffer(
-        mut self,
-        buf_ptr: UnsafePointer[UInt8, MutAnyOrigin],
-        buf_size: Int,
-        group_id: UInt16,
-        buf_id: UInt16,
-        token: UInt64 = 0,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (reprovide_buffer)"
-        var ptr = UnsafePointer[c_void, StaticConstantOrigin](
-            unsafe_from_address=Int(buf_ptr)
-        )
-        _ = ProvideBuffers(
-            sq.__next__(), ptr, UInt32(buf_size), UInt32(1),
-            group_id, buf_id,
-        ).user_data(token)
-        self._pending += 1
-
-    def submit_recvmsg_multishot(
-        mut self,
-        fd: RawHandle,
-        msghdr_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        buf_group: UInt16,
-        token: UInt64,
-    ) raises:
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recvmsg_multishot)"
-        _ = RecvMsg(sq.__next__(), fd, msghdr_ptr)
-            .ioprio(UInt16(IORING_RECV_MULTISHOT))
-            .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
-            .buf_group(buf_group)
-            .user_data(token)
-        self._pending += 1
-
-    def submit_recv_multishot(
-        mut self,
-        fd: RawHandle,
-        buf_group: UInt16,
-        token: UInt64,
-    ) raises:
-        """Queue a multishot recv with provided buffer selection (TCP).
-
-        Like submit_recv but the kernel selects a buffer from `buf_group`
-        per arrival and produces one CQE per chunk. The payload begins at
-        offset 0 of the chosen buffer (no io_uring_recvmsg_out header).
-        Re-submit when CQE flags lack IORING_CQE_F_MORE.
-        """
-        var sq = self._ring.sq()
-        if not sq:
-            raise "submission queue full (recv_multishot)"
-        var null_addr = null_ptr[c_void, StaticConstantOrigin]()
-        _ = Recv(sq.__next__(), fd, null_addr, UInt(0))
-            .ioprio(UInt16(IORING_RECV_MULTISHOT))
-            .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
-            .buf_group(buf_group)
-            .user_data(token)
-        self._pending += 1
-
-    def poll(mut self, *, wait_nr: UInt32 = 1) raises:
-        """Submit queued SQEs, drain all available completions, then flush.
-
-        Calls Handler.on_complete for each completed operation,
-        then Handler.on_flush once after all CQEs are drained.
-        """
-        _ = self._ring.submit_and_wait(wait_nr=wait_nr)
-        var cq = self._ring.cq(wait_nr=0)
-        while cq:
-            var cqe = cq.__next__()
-            var flags = UInt32(cqe.flags.value)
-            self._handler.on_complete(cqe.user_data, cqe.res, flags)
-            # Multishot ops produce multiple CQEs per submission. Only the
-            # terminal CQE (flag IORING_CQE_F_MORE cleared) retires the op.
-            if (flags & IORING_CQE_F_MORE) == 0:
-                self._pending -= 1
-        cq^.__del__()
-        self._handler.on_flush()
-
-    def run(mut self) raises:
-        while self._pending > 0:
-            self.poll(wait_nr=1)
+When Handler conforms to BatchCompletionHandler, CompletionLoop
+automatically calls on_flush() after draining CQEs. This alias exists
+for API discoverability; it is identical to CompletionLoop.
+"""

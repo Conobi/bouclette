@@ -166,6 +166,19 @@ struct Socket:
         _connect(self._handle, stor)
 
     @staticmethod
+    def _connect_new[Addr: SocketAddrStor](
+        ref addr: Addr,
+        family: AddrFamily,
+        type: SocketType,
+        protocol: Protocol,
+    ) raises -> Self:
+        """Create a blocking socket, connect to `addr`, and return it."""
+        var handle = _sys_socket(family, type, SocketFlags.CLOEXEC, protocol)
+        var stor = addr.addr_stor()
+        _connect(handle, stor)
+        return Self(handle^)
+
+    @staticmethod
     def tcp_connect(ref addr: SocketAddrV4) raises -> Self:
         """Blocking TCP client to an IPv4 address.
 
@@ -173,15 +186,7 @@ struct Socket:
         Set non-blocking manually if you need to thread the result into a
         CompletionLoop or ReadinessLoop.
         """
-        var handle = _sys_socket(
-            AddrFamily.INET,
-            SocketType.STREAM,
-            SocketFlags.CLOEXEC,
-            Protocol.TCP,
-        )
-        var stor = addr.addr_stor()
-        _connect(handle, stor)
-        return Self(handle^)
+        return Self._connect_new(addr, AddrFamily.INET, SocketType.STREAM, Protocol.TCP)
 
     @staticmethod
     def tcp_connect(ref addr: SocketAddrV6) raises -> Self:
@@ -191,15 +196,7 @@ struct Socket:
         Set non-blocking manually if you need to thread the result into a
         CompletionLoop or ReadinessLoop.
         """
-        var handle = _sys_socket(
-            AddrFamily.INET6,
-            SocketType.STREAM,
-            SocketFlags.CLOEXEC,
-            Protocol.TCP,
-        )
-        var stor = addr.addr_stor()
-        _connect(handle, stor)
-        return Self(handle^)
+        return Self._connect_new(addr, AddrFamily.INET6, SocketType.STREAM, Protocol.TCP)
 
     @staticmethod
     def udp_connect(ref addr: SocketAddrV4) raises -> Self:
@@ -209,15 +206,7 @@ struct Socket:
         Set non-blocking manually if you need to thread the result into a
         CompletionLoop or ReadinessLoop.
         """
-        var handle = _sys_socket(
-            AddrFamily.INET,
-            SocketType.DGRAM,
-            SocketFlags.CLOEXEC,
-            Protocol.UDP,
-        )
-        var stor = addr.addr_stor()
-        _connect(handle, stor)
-        return Self(handle^)
+        return Self._connect_new(addr, AddrFamily.INET, SocketType.DGRAM, Protocol.UDP)
 
     @staticmethod
     def udp_connect(ref addr: SocketAddrV6) raises -> Self:
@@ -227,15 +216,7 @@ struct Socket:
         Set non-blocking manually if you need to thread the result into a
         CompletionLoop or ReadinessLoop.
         """
-        var handle = _sys_socket(
-            AddrFamily.INET6,
-            SocketType.DGRAM,
-            SocketFlags.CLOEXEC,
-            Protocol.UDP,
-        )
-        var stor = addr.addr_stor()
-        _connect(handle, stor)
-        return Self(handle^)
+        return Self._connect_new(addr, AddrFamily.INET6, SocketType.DGRAM, Protocol.UDP)
 
     @always_inline
     def raw(self) raises -> RawHandle:
