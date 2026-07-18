@@ -7,3 +7,4 @@ on token values.
 """
 
 from .completion import Completion, CompletionFn
+from .driver import IoDriver
