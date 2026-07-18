@@ -20,6 +20,10 @@ trait IoDriver(Movable):
     proactor event loop.
     """
 
+    def __del__(deinit self):
+        """Release all resources held by this driver."""
+        ...
+
     def tick(mut self, wait: Bool) raises:
         """Submit pending SQEs and dispatch completed operations.
 
