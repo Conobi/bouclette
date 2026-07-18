@@ -58,6 +58,7 @@ TESTS=(
     tests/boucle/test_stackful.mojo
     tests/boucle/test_stackful_io.mojo
     tests/boucle/test_coroutine_pool.mojo
+    tests/boucle/proactor/test_completion.mojo
 )
 
 # Tests that exercise io_uring (via raw syscalls or CompletionLoop) plus
