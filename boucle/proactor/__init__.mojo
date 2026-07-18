@@ -1,0 +1,9 @@
+"""Proactor module — per-operation completion callbacks.
+
+Alternative to the centralized CompletionHandler dispatch in
+boucle.completion. Each I/O operation carries its own callback,
+enabling heterogeneous operation types without a match/switch
+on token values.
+"""
+
+from .completion import Completion, CompletionFn
