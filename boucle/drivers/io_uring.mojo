@@ -83,7 +83,7 @@ struct IoUringDriver(IoDriver):
     def submit_connect(
         mut self,
         fd: RawHandle,
-        addr: UnsafePointer[Int8, StaticConstantOrigin],
+        addr: UnsafePointer[UInt8, StaticConstantOrigin],
         addr_len: UInt64,
         c: UnsafePointer[Completion, MutAnyOrigin],
     ) raises:
@@ -98,7 +98,10 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        _ = Connect(sq.__next__(), fd, addr, addr_len).user_data(
+        var addr_cv = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(addr)
+        )
+        _ = Connect(sq.__next__(), fd, addr_cv, addr_len).user_data(
             UInt64(Int(c))
         )
 
@@ -311,14 +314,14 @@ struct IoUringDriver(IoDriver):
         SQE-per-reprovide cost of the older `provide_buffers` path
         dominates.
 
-        `count` must be a power of 2; if it isn't, it is rounded up.
-        Allocates the ring and pre-fills `count` entries each pointing
-        at `buf_base + i * buf_size` (i = 0..count-1).
+        The ring requires a power-of-2 number of slots; `count` is
+        rounded up if needed. Only `count` entries are populated,
+        so `buf_base` must hold at least `count * buf_size` bytes.
 
         Args:
             buf_base: Base pointer for the data buffers.
             buf_size: Size of each individual data buffer in bytes.
-            count: Number of buffers (rounded up to next power of 2).
+            count: Number of buffers to populate.
             group_id: Buffer group ID to register under.
 
         Returns:
@@ -340,6 +343,7 @@ struct IoUringDriver(IoDriver):
             group_id,
             buf_base,
             buf_size,
+            UInt32(count),
         )
 
         var reg = IoUringBufReg(

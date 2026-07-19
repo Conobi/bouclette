@@ -49,7 +49,7 @@ trait IoDriver(Movable):
     def submit_connect(
         mut self,
         fd: RawHandle,
-        addr: UnsafePointer[Int8, StaticConstantOrigin],
+        addr: UnsafePointer[UInt8, StaticConstantOrigin],
         addr_len: UInt64,
         c: UnsafePointer[Completion, MutAnyOrigin],
     ) raises:

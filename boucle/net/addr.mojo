@@ -37,14 +37,14 @@ trait SocketAddr(Defaultable, ImplicitlyDestructible):
 
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
+    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
         ...
 
 
 trait SocketAddrMut(Defaultable, ImplicitlyDestructible):
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
+    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
         ...
 
     def len_unsafe_ptr(
@@ -85,7 +85,7 @@ struct SocketAddrStorAnyMut[Addr: SocketAddr](SocketAddrMut):
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
+    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
         return self.addr.addr_unsafe_ptr()
 
     @always_inline
@@ -136,8 +136,8 @@ struct SocketAddrStorV4(TrivialRegisterPassable, SocketAddr):
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
-        return UnsafePointer[Int8, StaticConstantOrigin](
+    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
+        return UnsafePointer[UInt8, StaticConstantOrigin](
             unsafe_from_address=Int(UnsafePointer(to=self.addr))
         )
 
@@ -216,8 +216,8 @@ struct SocketAddrStorV6(TrivialRegisterPassable, SocketAddr):
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
-        return UnsafePointer[Int8, StaticConstantOrigin](
+    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
+        return UnsafePointer[UInt8, StaticConstantOrigin](
             unsafe_from_address=Int(UnsafePointer(to=self.addr))
         )
 
