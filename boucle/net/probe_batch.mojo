@@ -162,6 +162,9 @@ struct ProbeBatch:
 
             # Collect results from completed probes.
             for i in range(batch_size):
+                debug_assert(
+                    (probes + i)[].result_is_set(), "result not set at collection"
+                )
                 var port_idx = offset + i
                 self._results.append(
                     ProbeResult(
@@ -218,6 +221,13 @@ struct ProbeBatch:
 
         Bounded at 30x the probe count (each probe produces at most 3 CQEs;
         10x safety margin accounts for spurious wakeups and flush retries).
+        Hitting the bound implies kernel-level failure (lost SQEs) where
+        safety is already compromised. Each iteration may block up to the
+        probe timeout duration; worst-case wall-clock is count*30*timeout_ms.
+
+        SQ-full during flush_cancel inside this loop is transient: run_once()
+        calls tick(wait=True) which flushes pending SQEs before waiting,
+        so SQ space recovers on the next iteration.
 
         Args:
             probes: Pointer to the probe array.
