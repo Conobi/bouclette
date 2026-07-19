@@ -66,6 +66,10 @@ TESTS=(
     tests/boucle/proactor/test_driver_timeout.mojo
     tests/boucle/proactor/test_driver_connect.mojo
     tests/boucle/proactor/test_driver_sq_space.mojo
+    tests/boucle/proactor/test_driver_accept.mojo
+    tests/boucle/proactor/test_driver_recv_send.mojo
+    tests/boucle/proactor/test_driver_recvmsg_sendmsg.mojo
+    tests/boucle/proactor/test_driver_multishot_recvmsg.mojo
     tests/boucle/net/test_probe_integration.mojo
     tests/boucle/net/test_probe_batch.mojo
     tests/boucle/net/test_probe_cooperative.mojo
@@ -96,6 +100,10 @@ SKIP_UNDER_QEMU=(
     tests/boucle/proactor/test_driver_timeout.mojo
     tests/boucle/proactor/test_driver_connect.mojo
     tests/boucle/proactor/test_driver_sq_space.mojo
+    tests/boucle/proactor/test_driver_accept.mojo
+    tests/boucle/proactor/test_driver_recv_send.mojo
+    tests/boucle/proactor/test_driver_recvmsg_sendmsg.mojo
+    tests/boucle/proactor/test_driver_multishot_recvmsg.mojo
     tests/boucle/net/test_probe_integration.mojo
     tests/boucle/net/test_probe_batch.mojo
     tests/boucle/net/test_probe_cooperative.mojo
