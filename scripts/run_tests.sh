@@ -70,6 +70,7 @@ TESTS=(
     tests/boucle/net/test_probe_batch.mojo
     tests/boucle/net/test_probe_cooperative.mojo
     tests/boucle/net/test_probe_property.mojo
+    tests/boucle/net/test_probe_exception.mojo
 )
 
 # Tests that exercise io_uring (via raw syscalls or CompletionLoop) plus
@@ -99,6 +100,7 @@ SKIP_UNDER_QEMU=(
     tests/boucle/net/test_probe_batch.mojo
     tests/boucle/net/test_probe_cooperative.mojo
     tests/boucle/net/test_probe_property.mojo
+    tests/boucle/net/test_probe_exception.mojo
 )
 
 # Detect qemu-user emulation on aarch64. Two transports we care about

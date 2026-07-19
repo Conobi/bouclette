@@ -106,31 +106,41 @@ struct ProbeBatch:
             # Heap-allocate probes for pointer stability (wire_context takes address).
             var probes = alloc[ConnectProbe](batch_size).as_unsafe_any_origin()
 
-            # Initialize all probes.
-            for i in range(batch_size):
-                var port_idx = offset + i
-                var target = SocketAddrV4(
-                    self._target.ip.octets[0],
-                    self._target.ip.octets[1],
-                    self._target.ip.octets[2],
-                    self._target.ip.octets[3],
-                    port=UInt16(self._ports[port_idx]),
-                )
-                (probes + i).init_pointee_move(
-                    ConnectProbe(target=target, timeout_ms=self._timeout_ms)
-                )
+            # Initialize all probes (track count for cleanup on failure).
+            var initialized = 0
+            try:
+                for i in range(batch_size):
+                    var port_idx = offset + i
+                    var target = SocketAddrV4(
+                        self._target.ip.octets[0],
+                        self._target.ip.octets[1],
+                        self._target.ip.octets[2],
+                        self._target.ip.octets[3],
+                        port=UInt16(self._ports[port_idx]),
+                    )
+                    (probes + i).init_pointee_move(
+                        ConnectProbe(target=target, timeout_ms=self._timeout_ms)
+                    )
+                    initialized += 1
+            except e:
+                for j in range(initialized):
+                    (probes + j).destroy_pointee()
+                probes.free()
+                raise e^
 
             # Wire context (sets up callback pointers to each probe).
             for i in range(batch_size):
                 (probes + i)[].wire_context()
 
-            # Submit all probes in this batch.
+            # Submit all probes in this batch (track count for drain on failure).
+            var submitted = 0
             try:
                 for i in range(batch_size):
                     (probes + i)[].submit(loop)
+                    submitted += 1
             except e:
-                # Drain any already-submitted probes before re-raising.
-                Self._drain_batch(probes, batch_size, loop)
+                if submitted > 0:
+                    Self._drain_batch(probes, submitted, loop)
                 for i in range(batch_size):
                     (probes + i).destroy_pointee()
                 probes.free()
@@ -200,25 +210,34 @@ struct ProbeBatch:
         count: Int,
         mut loop: EventLoop[IoUringDriver],
     ):
-        """Drain all in-flight probes until done, ignoring further errors.
+        """Drain in-flight probes until done, with bounded iteration.
 
         Used in exception handlers to ensure all CQEs are consumed before
         destroying probes, preventing kernel-side use-after-free of
         completion token pointers.
 
+        Bounded at 30x the probe count (each probe produces at most 3 CQEs;
+        10x safety margin accounts for spurious wakeups and flush retries).
+
         Args:
             probes: Pointer to the probe array.
-            count: Number of probes in the array.
+            count: Number of in-flight probes to drain.
             loop: The event loop to poll.
         """
+        if count == 0:
+            return
+        var max_iters = count * 30
+        var iters = 0
         while not Self._all_done(probes, count):
+            if iters >= max_iters:
+                break
             try:
                 loop.run_once()
                 for i in range(count):
                     (probes + i)[].flush_cancel(loop)
             except:
-                # Best-effort drain; cannot propagate from cleanup.
                 pass
+            iters += 1
 
     @staticmethod
     def _sort_results(mut results: List[ProbeResult]):

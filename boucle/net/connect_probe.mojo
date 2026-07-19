@@ -281,6 +281,7 @@ struct ConnectProbe(Movable):
     def _check_done(mut self):
         """Mark probe as done if all 3 CQEs have arrived."""
         if self._total_cqes >= 3:
+            debug_assert(self._total_cqes == 3, "CQE count exceeded 3")
             self._done = True
 
     @staticmethod
@@ -326,6 +327,9 @@ struct ConnectProbe(Movable):
         self_ptr[]._resolved_by = UInt8(0)
 
         # Defer cancel for timeout (flush_cancel submits it after tick).
+        debug_assert(
+            not self_ptr[]._cancel_submitted, "no-double-cancel violated"
+        )
         if Int(self_ptr[]._driver_ptr) != 0:
             self_ptr[]._cancel_target = UInt8(1)
         self_ptr[]._cancel_submitted = True
@@ -374,6 +378,9 @@ struct ConnectProbe(Movable):
         self_ptr[]._resolved_by = UInt8(1)
 
         # Defer cancel for connect (flush_cancel submits it after tick).
+        debug_assert(
+            not self_ptr[]._cancel_submitted, "no-double-cancel violated"
+        )
         if Int(self_ptr[]._driver_ptr) != 0:
             self_ptr[]._cancel_target = UInt8(2)
         self_ptr[]._cancel_submitted = True
