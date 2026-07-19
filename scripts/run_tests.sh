@@ -66,6 +66,7 @@ TESTS=(
     tests/boucle/proactor/test_driver_timeout.mojo
     tests/boucle/proactor/test_driver_connect.mojo
     tests/boucle/proactor/test_driver_sq_space.mojo
+    tests/boucle/net/test_probe_integration.mojo
 )
 
 # Tests that exercise io_uring (via raw syscalls or CompletionLoop) plus
@@ -91,6 +92,7 @@ SKIP_UNDER_QEMU=(
     tests/boucle/proactor/test_driver_timeout.mojo
     tests/boucle/proactor/test_driver_connect.mojo
     tests/boucle/proactor/test_driver_sq_space.mojo
+    tests/boucle/net/test_probe_integration.mojo
 )
 
 # Detect qemu-user emulation on aarch64. Two transports we care about

@@ -6,15 +6,24 @@ The kernel delivers exactly one CQE per submitted SQE. The state
 machine resolves the probe once the first non-ECANCELED result
 arrives on either connect or timeout, then cancels the other and
 waits for all 3 CQEs before declaring done.
+
+Cancel submission is deferred: callbacks set a flag indicating which
+operation to cancel, and the caller must invoke flush_cancel() after
+each tick to submit the actual ASYNC_CANCEL SQE. This avoids a known
+issue where SQEs queued during CQE processing are not reliably
+picked up by the kernel on the next submit_and_wait.
 """
 
 from std.memory import UnsafePointer
 from boucle._sys.ptr import null_ptr
 from boucle._sys.linux.raw import __kernel_timespec
+from boucle._sys.linux.raw.ctypes import c_void
 from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrStorV4
+from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.probe import PortStatus, result_from_connect_cqe
 from boucle.proactor.completion import Completion, CompletionFn
+from boucle.proactor.loop import EventLoop
+from boucle.drivers.io_uring import IoUringDriver
 
 
 struct ConnectProbe:
@@ -32,6 +41,7 @@ struct ConnectProbe:
         _result_set: Whether result has been resolved.
         _resolved_by: 0=connect, 1=timeout (diagnostic).
         _cancel_submitted: Whether a cancel SQE has been submitted.
+        _cancel_target: 0=none, 1=cancel-timeout, 2=cancel-connect.
         _total_cqes: Number of CQEs received so far.
         _done: True when all 3 CQEs have arrived.
     """
@@ -47,6 +57,7 @@ struct ConnectProbe:
     var _result_set: Bool
     var _resolved_by: UInt8
     var _cancel_submitted: Bool
+    var _cancel_target: UInt8
     var _total_cqes: Int
     var _done: Bool
 
@@ -79,6 +90,36 @@ struct ConnectProbe:
         self._result_set = False
         self._resolved_by = UInt8(0)
         self._cancel_submitted = False
+        self._cancel_target = UInt8(0)
+        self._total_cqes = 0
+        self._done = False
+
+    def __init__(out self, *, target: SocketAddrV4, timeout_ms: Int) raises:
+        """Construct a ConnectProbe for a specific target and timeout.
+
+        Creates a TCP socket, stores the target address for SQE pointer
+        stability, and configures the timeout duration. Call wire_context()
+        then submit() to begin the probe lifecycle.
+
+        Args:
+            target: The IPv4 address and port to probe.
+            timeout_ms: Timeout in milliseconds before declaring FILTERED.
+        """
+        self.socket = Socket.tcp_v4()
+        self._addr_stor = target.addr_stor()
+        self._connect_cmp = Completion()
+        self._timeout_cmp = Completion()
+        self._cancel_cmp = Completion()
+        self._ts = __kernel_timespec(
+            tv_sec=Int64(timeout_ms // 1000),
+            tv_nsec=Int64((timeout_ms % 1000) * 1_000_000),
+        )
+        self._driver_ptr = null_ptr[NoneType, MutAnyOrigin]()
+        self._result_value = PortStatus.FILTERED
+        self._result_set = False
+        self._resolved_by = UInt8(0)
+        self._cancel_submitted = False
+        self._cancel_target = UInt8(0)
         self._total_cqes = 0
         self._done = False
 
@@ -98,6 +139,94 @@ struct ConnectProbe:
         self._timeout_cmp.invoke = Self._on_timeout_cb
         self._cancel_cmp.context = self_ptr
         self._cancel_cmp.invoke = Self._on_cancel_cb
+
+    def submit(mut self, mut loop: EventLoop[IoUringDriver]) raises:
+        """Submit connect + timeout SQEs to the event loop's driver.
+
+        Requires at least 2 SQ slots available for the atomic pair
+        (connect + timeout). Stores the driver pointer so flush_cancel()
+        can submit the cancel SQE after a resolving CQE fires.
+
+        Args:
+            loop: The event loop wrapping an IoUringDriver.
+
+        Raises:
+            If insufficient SQ space is available for the atomic submit.
+        """
+        if loop.driver.sq_space() < 2:
+            raise "insufficient SQ space for atomic submit"
+
+        # Store driver pointer for cancel submission via flush_cancel.
+        self._driver_ptr = UnsafePointer[NoneType, MutAnyOrigin](
+            unsafe_from_address=Int(UnsafePointer(to=loop.driver))
+        )
+
+        # Submit connect SQE.
+        var addr_ptr = self._addr_stor.addr_unsafe_ptr()
+        var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
+        var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            unsafe_from_address=Int(UnsafePointer(to=self._connect_cmp))
+        )
+        loop.driver.submit_connect(
+            self.socket.raw(), addr_ptr, addr_len, connect_cmp_ptr
+        )
+
+        # Submit timeout SQE.
+        var ts_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(UnsafePointer(to=self._ts))
+        )
+        var timeout_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            unsafe_from_address=Int(UnsafePointer(to=self._timeout_cmp))
+        )
+        loop.driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
+
+    def flush_cancel(mut self, mut loop: EventLoop[IoUringDriver]) raises:
+        """Submit the deferred cancel SQE if a callback requested one.
+
+        Must be called after each run_once() to ensure cancel operations
+        are submitted outside of CQE processing. SQEs queued during CQE
+        callbacks are not reliably picked up by io_uring's next
+        submit_and_wait; this method submits them from the caller's
+        context where flushing is deterministic.
+
+        Args:
+            loop: The event loop wrapping an IoUringDriver.
+
+        Raises:
+            If the submission queue is full (non-fatal in practice).
+        """
+        if self._cancel_target == UInt8(0):
+            return
+
+        if self._cancel_target == UInt8(1):
+            # Cancel the timeout.
+            var target_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+                unsafe_from_address=Int(
+                    UnsafePointer(to=self._timeout_cmp)
+                )
+            )
+            var cancel_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+                unsafe_from_address=Int(
+                    UnsafePointer(to=self._cancel_cmp)
+                )
+            )
+            loop.driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+        elif self._cancel_target == UInt8(2):
+            # Cancel the connect.
+            var target_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+                unsafe_from_address=Int(
+                    UnsafePointer(to=self._connect_cmp)
+                )
+            )
+            var cancel_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+                unsafe_from_address=Int(
+                    UnsafePointer(to=self._cancel_cmp)
+                )
+            )
+            loop.driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+
+        # Clear the flag so we don't double-submit.
+        self._cancel_target = UInt8(0)
 
     @always_inline
     def is_done(self) -> Bool:
@@ -147,7 +276,7 @@ struct ConnectProbe:
         3. If result already set: check_done, return (dual-fire guard).
         4. Set result from connect CQE result code.
         5. Set _resolved_by = 0.
-        6. If driver is non-null: submit cancel targeting timeout.
+        6. Set _cancel_target = 1 (cancel-timeout) for deferred flush.
         7. Set _cancel_submitted = True.
 
         Args:
@@ -175,11 +304,9 @@ struct ConnectProbe:
         self_ptr[]._result_set = True
         self_ptr[]._resolved_by = UInt8(0)
 
-        # Submit cancel for timeout (skip if no driver in test mode).
+        # Defer cancel for timeout (flush_cancel submits it after tick).
         if Int(self_ptr[]._driver_ptr) != 0:
-            # Production path: submit ASYNC_CANCEL targeting _timeout_cmp.
-            # Not implemented for test mode — driver_ptr is null.
-            pass
+            self_ptr[]._cancel_target = UInt8(1)
         self_ptr[]._cancel_submitted = True
         self_ptr[]._check_done()
 
@@ -197,7 +324,7 @@ struct ConnectProbe:
         3. If result already set: check_done, return (dual-fire guard).
         4. Set result = FILTERED.
         5. Set _resolved_by = 1.
-        6. If driver is non-null: submit cancel targeting connect.
+        6. Set _cancel_target = 2 (cancel-connect) for deferred flush.
         7. Set _cancel_submitted = True.
 
         Args:
@@ -225,11 +352,9 @@ struct ConnectProbe:
         self_ptr[]._result_set = True
         self_ptr[]._resolved_by = UInt8(1)
 
-        # Submit cancel for connect (skip if no driver in test mode).
+        # Defer cancel for connect (flush_cancel submits it after tick).
         if Int(self_ptr[]._driver_ptr) != 0:
-            # Production path: submit ASYNC_CANCEL targeting _connect_cmp.
-            # Not implemented for test mode — driver_ptr is null.
-            pass
+            self_ptr[]._cancel_target = UInt8(2)
         self_ptr[]._cancel_submitted = True
         self_ptr[]._check_done()
 
