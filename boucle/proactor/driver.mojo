@@ -96,6 +96,22 @@ trait IoDriver(Movable):
         """
         ...
 
+    def submit_accept(
+        mut self,
+        fd: RawHandle,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue an accept on listening socket `fd`.
+
+        The CQE result is the accepted file descriptor (>= 0) on
+        success, or a negative errno on failure.
+
+        Args:
+            fd: The listening socket file descriptor.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.
 

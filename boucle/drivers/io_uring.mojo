@@ -8,7 +8,7 @@ timeout, cancel).
 from std.memory import UnsafePointer
 
 from boucle._sys.linux.io_uring import IoUring
-from boucle._sys.linux.io_uring.op import Nop, Connect, Timeout, AsyncCancel
+from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Timeout, AsyncCancel
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle.handle import RawHandle
 from boucle.proactor.completion import Completion
@@ -132,6 +132,22 @@ struct IoUringDriver(IoDriver):
         _ = AsyncCancel(sq.__next__(), UInt64(Int(target))).user_data(
             UInt64(Int(c))
         )
+
+    def submit_accept(
+        mut self,
+        fd: RawHandle,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue an accept on listening socket `fd`.
+
+        Args:
+            fd: The listening socket file descriptor.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        _ = Accept(sq.__next__(), fd).user_data(UInt64(Int(c)))
 
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.
