@@ -7,13 +7,16 @@ timeout, cancel).
 
 from std.memory import UnsafePointer
 
+from std.memory.unsafe_pointer import alloc as _heap_alloc
+
 from boucle._sys.linux.io_uring import IoUring
 from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
-from boucle._sys.linux.io_uring.types import IoUringSqeFlags
+from boucle._sys.linux.io_uring.types import IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
 from boucle._sys.linux.raw import IORING_RECV_MULTISHOT
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.raw import msghdr
 from boucle.handle import RawHandle
+from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
 from boucle.proactor.driver import IoDriver
 
@@ -292,3 +295,74 @@ struct IoUringDriver(IoDriver):
             The number of SQ entries currently available for submission.
         """
         return len(self._ring.sq())
+
+    def register_buf_ring(
+        mut self,
+        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
+        buf_size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises -> BufRing:
+        """Register a user-mapped provided-buffer ring (since kernel 5.19).
+
+        Returning a consumed buffer to the ring is a userspace store on
+        `BufRing.add_buffer(buf_id)` -- no SQE, no syscall, no kernel
+        buffer-pool tree. Recommended for hot recv paths where the
+        SQE-per-reprovide cost of the older `provide_buffers` path
+        dominates.
+
+        `count` must be a power of 2; if it isn't, it is rounded up.
+        Allocates the ring and pre-fills `count` entries each pointing
+        at `buf_base + i * buf_size` (i = 0..count-1).
+
+        Args:
+            buf_base: Base pointer for the data buffers.
+            buf_size: Size of each individual data buffer in bytes.
+            count: Number of buffers (rounded up to next power of 2).
+            group_id: Buffer group ID to register under.
+
+        Returns:
+            A populated BufRing ready for multishot recv operations.
+        """
+        var entries = UInt32(_next_pow2(count))
+        debug_assert(
+            Int(entries) <= Int(UInt32.MAX) // _IO_URING_BUF_SIZE,
+            "ring too large",
+        )
+        var ring_bytes = Int(entries) * _IO_URING_BUF_SIZE
+        var ring_mem = _heap_alloc[UInt8](ring_bytes).as_unsafe_any_origin()
+        for i in range(ring_bytes):
+            ring_mem[i] = UInt8(0)
+
+        var bring = BufRing(
+            ring_mem,
+            entries,
+            group_id,
+            buf_base,
+            buf_size,
+        )
+
+        var reg = IoUringBufReg(
+            ring_addr=UInt64(Int(ring_mem)),
+            ring_entries=entries,
+            bgid=group_id,
+        )
+        var arg = reg.as_register_arg(
+            unsafe_opcode=IoUringRegisterOp.REGISTER_PBUF_RING
+        )
+        _ = self._ring.register(arg)
+
+        bring.populate_initial()
+        return bring^
+
+    def unregister_buf_ring(mut self, group_id: UInt16) raises:
+        """Tear down a registered buffer ring.
+
+        Args:
+            group_id: The buffer group ID to unregister (use `BufRing.bgid`).
+        """
+        var reg = IoUringBufReg(bgid=group_id)
+        var arg = reg.as_register_arg(
+            unsafe_opcode=IoUringRegisterOp.UNREGISTER_PBUF_RING
+        )
+        _ = self._ring.register(arg)
