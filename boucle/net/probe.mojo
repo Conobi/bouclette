@@ -8,7 +8,10 @@ blocks for higher-level async probe operations.
 - ProbeResult: port number paired with its status.
 - result_from_connect_cqe: maps a connect(2) CQE result to a PortStatus.
 - BatchSpec / compute_batches: partitions N ports into concurrency-sized chunks.
+- ProbeBatch: cooperative batch scanner with concurrency control.
 """
+
+from .probe_batch import ProbeBatch
 
 
 struct PortStatus(TrivialRegisterPassable, Equatable):
@@ -58,7 +61,7 @@ struct PortStatus(TrivialRegisterPassable, Equatable):
         return self._value != other._value
 
 
-struct ProbeResult:
+struct ProbeResult(Movable):
     """A single port probe outcome: port number paired with status.
 
     Attributes:
@@ -78,6 +81,15 @@ struct ProbeResult:
         """
         self.port = port
         self.status = status
+
+    def __init__(out self, *, deinit take: Self):
+        """Move constructor.
+
+        Args:
+            take: The source ProbeResult to move from.
+        """
+        self.port = take.port
+        self.status = take.status
 
 
 def result_from_connect_cqe(result: Int32) -> PortStatus:

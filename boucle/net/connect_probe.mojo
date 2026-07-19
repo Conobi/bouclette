@@ -26,7 +26,7 @@ from boucle.proactor.loop import EventLoop
 from boucle.drivers.io_uring import IoUringDriver
 
 
-struct ConnectProbe:
+struct ConnectProbe(Movable):
     """State machine managing the connect+timeout+cancel lifecycle.
 
     Fields:
@@ -122,6 +122,27 @@ struct ConnectProbe:
         self._cancel_target = UInt8(0)
         self._total_cqes = 0
         self._done = False
+
+    def __init__(out self, *, deinit take: Self):
+        """Move constructor.
+
+        Args:
+            take: The source ConnectProbe to move from.
+        """
+        self.socket = take.socket^
+        self._addr_stor = take._addr_stor
+        self._connect_cmp = take._connect_cmp^
+        self._timeout_cmp = take._timeout_cmp^
+        self._cancel_cmp = take._cancel_cmp^
+        self._ts = take._ts
+        self._driver_ptr = take._driver_ptr
+        self._result_value = take._result_value
+        self._result_set = take._result_set
+        self._resolved_by = take._resolved_by
+        self._cancel_submitted = take._cancel_submitted
+        self._cancel_target = take._cancel_target
+        self._total_cqes = take._total_cqes
+        self._done = take._done
 
     def wire_context(mut self):
         """Wire completion context pointers and callbacks to self.

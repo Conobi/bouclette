@@ -33,7 +33,7 @@ from boucle._sys.linux.raw import (
 )
 
 
-struct Socket:
+struct Socket(Movable):
     """A platform-agnostic, non-blocking socket."""
 
     var _handle: OwnedHandle
@@ -41,6 +41,15 @@ struct Socket:
     @always_inline
     def __init__(out self, var handle: OwnedHandle):
         self._handle = handle^
+
+    @always_inline
+    def __init__(out self, *, deinit take: Self):
+        """Move constructor.
+
+        Args:
+            take: The source Socket to move from.
+        """
+        self._handle = take._handle^
 
     @staticmethod
     def tcp_v4() raises -> Self:
