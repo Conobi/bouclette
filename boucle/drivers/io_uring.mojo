@@ -132,3 +132,14 @@ struct IoUringDriver(IoDriver):
         _ = AsyncCancel(sq.__next__(), UInt64(Int(target))).user_data(
             UInt64(Int(c))
         )
+
+    def sq_space(mut self) -> Int:
+        """Return the number of available submission queue slots.
+
+        Syncs the SQ head from the kernel and returns the count of
+        entries available for new submissions.
+
+        Returns:
+            The number of SQ entries currently available for submission.
+        """
+        return len(self._ring.sq())

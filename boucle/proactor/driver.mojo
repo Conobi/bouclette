@@ -95,3 +95,15 @@ trait IoDriver(Movable):
                itself.
         """
         ...
+
+    def sq_space(mut self) -> Int:
+        """Return the number of available submission queue slots.
+
+        Callers use this to verify sufficient capacity before
+        submitting multi-SQE atomic operations (e.g. connect +
+        timeout that must both fit or neither is queued).
+
+        Returns:
+            The number of SQ entries currently available for submission.
+        """
+        ...
