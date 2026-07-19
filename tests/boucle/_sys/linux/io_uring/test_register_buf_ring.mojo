@@ -1,5 +1,5 @@
 from boucle import CompletionLoop, CompletionHandler
-from boucle.completion import BufRing
+from boucle.proactor.bufring import BufRing
 from boucle._sys.ptr import null_ptr
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.raw import (
