@@ -45,6 +45,7 @@ TESTS=(
     tests/boucle/_sys/linux/epoll/test_epoll.mojo
     tests/boucle/_sys/linux/net/test_syscalls.mojo
     tests/boucle/net/test_probe_pure.mojo
+    tests/boucle/net/test_probe_state_machine.mojo
     tests/boucle/net/test_socket.mojo
     tests/boucle/net/test_socket_setopt.mojo
     tests/boucle/net/test_socket_connect.mojo
