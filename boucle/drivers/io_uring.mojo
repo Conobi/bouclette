@@ -8,8 +8,9 @@ timeout, cancel).
 from std.memory import UnsafePointer
 
 from boucle._sys.linux.io_uring import IoUring
-from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, Timeout, AsyncCancel
+from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
 from boucle._sys.linux.raw.ctypes import c_void
+from boucle._sys.linux.raw import msghdr
 from boucle.handle import RawHandle
 from boucle.proactor.completion import Completion
 from boucle.proactor.driver import IoDriver
@@ -198,6 +199,52 @@ struct IoUringDriver(IoDriver):
         _ = Send(sq.__next__(), fd, buf_ptr, UInt(len)).user_data(
             UInt64(Int(c))
         )
+
+    def submit_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recvmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr (and all referenced buffers). Must
+                 remain valid until CQE fires.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(msg)
+        )
+        _ = RecvMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
+
+    def submit_sendmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a sendmsg on socket `fd`.
+
+        Caller guarantees `msg` and all referenced buffers remain valid
+        and unmodified until the corresponding CQE fires.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr with destination and payload.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(msg)
+        )
+        _ = SendMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
 
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.

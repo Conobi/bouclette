@@ -10,6 +10,7 @@ from std.memory import UnsafePointer
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from boucle._sys.linux.raw.ctypes import c_void
+from boucle._sys.linux.raw import msghdr
 
 
 trait IoDriver(Movable):
@@ -145,6 +146,40 @@ trait IoDriver(Movable):
             fd: The socket file descriptor.
             buf: Data to send. Must remain valid until CQE fires.
             len: Number of bytes to send.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def submit_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recvmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr (and all referenced buffers). Must
+                 remain valid until CQE fires.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def submit_sendmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a sendmsg on socket `fd`.
+
+        Caller guarantees `msg` and all referenced buffers remain valid
+        and unmodified until the corresponding CQE fires.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr with destination and payload.
             c: Pointer to the caller-owned Completion token.
         """
         ...
