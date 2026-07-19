@@ -112,6 +112,43 @@ trait IoDriver(Movable):
         """
         ...
 
+    def submit_recv(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recv from socket `fd` into `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Buffer to receive into. Must remain valid until CQE fires.
+            len: Maximum bytes to receive.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def submit_send(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a send on socket `fd` from `buf`.
+
+        Caller guarantees `buf` remains valid and unmodified until
+        the corresponding CQE fires.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Data to send. Must remain valid until CQE fires.
+            len: Number of bytes to send.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.
 

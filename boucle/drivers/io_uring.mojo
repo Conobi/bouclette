@@ -8,7 +8,7 @@ timeout, cancel).
 from std.memory import UnsafePointer
 
 from boucle._sys.linux.io_uring import IoUring
-from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Timeout, AsyncCancel
+from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, Timeout, AsyncCancel
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle.handle import RawHandle
 from boucle.proactor.completion import Completion
@@ -148,6 +148,56 @@ struct IoUringDriver(IoDriver):
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd).user_data(UInt64(Int(c)))
+
+    def submit_recv(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recv from socket `fd` into `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Buffer to receive into. Must remain valid until CQE fires.
+            len: Maximum bytes to receive.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(buf)
+        )
+        _ = Recv(sq.__next__(), fd, buf_ptr, UInt(len)).user_data(
+            UInt64(Int(c))
+        )
+
+    def submit_send(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a send on socket `fd` from `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Data to send. Must remain valid until CQE fires.
+            len: Number of bytes to send.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(buf)
+        )
+        _ = Send(sq.__next__(), fd, buf_ptr, UInt(len)).user_data(
+            UInt64(Int(c))
+        )
 
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.
