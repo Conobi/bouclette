@@ -90,6 +90,7 @@ struct BufRing(Movable):
     var bgid: UInt16
     var buf_base: UnsafePointer[UInt8, MutAnyOrigin]
     var buf_size: UInt32
+    var buf_count: UInt32
     var owns_ring: Bool
 
     def __init__(
@@ -99,19 +100,27 @@ struct BufRing(Movable):
         bgid: UInt16,
         buf_base: UnsafePointer[UInt8, MutAnyOrigin],
         buf_size: UInt32,
+        buf_count: UInt32,
     ):
         """Construct a BufRing from pre-allocated ring memory.
 
         Args:
             ring_addr: Pointer to the ring memory (entries * 16 bytes).
-            ring_entries: Number of entries (must be a power of 2).
+            ring_entries: Number of ring slots (must be a power of 2).
             bgid: Buffer group ID this ring is registered under.
             buf_base: Base pointer for the data buffers.
             buf_size: Size of each individual data buffer in bytes.
+            buf_count: Actual number of data buffers in buf_base
+                       (may be less than ring_entries when count was
+                       rounded up to a power of 2).
         """
         debug_assert(
             ring_entries > 0 and (ring_entries & (ring_entries - 1)) == 0,
             "ring_entries must be a power of 2",
+        )
+        debug_assert(
+            buf_count > 0 and buf_count <= ring_entries,
+            "buf_count must be in (0, ring_entries]",
         )
         self.ring_addr = ring_addr
         self.ring_entries = ring_entries
@@ -119,6 +128,7 @@ struct BufRing(Movable):
         self.bgid = bgid
         self.buf_base = buf_base
         self.buf_size = buf_size
+        self.buf_count = buf_count
         self.owns_ring = True
 
     def __init__(out self):
@@ -134,6 +144,7 @@ struct BufRing(Movable):
         self.bgid = UInt16(0)
         self.buf_base = null_ptr[UInt8, MutAnyOrigin]()
         self.buf_size = UInt32(0)
+        self.buf_count = UInt32(0)
         self.owns_ring = False
 
     def __init__(out self, *, deinit take: Self):
@@ -144,6 +155,7 @@ struct BufRing(Movable):
         self.bgid = take.bgid
         self.buf_base = take.buf_base
         self.buf_size = take.buf_size
+        self.buf_count = take.buf_count
         self.owns_ring = take.owns_ring
         _ = take.owns_ring
 
@@ -199,8 +211,8 @@ struct BufRing(Movable):
         """Return a buffer (identified by `buf_id` from a recv CQE) to
         the ring so the kernel can pick it for a future arrival."""
         debug_assert(
-            UInt32(buf_id) < self.ring_entries,
-            "buf_id exceeds ring capacity",
+            UInt32(buf_id) < self.buf_count,
+            "buf_id exceeds buf_count",
         )
         var tp = self._tail_ptr()
         var current_tail = tp[]
@@ -214,11 +226,16 @@ struct BufRing(Movable):
         tp[] = current_tail + UInt16(1)
 
     def populate_initial(mut self):
-        """Fill every ring slot with its own data buffer and advance tail
-        to ring_entries. Call once after register_buf_ring."""
+        """Fill buf_count ring slots with data buffers and advance tail.
+
+        Only populates slots 0..buf_count-1 (not the full ring_entries),
+        so callers whose buf_base has fewer buffers than ring slots
+        won't produce out-of-bounds entries. Call once after
+        register_buf_ring.
+        """
         var tp = self._tail_ptr()
-        for i in range(Int(self.ring_entries)):
+        for i in range(Int(self.buf_count)):
             var bid = UInt16(i)
             var addr = UInt64(Int(self.buf_base)) + UInt64(i) * UInt64(self.buf_size)
             self._write_entry(UInt32(i), addr, self.buf_size, bid)
-        tp[] = UInt16(self.ring_entries)
+        tp[] = UInt16(self.buf_count)
