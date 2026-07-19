@@ -9,6 +9,8 @@ from std.memory import UnsafePointer
 
 from boucle._sys.linux.io_uring import IoUring
 from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
+from boucle._sys.linux.io_uring.types import IoUringSqeFlags
+from boucle._sys.linux.raw import IORING_RECV_MULTISHOT
 from boucle._sys.linux.raw.ctypes import c_void
 from boucle._sys.linux.raw import msghdr
 from boucle.handle import RawHandle
@@ -245,6 +247,40 @@ struct IoUringDriver(IoDriver):
             unsafe_from_address=Int(msg)
         )
         _ = SendMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
+
+    def submit_multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        buf_group: UInt16,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a multishot recvmsg with provided buffer selection.
+
+        Produces one CQE per received message. The buffer ID is in
+        CQE flags bits 16-31 when IORING_CQE_F_BUFFER is set. The
+        same Completion fires multiple times until the multishot ends
+        (CQE without IORING_CQE_F_MORE flag). Caller must re-arm if
+        desired.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr template. Must remain valid for the
+                 lifetime of the multishot operation.
+            buf_group: The provided buffer group ID to select from.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(msg)
+        )
+        _ = RecvMsg(sq.__next__(), fd, msg_ptr)
+            .ioprio(UInt16(IORING_RECV_MULTISHOT))
+            .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
+            .buf_group(buf_group)
+            .user_data(UInt64(Int(c)))
 
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.

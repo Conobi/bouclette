@@ -184,6 +184,30 @@ trait IoDriver(Movable):
         """
         ...
 
+    def submit_multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        buf_group: UInt16,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a multishot recvmsg with provided buffer selection.
+
+        Produces one CQE per received message. The buffer ID is in
+        CQE flags bits 16-31 when IORING_CQE_F_BUFFER is set. The
+        same Completion fires multiple times until the multishot ends
+        (CQE without IORING_CQE_F_MORE flag). Caller must re-arm if
+        desired.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Pointer to msghdr template. Must remain valid for the
+                 lifetime of the multishot operation.
+            buf_group: The provided buffer group ID to select from.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
     def sq_space(mut self) -> Int:
         """Return the number of available submission queue slots.
 
