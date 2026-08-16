@@ -24,3 +24,7 @@ prerelease = "allow"
 
 [tool.mojox]
 packages = ["boucle"]
+test-parallel = true
+
+[tool.mojox.lints]
+warnings = "error"

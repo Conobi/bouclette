@@ -28,6 +28,9 @@ credentials.*
 # Parallel worktrees (managed by atelier:using-git-worktrees skill)
 .worktrees/
 
+# mojox cache
+.mojox/
+
 # Build artifacts
 dist/
 *.whl
