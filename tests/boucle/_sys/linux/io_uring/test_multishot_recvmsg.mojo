@@ -173,11 +173,11 @@ def test_multishot_recvmsg() raises:
     dest_addr[8 + 15] = 1  # ::1
 
     var msg = InlineArray[UInt8, 5](fill=0)
-    msg[0] = ord("h")
-    msg[1] = ord("e")
-    msg[2] = ord("l")
-    msg[3] = ord("l")
-    msg[4] = ord("o")
+    msg[0] = UInt8(ord("h"))
+    msg[1] = UInt8(ord("e"))
+    msg[2] = UInt8(ord("l"))
+    msg[3] = UInt8(ord("l"))
+    msg[4] = UInt8(ord("o"))
 
     var send_res = external_call["sendto", Int64](
         fd,
