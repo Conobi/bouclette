@@ -10,7 +10,7 @@ Bridge until Modular ships native waker APIs.
 from std.os import abort
 from std.memory import UnsafePointer, memset
 from std.memory.unsafe_pointer import alloc
-from boucle._sys.linux.ucontext import (
+from boucle.socle.linux.ucontext import (
     alloc_ucontext,
     free_ucontext,
     uc_getcontext,
@@ -18,17 +18,17 @@ from boucle._sys.linux.ucontext import (
     uc_swapcontext_unchecked,
     setup_context,
 )
-from boucle._sys.linux.mm import (
+from boucle.socle.linux.mm import (
     mmap_anonymous,
     mprotect,
     get_page_size,
     MapFlags,
     ProtFlags,
 )
-from boucle._sys.linux.raw import syscall
-from boucle._sys.linux.raw import __NR_munmap
-from boucle._sys.linux.raw.ctypes import c_void
-from boucle._sys.ptr import null_ptr
+from boucle.socle.linux.raw import syscall
+from boucle.socle.linux.raw import __NR_munmap
+from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.ptr import null_ptr
 
 
 # Phase constants

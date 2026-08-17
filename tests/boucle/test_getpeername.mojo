@@ -7,7 +7,7 @@ from std.testing import assert_true, assert_equal
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
-from boucle._sys.linux.net.syscalls import _getpeername
+from boucle.net.socket import _getpeername
 
 
 def _getsockname_port_v4(ref s: Socket) raises -> UInt16:

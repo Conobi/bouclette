@@ -11,7 +11,7 @@ from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
 from boucle.proactor.loop import EventLoop
 from boucle.drivers.io_uring import IoUringDriver
-from boucle._sys.linux.raw import sockaddr_in
+from boucle.socle.linux.raw import sockaddr_in
 
 
 def test_connect_open_port() raises:

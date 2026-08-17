@@ -9,8 +9,13 @@ non-blocking manually if you need to thread the result into a
 CompletionLoop or ReadinessLoop.
 """
 
+from std.ffi import external_call
+from std.memory import UnsafePointer
+from std.sys.info import size_of
+
 from boucle.handle import RawHandle, OwnedHandle
-from boucle.net.addr import SocketAddrStor, SocketAddrV4, SocketAddrV6
+from boucle.net.addr import SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6
+from boucle.net.ip import IpAddrV6
 from boucle.net.options import (
     AddrFamily,
     SocketType,
@@ -18,19 +23,118 @@ from boucle.net.options import (
     Protocol,
     Backlog,
 )
-from boucle._sys.linux.net.socket import (
-    socket as _sys_socket,
-    bind as _sys_bind,
-    listen as _sys_listen,
+from boucle.socle.linux.net.syscalls import (
+    _socket,
+    _bind,
+    _listen,
+    _setsockopt,
+    _connect,
 )
-from boucle._sys.linux.net.syscalls import _setsockopt, _connect
-from boucle._sys.linux.raw import (
+from boucle.socle.linux.raw import (
+    sockaddr_in6,
+    socklen_t,
+    AF_INET,
+    AF_INET6,
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
 )
+
+
+# ===----------------------------------------------------------------------=== #
+# Private typed helpers — bridge portable option types to raw syscalls
+# ===----------------------------------------------------------------------=== #
+
+
+@always_inline
+def _sys_socket(
+    domain: AddrFamily,
+    type: SocketType,
+    flags: SocketFlags,
+    protocol: Protocol,
+) raises -> OwnedHandle:
+    """Create a socket from typed options, returning an OwnedHandle."""
+    var type_flags = type.id | Int32(flags.value)
+    return OwnedHandle(raw=_socket(Int32(domain.id), type_flags, Int32(protocol.id)))
+
+
+@always_inline
+def _sys_bind[Addr: SocketAddrStor](ref handle: OwnedHandle, ref addr: Addr) raises:
+    """Bind a socket to a SocketAddrStor address."""
+    var stor = addr.addr_stor()
+    _bind(handle.raw(), stor.addr_unsafe_ptr(), Int32(Addr.AddrStorType.ADDR_LEN))
+
+
+@always_inline
+def _sys_listen(ref handle: OwnedHandle, backlog: Backlog) raises:
+    """Listen on a socket with typed Backlog."""
+    _listen(handle.raw(), backlog.value)
+
+
+@always_inline
+def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) raises:
+    """Connect a socket to a SocketAddr (storage variant)."""
+    _connect(handle.raw(), addr.addr_unsafe_ptr(), Int32(Addr.ADDR_LEN))
+
+
+# ===----------------------------------------------------------------------=== #
+# _getpeername — convenience wrapper around getpeername(2)
+# ===----------------------------------------------------------------------=== #
+
+
+def _getpeername(fd: RawHandle) raises -> String:
+    """Return the peer IP address of a connected socket as a string.
+
+    Calls getpeername(2) on *fd* and parses the returned sockaddr into a
+    human-readable IP string (e.g. ``"192.168.1.1"`` for IPv4 or
+    ``"0:0:0:0:0:0:0:1"`` for IPv6).
+
+    Raises on syscall failure (e.g. ENOTCONN for an unconnected socket).
+    """
+    # sockaddr_in6 (28 bytes) is large enough for both IPv4 (16) and IPv6.
+    var stor = sockaddr_in6()
+    var addrlen = socklen_t(size_of[sockaddr_in6]())
+    # Pre-capture pointers — passing UnsafePointer(to=x) inline can
+    # clobber x's stack slot during external_call arg marshaling.
+    var stor_p = UnsafePointer(to=stor)
+    var len_p = UnsafePointer(to=addrlen)
+    var res = external_call["getpeername", Int32](fd, stor_p, len_p)
+    if res < 0:
+        raise String(Int(res))
+    var family = Int(stor.sin6_family)
+    if family == AF_INET:
+        # IPv4: address bytes sit at offset 4 in sockaddr_in
+        # (2-byte family + 2-byte port).
+        var bp = stor_p.bitcast[UInt8]() + 4
+        return String(
+            Int(bp[0]), ".", Int(bp[1]), ".",
+            Int(bp[2]), ".", Int(bp[3]),
+        )
+    elif family == AF_INET6:
+        # IPv6: 16 address bytes start at offset 8 in sockaddr_in6
+        # (2-byte family + 2-byte port + 4-byte flowinfo).
+        # Each pair of network-order bytes forms one host-order UInt16 segment.
+        var bp = stor_p.bitcast[UInt8]() + 8
+        var ip = IpAddrV6(
+            UInt16(Int(bp[0]) * 256 + Int(bp[1])),
+            UInt16(Int(bp[2]) * 256 + Int(bp[3])),
+            UInt16(Int(bp[4]) * 256 + Int(bp[5])),
+            UInt16(Int(bp[6]) * 256 + Int(bp[7])),
+            UInt16(Int(bp[8]) * 256 + Int(bp[9])),
+            UInt16(Int(bp[10]) * 256 + Int(bp[11])),
+            UInt16(Int(bp[12]) * 256 + Int(bp[13])),
+            UInt16(Int(bp[14]) * 256 + Int(bp[15])),
+        )
+        return String(ip)
+    else:
+        raise String("unsupported address family: ", Int(family))
+
+
+# ===----------------------------------------------------------------------=== #
+# Socket struct
+# ===----------------------------------------------------------------------=== #
 
 
 struct Socket(Movable):
@@ -112,9 +216,9 @@ struct Socket(Movable):
             SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
             Protocol.TCP,
         )
-        _setsockopt(handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
-        _setsockopt(handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
-        _setsockopt(handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
+        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
+        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
+        _setsockopt(handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
         _sys_listen(handle, Backlog(backlog))
@@ -133,9 +237,9 @@ struct Socket(Movable):
             SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
             Protocol.UDP,
         )
-        _setsockopt(handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
-        _setsockopt(handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
-        _setsockopt(handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
+        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
+        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
+        _setsockopt(handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
         return Self(handle^)
@@ -151,28 +255,28 @@ struct Socket(Movable):
     def set_reuse_addr(self, value: Bool = True) raises:
         """Sets `SO_REUSEADDR` on the socket."""
         _setsockopt(
-            self._handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR),
+            self._handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR),
             Int32(1) if value else Int32(0),
         )
 
     def set_reuse_port(self, value: Bool = True) raises:
         """Sets `SO_REUSEPORT` on the socket."""
         _setsockopt(
-            self._handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT),
+            self._handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT),
             Int32(1) if value else Int32(0),
         )
 
     def set_v6only(self, value: Bool) raises:
         """Sets `IPV6_V6ONLY` on an IPv6 socket. `False` enables dual-stack."""
         _setsockopt(
-            self._handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY),
+            self._handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY),
             Int32(1) if value else Int32(0),
         )
 
     def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises:
         """Blocking `connect(2)` to the given address."""
         var stor = addr.addr_stor()
-        _connect(self._handle, stor)
+        _sys_connect(self._handle, stor)
 
     @staticmethod
     def _connect_new[Addr: SocketAddrStor](
@@ -184,7 +288,7 @@ struct Socket(Movable):
         """Create a blocking socket, connect to `addr`, and return it."""
         var handle = _sys_socket(family, type, SocketFlags.CLOEXEC, protocol)
         var stor = addr.addr_stor()
-        _connect(handle, stor)
+        _sys_connect(handle, stor)
         return Self(handle^)
 
     @staticmethod

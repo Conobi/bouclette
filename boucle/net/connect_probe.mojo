@@ -15,9 +15,9 @@ picked up by the kernel on the next submit_and_wait.
 """
 
 from std.memory import UnsafePointer
-from boucle._sys.ptr import null_ptr
-from boucle._sys.linux.raw import __kernel_timespec
-from boucle._sys.linux.raw.ctypes import c_void
+from boucle.socle.ptr import null_ptr
+from boucle.socle.linux.raw import __kernel_timespec
+from boucle.socle.linux.raw.ctypes import c_void
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.probe import PortStatus, result_from_connect_cqe

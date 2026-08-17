@@ -5,8 +5,8 @@ from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.testing import assert_true
 
-from boucle._sys.linux.raw import msghdr
-from boucle._sys.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import msghdr
+from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
 from boucle.drivers.io_uring import IoUringDriver
 

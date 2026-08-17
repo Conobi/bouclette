@@ -5,8 +5,8 @@ from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
 from boucle.drivers.io_uring import IoUringDriver
-from boucle._sys.linux.raw import __kernel_timespec
-from boucle._sys.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import __kernel_timespec
+from boucle.socle.linux.raw.ctypes import c_void
 
 
 struct TimeoutTracker:

@@ -16,13 +16,13 @@ from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.testing import assert_true
 
-from boucle._sys.linux.raw import (
+from boucle.socle.linux.raw import (
     msghdr,
     IORING_CQE_F_BUFFER,
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
 )
-from boucle._sys.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
 from boucle.proactor.bufring import BufRing
 from boucle.drivers.io_uring import IoUringDriver

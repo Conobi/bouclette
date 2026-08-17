@@ -11,18 +11,18 @@ ownership and get it back on completion.
 See `boucle.readiness` for the alternative model.
 """
 
-from boucle._sys.linux.io_uring import IoUring
-from boucle._sys.linux.io_uring.op import Nop, Read, Write, Recv, Send, Accept, Connect, RecvMsg, SendMsg, Timeout, ProvideBuffers, AsyncCancel
-from boucle._sys.linux.io_uring.types import IoUringAcceptFlags, IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
-from boucle._sys.linux.raw.ctypes import c_void
-from boucle._sys.linux.raw import (
+from boucle.socle.linux.io_uring import IoUring
+from boucle.socle.linux.io_uring.op import Nop, Read, Write, Recv, Send, Accept, Connect, RecvMsg, SendMsg, Timeout, ProvideBuffers, AsyncCancel
+from boucle.socle.linux.io_uring.types import IoUringAcceptFlags, IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
+from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import (
     IORING_RECV_MULTISHOT,
     IORING_CQE_F_BUFFER,
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
 )
 from boucle.handle import RawHandle
-from boucle._sys.ptr import null_ptr
+from boucle.socle.ptr import null_ptr
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc

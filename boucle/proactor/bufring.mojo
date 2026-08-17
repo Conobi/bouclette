@@ -12,7 +12,7 @@ bid, resv }` -- 16 bytes each. The first slot's last 2 bytes (offset
 store-release; the kernel reads it with a load-acquire.
 """
 
-from boucle._sys.ptr import null_ptr
+from boucle.socle.ptr import null_ptr
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.sys.info import size_of

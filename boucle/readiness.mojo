@@ -11,14 +11,14 @@ stopping to poll.
 See `boucle.completion` for the alternative model.
 """
 
-from boucle._sys.linux.epoll.syscalls import (
+from boucle.socle.linux.epoll.syscalls import (
     epoll_create,
     epoll_ctl,
     epoll_wait,
     EpollOp,
 )
-from boucle._sys.linux.raw import epoll_event, EPOLLRDHUP
-from boucle._sys.linux.fd import close, close_unchecked
+from boucle.socle.linux.raw import epoll_event, EPOLLRDHUP
+from boucle.socle.linux.fd import close, close_unchecked
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token

@@ -6,7 +6,7 @@ and be resumed by the handler once the kernel signals done.
 
 from boucle.stackful import CoroHandle, CoroYielder
 from boucle.completion import CompletionLoop, CompletionHandler
-from boucle._sys.ptr import null_ptr
+from boucle.socle.ptr import null_ptr
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc
 from std.testing import assert_true, assert_equal

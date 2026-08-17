@@ -4,8 +4,8 @@ from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrStorV6
-from boucle._sys.ptr import null_ptr
-from boucle._sys.linux.raw import (
+from boucle.socle.ptr import null_ptr
+from boucle.socle.linux.raw import (
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,

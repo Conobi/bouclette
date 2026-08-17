@@ -7,7 +7,7 @@ from boucle.handle import RawHandle
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
-from boucle._sys.linux.raw import sockaddr_in
+from boucle.socle.linux.raw import sockaddr_in
 from std.ffi import external_call
 from std.memory import UnsafePointer
 from std.testing import assert_equal, assert_true

@@ -2,8 +2,8 @@ from boucle.readiness import ReadinessLoop, ReadinessHandler
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
-from boucle._sys.linux.fd import close
-from boucle._sys.linux.raw import syscall
+from boucle.socle.linux.fd import close
+from boucle.socle.linux.raw import syscall
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 

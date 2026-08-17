@@ -13,7 +13,7 @@ from boucle.readiness import ReadinessLoop, ReadinessHandler
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
-from boucle._sys.linux.raw import syscall, __NR_read, __NR_write, __NR_close
+from boucle.socle.linux.raw import syscall, __NR_read, __NR_write, __NR_close
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 

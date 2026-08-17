@@ -6,7 +6,7 @@ set is intentionally narrow — widen on demand rather than mirroring
 every typedef from the raw platform layer.
 """
 
-from boucle._sys.linux.raw.ctypes import (
+from boucle.socle.linux.raw.ctypes import (
     c_void,
     c_char,
     c_int,

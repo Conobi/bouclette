@@ -3,7 +3,7 @@ from std.memory import UnsafePointer
 from std.testing import assert_equal, assert_true
 
 from boucle.net.socket import Socket
-from boucle._sys.linux.raw import (
+from boucle.socle.linux.raw import (
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,

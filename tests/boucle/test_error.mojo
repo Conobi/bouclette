@@ -1,5 +1,5 @@
 from boucle.error import IOError
-from boucle._sys.linux.errno import Errno
+from boucle.socle.linux.errno import Errno
 from std.testing import assert_true, assert_false
 
 

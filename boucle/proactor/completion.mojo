@@ -6,7 +6,7 @@ the Completion pointer and invokes its callback with the result.
 """
 
 from std.memory import UnsafePointer
-from boucle._sys.ptr import null_ptr
+from boucle.socle.ptr import null_ptr
 
 
 # Function-pointer type for completion callbacks.

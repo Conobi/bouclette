@@ -1,6 +1,6 @@
 """Portable I/O error type."""
 
-from boucle._sys.linux.errno import Errno
+from boucle.socle.linux.errno import Errno
 
 
 struct IOError(Writable):

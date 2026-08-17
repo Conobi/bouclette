@@ -9,8 +9,8 @@ from std.memory import UnsafePointer
 
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
-from boucle._sys.linux.raw.ctypes import c_void
-from boucle._sys.linux.raw import msghdr
+from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import msghdr
 
 
 trait IoDriver(Movable):

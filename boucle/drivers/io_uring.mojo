@@ -9,12 +9,12 @@ from std.memory import UnsafePointer
 
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 
-from boucle._sys.linux.io_uring import IoUring
-from boucle._sys.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
-from boucle._sys.linux.io_uring.types import IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
-from boucle._sys.linux.raw import IORING_RECV_MULTISHOT
-from boucle._sys.linux.raw.ctypes import c_void
-from boucle._sys.linux.raw import msghdr
+from boucle.socle.linux.io_uring import IoUring
+from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
+from boucle.socle.linux.io_uring.types import IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
+from boucle.socle.linux.raw import IORING_RECV_MULTISHOT
+from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import msghdr
 from boucle.handle import RawHandle
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion

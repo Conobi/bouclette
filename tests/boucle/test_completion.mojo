@@ -1,6 +1,6 @@
 from boucle.completion import CompletionLoop, CompletionHandler
-from boucle._sys.linux.raw import IORING_CQE_F_MORE
-from boucle._sys.linux.raw.ctypes import c_void
+from boucle.socle.linux.raw import IORING_CQE_F_MORE
+from boucle.socle.linux.raw.ctypes import c_void
 from boucle.handle import RawHandle
 from std.ffi import external_call
 from std.memory import UnsafePointer
