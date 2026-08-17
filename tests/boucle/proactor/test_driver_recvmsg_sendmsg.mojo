@@ -202,10 +202,10 @@ def test_driver_recvmsg_sendmsg() raises:
     )
 
     # --- 8. Submit sendmsg then recvmsg ---
-    var send_msg_ptr = UnsafePointer[msghdr, MutAnyOrigin](
+    var send_msg_ptr = UnsafePointer[NoneType, MutAnyOrigin](
         unsafe_from_address=Int(send_mhdr)
     )
-    var recv_msg_ptr = UnsafePointer[msghdr, MutAnyOrigin](
+    var recv_msg_ptr = UnsafePointer[NoneType, MutAnyOrigin](
         unsafe_from_address=Int(recv_mhdr)
     )
 

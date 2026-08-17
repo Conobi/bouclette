@@ -1,6 +1,6 @@
 """EventLoop — single-threaded event loop driven by completions."""
 
-from .driver import IoDriver
+from boucle.drivers.driver import IoDriver
 
 
 struct EventLoop[D: IoDriver](Movable):

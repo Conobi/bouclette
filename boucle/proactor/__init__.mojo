@@ -8,5 +8,5 @@ on token values.
 
 from .bufring import BufRing
 from .completion import Completion, CompletionFn
-from .driver import IoDriver
+from boucle.drivers.driver import IoDriver
 from .loop import EventLoop

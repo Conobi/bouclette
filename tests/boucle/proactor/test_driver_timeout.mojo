@@ -6,7 +6,6 @@ from std.testing import assert_equal, assert_true
 from boucle.proactor.completion import Completion
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.socle.linux.raw import __kernel_timespec
-from boucle.socle.linux.raw.ctypes import c_void
 
 
 struct TimeoutTracker:
@@ -83,7 +82,7 @@ def test_driver_timeout() raises:
 
     # Submit a 5-second timeout (long enough it won't fire naturally).
     var ts = __kernel_timespec(tv_sec=Int64(5), tv_nsec=Int64(0))
-    var ts_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+    var ts_ptr = UnsafePointer[NoneType, StaticConstantOrigin](
         unsafe_from_address=Int(UnsafePointer(to=ts))
     )
     driver.submit_timeout(ts_ptr, timeout_cmp_ptr)

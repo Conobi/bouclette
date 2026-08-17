@@ -18,7 +18,7 @@ from boucle.socle.linux.raw import msghdr
 from boucle.handle import RawHandle
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
-from boucle.proactor.driver import IoDriver
+from boucle.drivers.driver import IoDriver
 
 
 struct IoUringDriver(IoDriver):
@@ -107,19 +107,22 @@ struct IoUringDriver(IoDriver):
 
     def submit_timeout(
         mut self,
-        ts: UnsafePointer[c_void, StaticConstantOrigin],
+        ts: UnsafePointer[NoneType, StaticConstantOrigin],
         c: UnsafePointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
         Args:
-            ts: Pointer to a 16-byte kernel_timespec.
+            ts: Opaque pointer to a 16-byte kernel_timespec.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        _ = Timeout(sq.__next__(), ts).user_data(UInt64(Int(c)))
+        var ts_cv = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(ts)
+        )
+        _ = Timeout(sq.__next__(), ts_cv).user_data(UInt64(Int(c)))
 
     def submit_cancel(
         mut self,
@@ -211,15 +214,15 @@ struct IoUringDriver(IoDriver):
     def submit_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        msg: UnsafePointer[NoneType, MutAnyOrigin],
         c: UnsafePointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
         Args:
             fd: The socket file descriptor.
-            msg: Pointer to msghdr (and all referenced buffers). Must
-                 remain valid until CQE fires.
+            msg: Opaque pointer to msghdr (and all referenced buffers).
+                 Must remain valid until CQE fires.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
@@ -233,7 +236,7 @@ struct IoUringDriver(IoDriver):
     def submit_sendmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        msg: UnsafePointer[NoneType, MutAnyOrigin],
         c: UnsafePointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a sendmsg on socket `fd`.
@@ -243,7 +246,7 @@ struct IoUringDriver(IoDriver):
 
         Args:
             fd: The socket file descriptor.
-            msg: Pointer to msghdr with destination and payload.
+            msg: Opaque pointer to msghdr with destination and payload.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
