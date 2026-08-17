@@ -1,62 +1,104 @@
-from boucle.completion import _LegacyCompletionLoop as CompletionLoop, _LegacyCompletionHandler as CompletionHandler
+"""Test submit_send and submit_recv on CompletionLoop via a socketpair.
+
+Replaces the legacy read/write pipe test with the portable
+socket send/recv API.
+"""
+
+from boucle.completion import CompletionLoop
+from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from std.ffi import external_call
+from std.memory import UnsafePointer
 from std.testing import assert_equal, assert_true
 
 
-struct IOTracker(CompletionHandler):
-    var results: InlineArray[Int32, 4]
-    var count: Int
+struct IOResult:
+    """Records a single I/O completion result."""
+
+    var result: Int32
+    var fired: Bool
 
     def __init__(out self):
-        self.results = InlineArray[Int32, 4](fill=0)
-        self.count = 0
+        """Construct an unfired result."""
+        self.result = Int32(0)
+        self.fired = False
 
-    def __init__(out self, *, deinit take: Self):
-        self.results = take.results
-        self.count = take.count
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
-        if self.count < 4:
-            self.results[self.count] = result
-        self.count += 1
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the I/O result."""
+        var self_ptr = UnsafePointer[IOResult, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
+        self_ptr[].result = result
+        self_ptr[].fired = True
 
 
 def test_completion_io() raises:
-    # Create pipe
-    var pipefd = InlineArray[Int32, 2](fill=0)
-    var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+    # Create a connected AF_UNIX socketpair (supports send/recv).
+    var sv = InlineArray[Int32, 2](fill=0)
+    var res = external_call["socketpair", Int32](
+        Int32(1),  # AF_UNIX
+        Int32(1),  # SOCK_STREAM
+        Int32(0),
+        UnsafePointer(to=sv).bitcast[Int32](),
     )
     assert_equal(Int(res), 0)
-    var read_fd: RawHandle = pipefd[0]
-    var write_fd: RawHandle = pipefd[1]
+    var fd_a: RawHandle = sv[0]
+    var fd_b: RawHandle = sv[1]
 
-    var loop = CompletionLoop(IOTracker(), sq_entries=8)
+    var loop = CompletionLoop(sq_entries=8)
 
-    # Write through CompletionLoop
+    # ── Send "hello" through CompletionLoop ──────────────────────────────
+
+    var send_slot = IOResult()
+    var send_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=send_slot))
+    )
+    var send_cmp = Completion(invoke=IOResult.on_complete, context=send_ctx)
+    var send_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=send_cmp))
+    )
+
     var msg = String("hello")
-    var msg_ptr = UnsafePointer[Int8, StaticConstantOrigin](
+    var msg_ptr = UnsafePointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
-    loop.submit_write(write_fd, msg_ptr, 5, token=1)
-    loop.run()
-    assert_equal(loop._handler.count, 1)
-    assert_equal(loop._handler.results[0], Int32(5))  # 5 bytes written
+    loop.submit_send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
+    loop.tick(wait=True)
 
-    # Read through CompletionLoop
+    assert_true(send_slot.fired, "send completion did not fire")
+    assert_equal(send_slot.result, Int32(5))  # 5 bytes sent
+
+    # ── Recv through CompletionLoop ──────────────────────────────────────
+
+    var recv_slot = IOResult()
+    var recv_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=recv_slot))
+    )
+    var recv_cmp = Completion(invoke=IOResult.on_complete, context=recv_ctx)
+    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    )
+
     var buf = List[UInt8](length=16, fill=0)
-    var buf_ptr = UnsafePointer[Int8, StaticConstantOrigin](
+    var buf_ptr = UnsafePointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
-    loop.submit_read(read_fd, buf_ptr, 16, token=2)
-    loop.run()
-    assert_equal(loop._handler.count, 2)
-    assert_equal(loop._handler.results[1], Int32(5))  # 5 bytes read
+    loop.submit_recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)
+    loop.tick(wait=True)
+
+    assert_true(recv_slot.fired, "recv completion did not fire")
+    assert_equal(recv_slot.result, Int32(5))  # 5 bytes received
 
     # Cleanup
-    _ = external_call["close", Int32](read_fd)
-    _ = external_call["close", Int32](write_fd)
+    _ = external_call["close", Int32](fd_a)
+    _ = external_call["close", Int32](fd_b)
+    _ = send_cmp
+    _ = recv_cmp
 
 
 def main() raises:

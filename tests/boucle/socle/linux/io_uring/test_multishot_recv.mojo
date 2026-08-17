@@ -1,4 +1,15 @@
-from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
+"""Test multishot recv with provided buffers via IoUringDriver.
+
+Exercises the SQE-based provide_buffers + multishot recv path:
+1. Create TCP listener + connected pair on [::1]
+2. Provide buffers via the driver
+3. Submit multishot recv with buffer group selection
+4. Send a payload from the client
+5. Verify buffer selection, byte count, and payload content
+"""
+
+from boucle.drivers.io_uring import IoUringDriver
+from boucle.proactor.completion import Completion
 from boucle.socle.ptr import null_ptr
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import (
@@ -17,43 +28,70 @@ comptime IPPROTO_IPV6 = 41
 comptime IPV6_V6ONLY = 26
 
 
-struct Tracker(CompletionHandler):
+struct Tracker:
+    """Records callback invocations for multishot recv completions."""
+
     var call_count: Int
-    var tokens: InlineArray[UInt64, 8]
-    var results: InlineArray[Int32, 8]
+    var tokens: InlineArray[Int32, 8]
     var flags_arr: InlineArray[UInt32, 8]
 
     def __init__(out self):
+        """Construct a zeroed tracker."""
         self.call_count = 0
-        self.tokens = InlineArray[UInt64, 8](fill=0)
-        self.results = InlineArray[Int32, 8](fill=0)
+        self.tokens = InlineArray[Int32, 8](fill=0)
         self.flags_arr = InlineArray[UInt32, 8](fill=0)
 
-    def __init__(out self, *, deinit take: Self):
-        self.call_count = take.call_count
-        self.tokens = take.tokens
-        self.results = take.results
-        self.flags_arr = take.flags_arr
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the completion result and flags."""
+        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
         print(
             "CQE[",
-            self.call_count,
-            "]: token=",
-            token,
-            " result=",
+            self_ptr[].call_count,
+            "]: result=",
             result,
             " flags=0x",
             hex(Int(flags)),
         )
-        if self.call_count < 8:
-            self.tokens[self.call_count] = token
-            self.results[self.call_count] = result
-            self.flags_arr[self.call_count] = flags
-        self.call_count += 1
+        if self_ptr[].call_count < 8:
+            self_ptr[].tokens[self_ptr[].call_count] = result
+            self_ptr[].flags_arr[self_ptr[].call_count] = flags
+        self_ptr[].call_count += 1
+
+
+struct SimpleResult:
+    """Records a single completion result."""
+
+    var result: Int32
+    var fired: Bool
+
+    def __init__(out self):
+        """Construct an unfired result."""
+        self.result = Int32(0)
+        self.fired = False
+
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the result."""
+        var self_ptr = UnsafePointer[SimpleResult, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
+        self_ptr[].result = result
+        self_ptr[].fired = True
 
 
 def test_multishot_recv() raises:
+    """Multishot recv with SQE-based provided buffers via IoUringDriver."""
     # --- 1. Create TCP listener on [::1]:0, ephemeral port ---
     var listen_fd = external_call["socket", Int32](
         Int32(AF_INET6), Int32(SOCK_STREAM), Int32(0)
@@ -132,30 +170,51 @@ def test_multishot_recv() raises:
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[i] = 0
 
-    # --- 5. CompletionLoop + provide_buffers + submit_recv_multishot ---
-    var loop = CompletionLoop(Tracker())
-    loop.provide_buffers(
-        pool,
+    # --- 5. IoUringDriver + provide_buffers + submit_recv_multishot ---
+    var driver = IoUringDriver()
+
+    # Wire provide_buffers completion.
+    var pb_slot = SimpleResult()
+    var pb_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=pb_slot))
+    )
+    var pb_cmp = Completion(invoke=SimpleResult.on_complete, context=pb_ctx)
+    var pb_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=pb_cmp))
+    )
+    driver.provide_buffers(
+        pool.as_unsafe_any_origin(),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
-        group_id=7,
-        base_buf_id=0,
-        token=100,
-    )
-    loop.submit_recv_multishot(
-        fd=server_fd, buf_group=7, token=200
+        group_id=UInt16(7),
+        base_buf_id=UInt16(0),
+        c=pb_cmp_ptr,
     )
 
-    # First poll: provide_buffers CQE (recv multishot is still armed)
-    loop.poll(wait_nr=1)
+    # Wire recv multishot completion.
+    var tracker = Tracker()
+    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    )
+    var recv_cmp = Completion(
+        invoke=Tracker.on_complete, context=tracker_ctx
+    )
+    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    )
+    driver.submit_recv_multishot(
+        fd=server_fd, buf_group=UInt16(7), c=recv_cmp_ptr
+    )
+
+    # First tick: provide_buffers CQE (recv multishot is still armed)
+    driver.tick(wait=True)
     assert_true(
-        loop._handler.call_count >= 1,
+        pb_slot.fired,
         "expected provide_buffers CQE",
     )
-    assert_equal(loop._handler.tokens[0], UInt64(100))
     assert_true(
-        loop._handler.results[0] >= 0,
-        "provide_buffers failed: " + String(loop._handler.results[0]),
+        pb_slot.result >= 0,
+        "provide_buffers failed: " + String(pb_slot.result),
     )
 
     # --- 6. Send a payload from the client side ---
@@ -173,19 +232,13 @@ def test_multishot_recv() raises:
     )
     assert_equal(Int(send_res), 5)
 
-    # --- 7. Poll for the recv CQE ---
-    loop.poll(wait_nr=1)
-    print("after recv poll: call_count=", loop._handler.call_count)
+    # --- 7. Tick for the recv CQE ---
+    while tracker.call_count < 1:
+        driver.tick(wait=True)
+    print("after recv tick: call_count=", tracker.call_count)
 
-    var recv_idx = -1
-    for i in range(loop._handler.call_count):
-        if loop._handler.tokens[i] == 200:
-            recv_idx = i
-            break
-    assert_true(recv_idx >= 0, "no CQE with token=200 found")
-
-    var recv_result = loop._handler.results[recv_idx]
-    var recv_flags = loop._handler.flags_arr[recv_idx]
+    var recv_result = tracker.tokens[0]
+    var recv_flags = tracker.flags_arr[0]
     print(
         "recv CQE: result=",
         recv_result,
@@ -233,6 +286,8 @@ def test_multishot_recv() raises:
     _ = external_call["close", Int32](server_fd)
     _ = external_call["close", Int32](listen_fd)
     pool.free()
+    _ = pb_cmp
+    _ = recv_cmp
     print("test_multishot_recv PASSED")
 
 

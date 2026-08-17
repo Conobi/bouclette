@@ -10,12 +10,13 @@ from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 
 from boucle.socle.linux.io_uring import IoUring
-from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel
-from boucle.socle.linux.io_uring.types import IoUringSqeFlags, IoUringBufReg, IoUringRegisterOp
+from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers
+from boucle.socle.linux.io_uring.types import IoUringSqeFlags, IoUringAcceptFlags, IoUringBufReg, IoUringRegisterOp
 from boucle.socle.linux.raw import IORING_RECV_MULTISHOT
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import msghdr
 from boucle.handle import RawHandle
+from boucle.socle.ptr import null_ptr
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
 from boucle.drivers.driver import IoDriver
@@ -256,6 +257,94 @@ struct IoUringDriver(IoDriver):
             unsafe_from_address=Int(msg)
         )
         _ = SendMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
+
+    def provide_buffers(
+        mut self,
+        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
+        buf_size: Int,
+        count: Int,
+        group_id: UInt16,
+        base_buf_id: UInt16,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Register count contiguous buffers with io_uring.
+
+        Buffers are contiguous: buf_base[i * buf_size .. (i+1) * buf_size].
+        Each buffer gets ID base_buf_id + i.
+
+        Args:
+            buf_base: Base pointer for the contiguous buffer array.
+            buf_size: Size of each individual buffer in bytes.
+            count: Number of buffers to register.
+            group_id: Buffer group ID to register under.
+            base_buf_id: Starting buffer ID.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+            unsafe_from_address=Int(buf_base)
+        )
+        _ = ProvideBuffers(
+            sq.__next__(),
+            buf_ptr,
+            UInt32(buf_size),
+            UInt32(count),
+            group_id,
+            base_buf_id,
+        ).user_data(UInt64(Int(c)))
+
+    def submit_recv_multishot(
+        mut self,
+        fd: RawHandle,
+        buf_group: UInt16,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a multishot recv with provided buffer selection (TCP).
+
+        The kernel selects a buffer from `buf_group` per arrival and
+        produces one CQE per chunk. The payload begins at offset 0 of
+        the chosen buffer (no io_uring_recvmsg_out header). The buffer
+        ID is in CQE flags bits 16-31 when IORING_CQE_F_BUFFER is set.
+        Re-arm when CQE flags lack IORING_CQE_F_MORE.
+
+        Args:
+            fd: The socket file descriptor.
+            buf_group: The provided buffer group ID to select from.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        var null_buf = null_ptr[c_void, StaticConstantOrigin]()
+        _ = Recv(sq.__next__(), fd, null_buf, UInt(0))
+            .ioprio(UInt16(IORING_RECV_MULTISHOT))
+            .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
+            .buf_group(buf_group)
+            .user_data(UInt64(Int(c)))
+
+    def submit_accept_multishot(
+        mut self,
+        fd: RawHandle,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a multishot accept on listening socket `fd`.
+
+        Produces one CQE per accepted connection. The CQE result is the
+        accepted file descriptor (>= 0) on success. Re-arm when CQE
+        flags lack IORING_CQE_F_MORE. Requires kernel >= 5.19.
+
+        Args:
+            fd: The listening socket file descriptor.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            raise "submission queue full"
+        var sq = self._ring.unsynced_sq()
+        _ = Accept(sq.__next__(), fd)
+            .ioprio(IoUringAcceptFlags.MULTISHOT.value)
+            .user_data(UInt64(Int(c)))
 
     def submit_multishot_recvmsg(
         mut self,

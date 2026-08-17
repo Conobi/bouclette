@@ -1,36 +1,41 @@
-from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
+"""Test provide_buffers via IoUringDriver.
+
+Verifies that the SQE-based buffer provisioning completes
+successfully (result >= 0).
+"""
+
+from boucle.drivers.io_uring import IoUringDriver
+from boucle.proactor.completion import Completion
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.testing import assert_equal, assert_true
 
 
-struct Tracker(CompletionHandler):
+struct Tracker:
+    """Records a single provide_buffers completion."""
+
     var called: Bool
-    var token: UInt64
     var result: Int32
-    var flags: UInt32
 
     def __init__(out self):
+        """Construct an unfired tracker."""
         self.called = False
-        self.token = 0
-        self.result = 0
-        self.flags = 0
+        self.result = Int32(0)
 
-    def __init__(out self, *, deinit take: Self):
-        self.called = take.called
-        self.token = take.token
-        self.result = take.result
-        self.flags = take.flags
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
-        self.called = True
-        self.token = token
-        self.result = result
-        self.flags = flags
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the completion result."""
+        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
+        self_ptr[].called = True
+        self_ptr[].result = result
         print(
-            "on_complete: token=",
-            token,
-            " result=",
+            "on_complete: result=",
             result,
             " flags=",
             flags,
@@ -38,6 +43,7 @@ struct Tracker(CompletionHandler):
 
 
 def test_provide_buffers() raises:
+    """Register 4 x 256-byte buffers via IoUringDriver and verify success."""
     # 4 buffers x 256 bytes = 1024 bytes total
     comptime BUF_SIZE = 256
     comptime BUF_COUNT = 4
@@ -47,25 +53,36 @@ def test_provide_buffers() raises:
 
     print("pool address=", Int(pool))
 
-    var loop = CompletionLoop(Tracker())
-    loop.provide_buffers(
-        pool,
+    var driver = IoUringDriver()
+
+    # Wire completion callback.
+    var tracker = Tracker()
+    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    )
+    var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
+    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    )
+
+    driver.provide_buffers(
+        pool.as_unsafe_any_origin(),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
-        group_id=1,
-        base_buf_id=0,
-        token=42,
+        group_id=UInt16(1),
+        base_buf_id=UInt16(0),
+        c=cmp_ptr,
     )
-    loop.poll(wait_nr=1)
+    driver.tick(wait=True)
 
-    assert_true(loop._handler.called, "on_complete was not called")
-    assert_equal(loop._handler.token, UInt64(42))
+    assert_true(tracker.called, "on_complete was not called")
     assert_true(
-        loop._handler.result >= 0,
-        "provide_buffers failed with result=" + String(loop._handler.result),
+        tracker.result >= 0,
+        "provide_buffers failed with result=" + String(tracker.result),
     )
 
     pool.free()
+    _ = cmp
     print("test_provide_buffers PASSED")
 
 

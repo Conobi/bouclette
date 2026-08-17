@@ -1,4 +1,10 @@
-from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
+"""Test register_buf_ring + multishot recv via IoUringDriver.
+
+Exercises the BufRing path: register, recv, recycle, recv again.
+"""
+
+from boucle.drivers.io_uring import IoUringDriver
+from boucle.proactor.completion import Completion
 from boucle.proactor.bufring import BufRing
 from boucle.socle.ptr import null_ptr
 from boucle.socle.linux.raw.ctypes import c_void
@@ -18,43 +24,45 @@ comptime IPPROTO_IPV6 = 41
 comptime IPV6_V6ONLY = 26
 
 
-struct Tracker(CompletionHandler):
+struct Tracker:
+    """Records callback invocations for multishot recv completions."""
+
     var call_count: Int
-    var tokens: InlineArray[UInt64, 8]
     var results: InlineArray[Int32, 8]
     var flags_arr: InlineArray[UInt32, 8]
 
     def __init__(out self):
+        """Construct a zeroed tracker."""
         self.call_count = 0
-        self.tokens = InlineArray[UInt64, 8](fill=0)
         self.results = InlineArray[Int32, 8](fill=0)
         self.flags_arr = InlineArray[UInt32, 8](fill=0)
 
-    def __init__(out self, *, deinit take: Self):
-        self.call_count = take.call_count
-        self.tokens = take.tokens
-        self.results = take.results
-        self.flags_arr = take.flags_arr
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the completion result and flags."""
+        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
         print(
             "CQE[",
-            self.call_count,
-            "]: token=",
-            token,
-            " result=",
+            self_ptr[].call_count,
+            "]: result=",
             result,
             " flags=0x",
             hex(Int(flags)),
         )
-        if self.call_count < 8:
-            self.tokens[self.call_count] = token
-            self.results[self.call_count] = result
-            self.flags_arr[self.call_count] = flags
-        self.call_count += 1
+        if self_ptr[].call_count < 8:
+            self_ptr[].results[self_ptr[].call_count] = result
+            self_ptr[].flags_arr[self_ptr[].call_count] = flags
+        self_ptr[].call_count += 1
 
 
 def test_register_buf_ring() raises:
+    """Register a BufRing, recv with it, recycle, recv again."""
     # --- 1. TCP listener on [::1]:0 ---
     var listen_fd = external_call["socket", Int32](
         Int32(AF_INET6), Int32(SOCK_STREAM), Int32(0)
@@ -117,16 +125,16 @@ def test_register_buf_ring() raises:
     )
     assert_true(Int(server_fd) >= 0, "accept() failed")
 
-    # --- 4. Allocate buffer pool: 4 × 1024 ---
+    # --- 4. Allocate buffer pool: 4 x 1024 ---
     comptime BUF_SIZE = 1024
     comptime BUF_COUNT = 4
     var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT).as_unsafe_any_origin()
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[i] = UInt8(0)
 
-    # --- 5. CompletionLoop + register_buf_ring + submit_recv_multishot ---
-    var loop = CompletionLoop(Tracker())
-    var bring = loop.register_buf_ring(
+    # --- 5. IoUringDriver + register_buf_ring + submit_recv_multishot ---
+    var driver = IoUringDriver()
+    var bring = driver.register_buf_ring(
         pool,
         buf_size=UInt32(BUF_SIZE),
         count=BUF_COUNT,
@@ -135,8 +143,19 @@ def test_register_buf_ring() raises:
     assert_equal(Int(bring.ring_entries), BUF_COUNT)
     assert_equal(Int(bring.bgid), 11)
 
-    loop.submit_recv_multishot(
-        fd=server_fd, buf_group=UInt16(11), token=200
+    # Wire recv multishot completion.
+    var tracker = Tracker()
+    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    )
+    var recv_cmp = Completion(
+        invoke=Tracker.on_complete, context=tracker_ctx
+    )
+    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    )
+    driver.submit_recv_multishot(
+        fd=server_fd, buf_group=UInt16(11), c=recv_cmp_ptr
     )
 
     # --- 6. Send "hello" from client ---
@@ -154,17 +173,12 @@ def test_register_buf_ring() raises:
     )
     assert_equal(Int(sent), 5)
 
-    # --- 7. Poll for the recv CQE ---
-    loop.poll(wait_nr=1)
-    var recv_idx = -1
-    for i in range(loop._handler.call_count):
-        if loop._handler.tokens[i] == 200:
-            recv_idx = i
-            break
-    assert_true(recv_idx >= 0, "no recv CQE")
+    # --- 7. Tick for the recv CQE ---
+    while tracker.call_count < 1:
+        driver.tick(wait=True)
 
-    var recv_result = loop._handler.results[recv_idx]
-    var recv_flags = loop._handler.flags_arr[recv_idx]
+    var recv_result = tracker.results[0]
+    var recv_flags = tracker.flags_arr[0]
     print(
         "recv: result=",
         recv_result,
@@ -206,15 +220,11 @@ def test_register_buf_ring() raises:
     )
     assert_equal(Int(sent2), 3)
 
-    loop.poll(wait_nr=1)
-    var recv2_idx = -1
-    for i in range(recv_idx + 1, loop._handler.call_count):
-        if loop._handler.tokens[i] == 200:
-            recv2_idx = i
-            break
-    assert_true(recv2_idx >= 0, "no second recv CQE")
-    var recv2_flags = loop._handler.flags_arr[recv2_idx]
-    var recv2_result = loop._handler.results[recv2_idx]
+    while tracker.call_count < 2:
+        driver.tick(wait=True)
+
+    var recv2_flags = tracker.flags_arr[1]
+    var recv2_result = tracker.results[1]
     print(
         "second recv: result=",
         recv2_result,
@@ -236,11 +246,13 @@ def test_register_buf_ring() raises:
     bring.add_buffer(UInt16(buf_id2))
 
     # --- 10. Cleanup ---
-    loop.unregister_buf_ring(UInt16(11))
+    driver.unregister_buf_ring(UInt16(11))
     _ = external_call["close", Int32](client_fd)
     _ = external_call["close", Int32](server_fd)
     _ = external_call["close", Int32](listen_fd)
     pool.free()
+    _ = recv_cmp
+    _ = bring
     print("test_register_buf_ring PASSED")
 
 

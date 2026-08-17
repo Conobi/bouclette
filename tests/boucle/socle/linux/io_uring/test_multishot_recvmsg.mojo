@@ -1,6 +1,18 @@
-from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
+"""Test multishot recvmsg with provided buffers via IoUringDriver.
+
+Exercises the SQE-based provide_buffers + multishot recvmsg path on UDP:
+1. Create UDP socket, bind to [::1]:0
+2. Provide buffers via the driver
+3. Submit multishot recvmsg with buffer group selection
+4. Send a datagram to self
+5. Verify buffer selection, io_uring_recvmsg_out header, and payload
+"""
+
+from boucle.drivers.io_uring import IoUringDriver
+from boucle.proactor.completion import Completion
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import (
+    msghdr,
     IORING_CQE_F_BUFFER,
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
@@ -16,43 +28,70 @@ comptime IPPROTO_IPV6 = 41
 comptime IPV6_V6ONLY = 26
 
 
-struct Tracker(CompletionHandler):
+struct Tracker:
+    """Records callback invocations for multishot recvmsg completions."""
+
     var call_count: Int
-    var tokens: InlineArray[UInt64, 8]
     var results: InlineArray[Int32, 8]
     var flags_arr: InlineArray[UInt32, 8]
 
     def __init__(out self):
+        """Construct a zeroed tracker."""
         self.call_count = 0
-        self.tokens = InlineArray[UInt64, 8](fill=0)
         self.results = InlineArray[Int32, 8](fill=0)
         self.flags_arr = InlineArray[UInt32, 8](fill=0)
 
-    def __init__(out self, *, deinit take: Self):
-        self.call_count = take.call_count
-        self.tokens = take.tokens
-        self.results = take.results
-        self.flags_arr = take.flags_arr
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the completion result and flags."""
+        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
         print(
             "CQE[",
-            self.call_count,
-            "]: token=",
-            token,
-            " result=",
+            self_ptr[].call_count,
+            "]: result=",
             result,
             " flags=0x",
             hex(Int(flags)),
         )
-        if self.call_count < 8:
-            self.tokens[self.call_count] = token
-            self.results[self.call_count] = result
-            self.flags_arr[self.call_count] = flags
-        self.call_count += 1
+        if self_ptr[].call_count < 8:
+            self_ptr[].results[self_ptr[].call_count] = result
+            self_ptr[].flags_arr[self_ptr[].call_count] = flags
+        self_ptr[].call_count += 1
+
+
+struct SimpleResult:
+    """Records a single completion result."""
+
+    var result: Int32
+    var fired: Bool
+
+    def __init__(out self):
+        """Construct an unfired result."""
+        self.result = Int32(0)
+        self.fired = False
+
+    @staticmethod
+    def on_complete(
+        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        result: Int32,
+        flags: UInt32,
+    ):
+        """Callback that records the result."""
+        var self_ptr = UnsafePointer[SimpleResult, MutAnyOrigin](
+            unsafe_from_address=Int(ctx)
+        )
+        self_ptr[].result = result
+        self_ptr[].fired = True
 
 
 def test_multishot_recvmsg() raises:
+    """Multishot recvmsg with SQE-based provided buffers via IoUringDriver."""
     # --- 1. Create UDP socket, bind to [::1]:0 ---
     var fd = external_call["socket", Int32](
         Int32(AF_INET6), Int32(SOCK_DGRAM), Int32(0)
@@ -71,12 +110,9 @@ def test_multishot_recvmsg() raises:
     )
 
     # Build sockaddr_in6: 28 bytes
-    # Layout: sin6_family(2) sin6_port(2) sin6_flowinfo(4) sin6_addr(16) sin6_scope_id(4)
     var addr = InlineArray[UInt8, 28](fill=0)
-    addr[0] = AF_INET6  # sin6_family low byte
-    addr[1] = 0  # sin6_family high byte
-    # sin6_port = 0 (ephemeral)
-    # sin6_addr = ::1 -> byte 15 of addr field = 1, addr field starts at offset 8
+    addr[0] = AF_INET6
+    addr[1] = 0
     addr[8 + 15] = 1  # ::1
 
     var addr_ptr = UnsafePointer(to=addr).bitcast[c_void]()
@@ -108,67 +144,68 @@ def test_multishot_recvmsg() raises:
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[i] = 0
 
-    # --- 3. Create CompletionLoop ---
-    var loop = CompletionLoop(Tracker())
+    # --- 3. Create IoUringDriver ---
+    var driver = IoUringDriver()
 
     # --- 4. Provide buffers ---
-    loop.provide_buffers(
-        pool,
+    var pb_slot = SimpleResult()
+    var pb_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=pb_slot))
+    )
+    var pb_cmp = Completion(invoke=SimpleResult.on_complete, context=pb_ctx)
+    var pb_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=pb_cmp))
+    )
+    driver.provide_buffers(
+        pool.as_unsafe_any_origin(),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
-        group_id=0,
-        base_buf_id=0,
-        token=100,
+        group_id=UInt16(0),
+        base_buf_id=UInt16(0),
+        c=pb_cmp_ptr,
     )
 
     # --- 5. Build msghdr template ---
     # For multishot recvmsg with provided buffers, the kernel uses a
-    # template msghdr. We need msg_namelen set so the kernel writes the
-    # peer address into the provided buffer's header. msg_name itself
-    # is ignored (kernel uses the provided buffer). msg_iov/msg_iovlen
-    # are also ignored but some kernels require msg_iovlen >= 1.
-    #
-    # struct msghdr layout on x86_64 (56 bytes):
-    #   offset  0: msg_name     (8 bytes, pointer)
-    #   offset  8: msg_namelen  (4 bytes, u32)
-    #   offset 12: pad          (4 bytes)
-    #   offset 16: msg_iov      (8 bytes, pointer)
-    #   offset 24: msg_iovlen   (8 bytes, size_t)
-    #   offset 32: msg_control  (8 bytes, pointer)
-    #   offset 40: msg_controllen (8 bytes, size_t)
-    #   offset 48: msg_flags    (4 bytes, int)
-    #   offset 52: pad          (4 bytes)
+    # template msghdr. msg_namelen = 28 for IPv6 peer address.
     var msghdr_mem = _heap_alloc[UInt8](56).as_unsafe_any_origin()
     for i in range(56):
         msghdr_mem[i] = 0
     # msg_namelen = 28 at offset 8
     msghdr_mem[8] = 28
 
-    var msghdr_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+    var msghdr_ptr = UnsafePointer[msghdr, MutAnyOrigin](
         unsafe_from_address=Int(msghdr_mem)
     )
 
     # --- 6. Submit multishot recvmsg ---
-    loop.submit_recvmsg_multishot(
-        fd=fd, msghdr_ptr=msghdr_ptr, buf_group=0, token=200
+    var tracker = Tracker()
+    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    )
+    var recv_cmp = Completion(
+        invoke=Tracker.on_complete, context=tracker_ctx
+    )
+    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    )
+    driver.submit_multishot_recvmsg(
+        fd=fd, msg=msghdr_ptr, buf_group=UInt16(0), c=recv_cmp_ptr
     )
 
-    # --- 7. Poll to submit both SQEs and get provide_buffers CQE ---
-    loop.poll(wait_nr=1)
-    print("after first poll: call_count=", loop._handler.call_count)
-    assert_true(loop._handler.call_count >= 1, "expected at least 1 CQE")
-    # provide_buffers should succeed
-    assert_equal(loop._handler.tokens[0], UInt64(100))
+    # --- 7. Tick to submit both SQEs and get provide_buffers CQE ---
+    driver.tick(wait=True)
+    print("after first tick: pb_fired=", pb_slot.fired)
+    assert_true(pb_slot.fired, "expected provide_buffers CQE")
     assert_true(
-        loop._handler.results[0] >= 0,
-        "provide_buffers failed: " + String(loop._handler.results[0]),
+        pb_slot.result >= 0,
+        "provide_buffers failed: " + String(pb_slot.result),
     )
 
     # --- 8. Send a datagram to self ---
-    # Build dest addr with the ephemeral port
     var dest_addr = InlineArray[UInt8, 28](fill=0)
     dest_addr[0] = AF_INET6
-    dest_addr[2] = port_hi  # port in network byte order
+    dest_addr[2] = port_hi
     dest_addr[3] = port_lo
     dest_addr[8 + 15] = 1  # ::1
 
@@ -190,20 +227,13 @@ def test_multishot_recvmsg() raises:
     print("sendto result=", send_res)
     assert_true(Int(send_res) == 5, "sendto failed: " + String(send_res))
 
-    # --- 9. Poll for the recvmsg CQE ---
-    loop.poll(wait_nr=1)
-    print("after second poll: call_count=", loop._handler.call_count)
+    # --- 9. Tick for the recvmsg CQE ---
+    while tracker.call_count < 1:
+        driver.tick(wait=True)
+    print("after second tick: call_count=", tracker.call_count)
 
-    # Find the recvmsg CQE (token=200)
-    var recv_idx = -1
-    for i in range(loop._handler.call_count):
-        if loop._handler.tokens[i] == 200:
-            recv_idx = i
-            break
-    assert_true(recv_idx >= 0, "no CQE with token=200 found")
-
-    var recv_result = loop._handler.results[recv_idx]
-    var recv_flags = loop._handler.flags_arr[recv_idx]
+    var recv_result = tracker.results[0]
+    var recv_flags = tracker.flags_arr[0]
     print(
         "recvmsg CQE: result=",
         recv_result,
@@ -228,12 +258,6 @@ def test_multishot_recvmsg() raises:
     print("buf_id=", buf_id)
 
     # Read io_uring_recvmsg_out header from pool + buf_id * BUF_SIZE
-    # struct io_uring_recvmsg_out {
-    #   __u32 namelen;      // offset 0
-    #   __u32 controllen;   // offset 4
-    #   __u32 payloadlen;   // offset 8
-    #   __u32 flags;        // offset 12
-    # };
     var buf_start = pool + buf_id * BUF_SIZE
     var namelen = (
         Int(buf_start[0])
@@ -288,6 +312,9 @@ def test_multishot_recvmsg() raises:
     # Cleanup
     _ = external_call["close", Int32](fd)
     pool.free()
+    msghdr_mem.free()
+    _ = pb_cmp
+    _ = recv_cmp
     print("test_multishot_recvmsg PASSED")
 
 
