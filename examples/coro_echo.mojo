@@ -1,11 +1,11 @@
 """Stackful coroutine example: yield/resume between caller and coroutine.
 
-Demonstrates the CoroHandle / CoroYielder API. The coroutine runs on its
+Demonstrates the Coroutine / Yielder API. The coroutine runs on its
 own stack and suspends via `y.yield_to_caller()`; the caller drives it
 forward with `coro.resume()`. Real yield/resume semantics, no state
 machine transform.
 
-CoroHandle is a linear type (@explicit_destroy) — the caller must call
+Coroutine is a linear type (@explicit_destroy) -- the caller must call
 `destroy()` on every path, including error paths. The try/except below
 ensures the handle is always destroyed before any exception propagates.
 
@@ -13,7 +13,7 @@ Run:
     uv run -- mojo run -I . -D ASSERT=all examples/coro_echo.mojo
 """
 
-from boucle.stackful import CoroHandle, CoroYielder
+from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
 from std.testing import assert_true
 
 
