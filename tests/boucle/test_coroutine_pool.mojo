@@ -1,10 +1,10 @@
 """Tests for CoroutinePool — verifies handle reuse and reset."""
 
-from boucle.stackful import (
-    CoroHandle,
+from boucle.coroutine import (
+    Coroutine as CoroHandle,
     CoroutinePool,
-    CoroYielder,
-    CoroBody,
+    Yielder as CoroYielder,
+    CoroutineBody as CoroBody,
 )
 from std.memory import UnsafePointer
 from std.testing import assert_equal, assert_true

@@ -6,4 +6,7 @@ from .completion import CompletionLoop, CompletionHandler, BatchCompletionLoop, 
 from .readiness import ReadinessLoop, ReadinessHandler
 from .interest import Interest
 from .readiness_state import Readiness
-from .stackful import CoroHandle, CoroYielder
+from .coroutine import Coroutine, Yielder, CoroutinePool, CoroutineBody
+# Backward compatibility aliases
+from .coroutine import Coroutine as CoroHandle
+from .coroutine import Yielder as CoroYielder
