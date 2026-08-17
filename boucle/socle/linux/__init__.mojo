@@ -1,7 +1,7 @@
 """Linux backend facade — high-level Linux surface.
 
 Re-exports the high-level Linux symbols so consumers under `boucle.*`
-(and the `_sys/linux/{io_uring,epoll,net}/` subpackages) spell
+(and the `socle/linux/{io_uring,epoll,net}/` subpackages) spell
 `from boucle.socle.linux import close, mmap, Errno` instead of reaching
 into `boucle.socle.linux.fd` + `boucle.socle.linux.mm` +
 `boucle.socle.linux.errno` separately.

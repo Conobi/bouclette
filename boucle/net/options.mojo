@@ -4,8 +4,7 @@ Wraps platform-specific constants behind typed structs so user code
 does not import raw kernel values directly.
 
 Constants are defined as literals rather than importing from
-io._sys.linux.raw to avoid a Mojo 0.26.2 mojopkg deserialization
-crash when importing across multiple internal subpackages.
+boucle.socle.linux.raw to keep this module free of platform imports.
 """
 
 
