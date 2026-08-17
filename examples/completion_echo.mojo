@@ -15,7 +15,7 @@ Run:
     uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 """
 
-from boucle.completion import CompletionLoop, CompletionHandler
+from boucle.completion import _LegacyCompletionLoop as CompletionLoop, _LegacyCompletionHandler as CompletionHandler
 from boucle.handle import RawHandle
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4

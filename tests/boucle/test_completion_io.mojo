@@ -1,4 +1,4 @@
-from boucle.completion import CompletionLoop, CompletionHandler
+from boucle.completion import _LegacyCompletionLoop as CompletionLoop, _LegacyCompletionHandler as CompletionHandler
 from boucle.handle import RawHandle
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true

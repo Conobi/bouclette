@@ -1,4 +1,4 @@
-from boucle import CompletionLoop, CompletionHandler
+from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
 from boucle.proactor.bufring import BufRing
 from boucle.socle.ptr import null_ptr
 from boucle.socle.linux.raw.ctypes import c_void

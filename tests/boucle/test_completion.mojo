@@ -1,4 +1,4 @@
-from boucle.completion import CompletionLoop, CompletionHandler
+from boucle.completion import _LegacyCompletionLoop as CompletionLoop, _LegacyCompletionHandler as CompletionHandler
 from boucle.socle.linux.raw import IORING_CQE_F_MORE
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.handle import RawHandle

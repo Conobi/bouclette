@@ -24,18 +24,225 @@ from boucle.socle.linux.raw import (
 from boucle.handle import RawHandle
 from boucle.socle.ptr import null_ptr
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
+from boucle.proactor.completion import Completion, CompletionFn
+from boucle.proactor.loop import EventLoop
+from boucle.drivers import _CompletionDriver
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.sys.info import size_of
 from std.sys.intrinsics import _RegisterPackType
 
 
-trait CompletionHandler(Movable, ImplicitlyDestructible):
+# ── Opaque CompletionLoop ─────────────────────────────────────────────────────
+
+
+struct CompletionLoop(Movable):
+    """Opaque completion event loop. Backend resolved at comptime.
+
+    Wraps an EventLoop with the platform-appropriate completion driver
+    (io_uring on Linux, IOCP on Windows, kqueue emulation on macOS).
+    Consumers interact through portable IoDriver methods — the concrete
+    backend is never visible.
+    """
+
+    var _inner: EventLoop[_CompletionDriver]
+
+    def __init__(out self, sq_entries: UInt32 = 64) raises:
+        """Construct a CompletionLoop with the given SQ capacity.
+
+        Args:
+            sq_entries: Number of submission queue entries (default 64).
+        """
+        self._inner = EventLoop[_CompletionDriver](
+            _CompletionDriver(sq_entries=sq_entries)
+        )
+
+    def __init__(out self, *, deinit take: Self):
+        """Move constructor."""
+        self._inner = take._inner^
+
+    def __del__(deinit self):
+        """Destroy the event loop and its underlying driver."""
+        self._inner^.__del__()
+
+    # ── IoDriver delegation ───────────────────────────────────────────────
+
+    def tick(mut self, wait: Bool) raises:
+        """Submit pending SQEs and dispatch completed operations.
+
+        Args:
+            wait: If True, block until at least one completion arrives.
+                  If False, return immediately after dispatching any
+                  already-available completions.
+        """
+        self._inner.driver.tick(wait)
+
+    def submit_nop(
+        mut self, c: UnsafePointer[Completion, MutAnyOrigin]
+    ) raises:
+        """Queue a no-op operation.
+
+        Args:
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_nop(c)
+
+    def submit_connect(
+        mut self,
+        fd: RawHandle,
+        addr: UnsafePointer[UInt8, StaticConstantOrigin],
+        addr_len: UInt64,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a connect on socket `fd` to the given address.
+
+        Args:
+            fd: The socket file descriptor.
+            addr: Pointer to the sockaddr structure.
+            addr_len: Size in bytes of the sockaddr structure.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_connect(fd, addr, addr_len, c)
+
+    def submit_timeout(
+        mut self,
+        ts: UnsafePointer[NoneType, StaticConstantOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a timeout (kernel timer).
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_timeout(ts, c)
+
+    def submit_cancel(
+        mut self,
+        target: UnsafePointer[Completion, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Cancel a previously submitted operation.
+
+        Args:
+            target: Pointer to the Completion of the op to cancel.
+            c: Pointer to the Completion token for the cancel itself.
+        """
+        self._inner.driver.submit_cancel(target, c)
+
+    def submit_accept(
+        mut self,
+        fd: RawHandle,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue an accept on listening socket `fd`.
+
+        Args:
+            fd: The listening socket file descriptor.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_accept(fd, c)
+
+    def submit_recv(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recv from socket `fd` into `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Buffer to receive into.
+            len: Maximum bytes to receive.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_recv(fd, buf, len, c)
+
+    def submit_send(
+        mut self,
+        fd: RawHandle,
+        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        len: UInt32,
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a send on socket `fd` from `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Data to send.
+            len: Number of bytes to send.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_send(fd, buf, len, c)
+
+    def submit_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[NoneType, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a recvmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Opaque pointer to a platform-specific message header.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_recvmsg(fd, msg, c)
+
+    def submit_sendmsg(
+        mut self,
+        fd: RawHandle,
+        msg: UnsafePointer[NoneType, MutAnyOrigin],
+        c: UnsafePointer[Completion, MutAnyOrigin],
+    ) raises:
+        """Queue a sendmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Opaque pointer to a platform-specific message header.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.submit_sendmsg(fd, msg, c)
+
+    def sq_space(mut self) -> Int:
+        """Return the number of available submission queue slots.
+
+        Returns:
+            The number of SQ entries currently available for submission.
+        """
+        return self._inner.driver.sq_space()
+
+    # ── EventLoop convenience methods ─────────────────────────────────────
+
+    def run_once(mut self) raises:
+        """Block until at least one completion fires, then dispatch all ready."""
+        self._inner.run_once()
+
+    def try_poll(mut self) raises:
+        """Non-blocking: dispatch any ready completions, return immediately."""
+        self._inner.try_poll()
+
+    def run(mut self) raises:
+        """Run until stop() is called."""
+        self._inner.run()
+
+    def stop(mut self):
+        """Signal the loop to exit after the current tick."""
+        self._inner.stop()
+
+
+# ── Legacy types (deprecated — remove in Phase 5) ────────────────────────────
+
+
+trait _LegacyCompletionHandler(Movable, ImplicitlyDestructible):
     def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
         ...
 
 
-struct CompletionLoop[Handler: CompletionHandler]:
+struct _LegacyCompletionLoop[Handler: _LegacyCompletionHandler]:
     """Event loop driven by kernel completions (io_uring on Linux).
 
     Submit I/O operations and poll for completions. Each completed
@@ -396,7 +603,7 @@ struct CompletionLoop[Handler: CompletionHandler]:
             if (flags & IORING_CQE_F_MORE) == 0:
                 self._pending -= 1
         cq^.__del__()
-        comptime if conforms_to(Self.Handler, BatchCompletionHandler):
+        comptime if conforms_to(Self.Handler, _LegacyBatchCompletionHandler):
             self._handler.on_flush()
 
     def run(mut self) raises:
@@ -405,8 +612,8 @@ struct CompletionLoop[Handler: CompletionHandler]:
             self.poll(wait_nr=1)
 
 
-trait BatchCompletionHandler(CompletionHandler):
-    """Extension of CompletionHandler with batch flush notification.
+trait _LegacyBatchCompletionHandler(_LegacyCompletionHandler):
+    """Extension of _LegacyCompletionHandler with batch flush notification.
 
     After all available CQEs are dispatched via on_complete(), the loop
     calls on_flush() once, allowing the handler to process buffered work
@@ -416,10 +623,10 @@ trait BatchCompletionHandler(CompletionHandler):
         ...
 
 
-comptime BatchCompletionLoop = CompletionLoop
-"""CompletionLoop with batch flush — use with a BatchCompletionHandler.
+comptime _LegacyBatchCompletionLoop = _LegacyCompletionLoop
+"""_LegacyCompletionLoop with batch flush — use with a _LegacyBatchCompletionHandler.
 
-When Handler conforms to BatchCompletionHandler, CompletionLoop
+When Handler conforms to _LegacyBatchCompletionHandler, _LegacyCompletionLoop
 automatically calls on_flush() after draining CQEs. This alias exists
-for API discoverability; it is identical to CompletionLoop.
+for API discoverability; it is identical to _LegacyCompletionLoop.
 """

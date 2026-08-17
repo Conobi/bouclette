@@ -1,4 +1,4 @@
-from boucle import CompletionLoop, CompletionHandler
+from boucle import _LegacyCompletionLoop as CompletionLoop, CompletionHandler
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc as _heap_alloc
 from std.testing import assert_equal, assert_true

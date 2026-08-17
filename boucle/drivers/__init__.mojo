@@ -9,3 +9,7 @@ from .driver import IoDriver, ReadinessDriver
 from .readiness_event import ReadinessEvent
 from .io_uring import IoUringDriver
 from .epoll import EpollDriver
+
+# Comptime aliases — the singular dispatch point for platform selection
+comptime _CompletionDriver = IoUringDriver
+comptime _ReadinessDriver = EpollDriver

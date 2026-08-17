@@ -5,7 +5,7 @@ and be resumed by the handler once the kernel signals done.
 """
 
 from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
-from boucle.completion import CompletionLoop, CompletionHandler
+from boucle.completion import _LegacyCompletionLoop as CompletionLoop, _LegacyCompletionHandler as CompletionHandler
 from boucle.socle.ptr import null_ptr
 from std.memory import UnsafePointer
 from std.memory.unsafe_pointer import alloc
