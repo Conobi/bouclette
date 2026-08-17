@@ -13,6 +13,9 @@ from std.memory import UnsafePointer
 
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
+from boucle.interest import Interest
+from boucle.token import Token
+from boucle.drivers.readiness_event import ReadinessEvent
 
 
 trait IoDriver(Movable):
@@ -198,5 +201,68 @@ trait IoDriver(Movable):
 
         Returns:
             The number of SQ entries currently available for submission.
+        """
+        ...
+
+
+trait ReadinessDriver(Movable):
+    """Platform readiness-notification backend abstraction.
+
+    Implementors wrap a kernel readiness mechanism (e.g. epoll,
+    kqueue) and expose a uniform register/poll interface consumed
+    by the readiness event loop.
+    """
+
+    def __del__(deinit self):
+        """Release all resources held by this driver."""
+        ...
+
+    def register(
+        mut self, fd: RawHandle, interest: Interest, token: Token
+    ) raises:
+        """Add a file descriptor to the interest set.
+
+        Args:
+            fd: The file descriptor to monitor.
+            interest: Which I/O events to watch for.
+            token: Opaque token returned in ReadinessEvent on notification.
+        """
+        ...
+
+    def modify(
+        mut self, fd: RawHandle, interest: Interest, token: Token
+    ) raises:
+        """Modify the interest flags for a registered file descriptor.
+
+        Args:
+            fd: The registered file descriptor.
+            interest: New set of I/O events to watch for.
+            token: New opaque token for subsequent notifications.
+        """
+        ...
+
+    def deregister(mut self, fd: RawHandle) raises:
+        """Remove a file descriptor from the interest set.
+
+        Args:
+            fd: The registered file descriptor to remove.
+        """
+        ...
+
+    def poll(
+        mut self, *, timeout_ms: Int32 = -1
+    ) raises -> List[ReadinessEvent]:
+        """Wait for readiness events and return them.
+
+        Blocks until at least one event is ready or the timeout
+        expires. A timeout of -1 blocks indefinitely; 0 returns
+        immediately.
+
+        Args:
+            timeout_ms: Maximum milliseconds to wait (-1 = infinite,
+                        0 = non-blocking).
+
+        Returns:
+            List of readiness events from this poll cycle.
         """
         ...
