@@ -9,8 +9,7 @@ from boucle.net.connect_probe import ConnectProbe
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 from boucle.socle.linux.raw import sockaddr_in
 
 
@@ -30,8 +29,7 @@ def test_connect_open_port() raises:
     )
     var port = ((UInt16(bound.sin_port) << 8) | (UInt16(bound.sin_port) >> 8)) & UInt16(0xFFFF)
 
-    var driver = IoUringDriver(sq_entries=64)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=64)
 
     # Stack-allocated probe: address is stable (no moves after wire_context).
     var probe = ConnectProbe(target=SocketAddrV4(127, 0, 0, 1, port=port), timeout_ms=2000)
@@ -50,8 +48,7 @@ def test_connect_open_port() raises:
 
 def test_connect_closed_port() raises:
     """Connect to port with no listener -> CLOSED."""
-    var driver = IoUringDriver(sq_entries=64)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=64)
 
     var probe = ConnectProbe(target=SocketAddrV4(127, 0, 0, 1, port=1), timeout_ms=2000)
     probe.wire_context()

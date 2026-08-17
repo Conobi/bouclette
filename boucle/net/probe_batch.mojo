@@ -15,8 +15,7 @@ from boucle.net.probe import (
     compute_batches,
 )
 from boucle.net.connect_probe import ConnectProbe
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 struct ProbeBatch:
@@ -72,8 +71,8 @@ struct ProbeBatch:
         self._concurrency = concurrency
         self._results = List[ProbeResult]()
 
-    def run_cooperative(mut self, mut loop: EventLoop[IoUringDriver]) raises:
-        """Execute the batch scan cooperatively on the given event loop.
+    def run_cooperative(mut self, mut loop: CompletionLoop) raises:
+        """Execute the batch scan cooperatively on the given completion loop.
 
         Processes ports in concurrency-limited batches. Each batch:
         1. Allocates ConnectProbe instances on the heap for pointer stability.
@@ -87,10 +86,10 @@ struct ProbeBatch:
         After all batches complete, results are sorted by port ascending.
 
         Args:
-            loop: The event loop wrapping an IoUringDriver.
+            loop: The opaque CompletionLoop.
 
         Raises:
-            If io_uring submission fails (after draining in-flight probes).
+            If submission fails (after draining in-flight probes).
         """
         if len(self._ports) == 0:
             return
@@ -211,7 +210,7 @@ struct ProbeBatch:
     def _drain_batch(
         probes: UnsafePointer[ConnectProbe, MutAnyOrigin],
         count: Int,
-        mut loop: EventLoop[IoUringDriver],
+        mut loop: CompletionLoop,
     ):
         """Drain in-flight probes until done, with bounded iteration.
 
@@ -232,7 +231,7 @@ struct ProbeBatch:
         Args:
             probes: Pointer to the probe array.
             count: Number of in-flight probes to drain.
-            loop: The event loop to poll.
+            loop: The completion loop to poll.
         """
         if count == 0:
             return

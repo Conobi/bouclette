@@ -6,8 +6,7 @@ from std.testing import assert_equal, assert_true
 
 from boucle.net.probe import PortStatus, ProbeResult, ProbeBatch
 from boucle.net.addr import SocketAddrV4
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 def count_open_fds() -> Int:
@@ -22,8 +21,7 @@ def count_open_fds() -> Int:
 
 def test_batch_all_refused() raises:
     """Batch of 5 ports on 127.0.0.1 with nothing listening -> all CLOSED."""
-    var driver = IoUringDriver(sq_entries=256)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=256)
 
     var ports = List[Int]()
     ports.append(1)
@@ -53,8 +51,7 @@ def test_batch_all_refused() raises:
 
 def test_batch_empty_ports() raises:
     """Empty port list -> immediate return, empty results."""
-    var driver = IoUringDriver(sq_entries=64)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=64)
 
     var batch = ProbeBatch(
         target=SocketAddrV4(127, 0, 0, 1, port=0),
@@ -68,8 +65,7 @@ def test_batch_empty_ports() raises:
 
 def test_batch_concurrency_one() raises:
     """Concurrency=1 -> strictly sequential probing."""
-    var driver = IoUringDriver(sq_entries=64)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=64)
 
     var ports = List[Int]()
     ports.append(1)
@@ -90,8 +86,7 @@ def test_batch_concurrency_one() raises:
 
 def test_results_sorted() raises:
     """Results are sorted by port number ascending."""
-    var driver = IoUringDriver(sq_entries=256)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=256)
 
     var ports = List[Int]()
     ports.append(5)

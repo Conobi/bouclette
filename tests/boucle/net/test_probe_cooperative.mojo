@@ -6,8 +6,7 @@ from std.testing import assert_true
 from boucle.net.probe import ProbeBatch, PortStatus
 from boucle.net.addr import SocketAddrV4
 from boucle.proactor.completion import Completion
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 struct CoopTracker:
@@ -40,13 +39,12 @@ struct CoopTracker:
 
 
 def test_probe_cooperative() raises:
-    var driver = IoUringDriver(sq_entries=256)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=256)
 
     # Submit a secondary NOP BEFORE starting the batch.
     var tracker = CoopTracker()
     tracker.wire()
-    loop.driver.submit_nop(
+    loop.submit_nop(
         UnsafePointer[Completion, MutAnyOrigin](
             unsafe_from_address=Int(UnsafePointer(to=tracker.cmp))
         )

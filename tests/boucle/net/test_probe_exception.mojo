@@ -10,8 +10,7 @@ from std.testing import assert_true, assert_equal
 
 from boucle.net.probe import ProbeBatch, PortStatus
 from boucle.net.addr import SocketAddrV4
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 def count_open_fds() -> Int:
@@ -31,8 +30,7 @@ def test_partial_submit_no_hang() raises:
     so the 3rd probe's submit() fails. The fix ensures only the 2
     successfully-submitted probes are drained (not all 5).
     """
-    var driver = IoUringDriver(sq_entries=4)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=4)
 
     var ports = List[Int]()
     ports.append(1)
@@ -68,8 +66,7 @@ def test_partial_submit_small_sq() raises:
 
     Verifies the batch terminates (no hang) and cleans up FDs.
     """
-    var driver = IoUringDriver(sq_entries=4)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=4)
 
     var ports = List[Int]()
     ports.append(1)
@@ -101,8 +98,7 @@ def test_successful_batch_after_small_concurrency() raises:
 
     Each probe only needs 2 slots, and the SQ drains between batches.
     """
-    var driver = IoUringDriver(sq_entries=4)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=4)
 
     var ports = List[Int]()
     ports.append(1)

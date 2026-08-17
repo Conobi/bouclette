@@ -21,8 +21,7 @@ from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.probe import PortStatus, result_from_connect_cqe
 from boucle.proactor.completion import Completion, CompletionFn
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 struct ConnectProbe(Movable):
@@ -35,7 +34,7 @@ struct ConnectProbe(Movable):
         _timeout_cmp: Completion token for the timeout operation.
         _cancel_cmp: Completion token for the cancel operation.
         _ts: Timeout value (owned by probe for SQE pointer stability).
-        _driver_ptr: Type-erased driver pointer for cancel submission.
+        _driver_ptr: Type-erased loop pointer for cancel submission.
         _result_value: The resolved PortStatus (valid only when _result_set).
         _result_set: Whether result has been resolved.
         _resolved_by: 0=connect, 1=timeout (diagnostic).
@@ -157,25 +156,25 @@ struct ConnectProbe(Movable):
         self._cancel_cmp.context = self_ptr
         self._cancel_cmp.invoke = Self._on_cancel_cb
 
-    def submit(mut self, mut loop: EventLoop[IoUringDriver]) raises:
-        """Submit connect + timeout SQEs to the event loop's driver.
+    def submit(mut self, mut loop: CompletionLoop) raises:
+        """Submit connect + timeout SQEs to the completion loop.
 
         Requires at least 2 SQ slots available for the atomic pair
-        (connect + timeout). Stores the driver pointer so flush_cancel()
+        (connect + timeout). Stores the loop pointer so flush_cancel()
         can submit the cancel SQE after a resolving CQE fires.
 
         Args:
-            loop: The event loop wrapping an IoUringDriver.
+            loop: The opaque CompletionLoop.
 
         Raises:
             If insufficient SQ space is available for the atomic submit.
         """
-        if loop.driver.sq_space() < 2:
+        if loop.sq_space() < 2:
             raise "insufficient SQ space for atomic submit"
 
-        # Store driver pointer for cancel submission via flush_cancel.
+        # Store loop pointer for cancel submission via flush_cancel.
         self._driver_ptr = UnsafePointer[NoneType, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=loop.driver))
+            unsafe_from_address=Int(UnsafePointer(to=loop))
         )
 
         # Submit connect SQE.
@@ -184,7 +183,7 @@ struct ConnectProbe(Movable):
         var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
             unsafe_from_address=Int(UnsafePointer(to=self._connect_cmp))
         )
-        loop.driver.submit_connect(
+        loop.submit_connect(
             self.socket.raw(), addr_ptr, addr_len, connect_cmp_ptr
         )
 
@@ -195,9 +194,9 @@ struct ConnectProbe(Movable):
         var timeout_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
             unsafe_from_address=Int(UnsafePointer(to=self._timeout_cmp))
         )
-        loop.driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
+        loop.submit_timeout(ts_ptr, timeout_cmp_ptr)
 
-    def flush_cancel(mut self, mut loop: EventLoop[IoUringDriver]) raises:
+    def flush_cancel(mut self, mut loop: CompletionLoop) raises:
         """Submit the deferred cancel SQE if a callback requested one.
 
         Must be called after each run_once() to ensure cancel operations
@@ -207,7 +206,7 @@ struct ConnectProbe(Movable):
         context where flushing is deterministic.
 
         Args:
-            loop: The event loop wrapping an IoUringDriver.
+            loop: The opaque CompletionLoop.
 
         Raises:
             If the submission queue is full (non-fatal in practice).
@@ -227,7 +226,7 @@ struct ConnectProbe(Movable):
                     UnsafePointer(to=self._cancel_cmp)
                 )
             )
-            loop.driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+            loop.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
         elif self._cancel_target == UInt8(2):
             # Cancel the connect.
             var target_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
@@ -240,7 +239,7 @@ struct ConnectProbe(Movable):
                     UnsafePointer(to=self._cancel_cmp)
                 )
             )
-            loop.driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+            loop.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
 
         # Clear the flag so we don't double-submit.
         self._cancel_target = UInt8(0)

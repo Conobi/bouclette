@@ -4,8 +4,7 @@ from std.testing import assert_equal, assert_true
 
 from boucle.net.probe import ProbeBatch, PortStatus
 from boucle.net.addr import SocketAddrV4
-from boucle.proactor.loop import EventLoop
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.completion import CompletionLoop
 
 
 def test_property(port_count: Int, concurrency: Int) raises:
@@ -20,8 +19,7 @@ def test_property(port_count: Int, concurrency: Int) raises:
         port_count: Number of ports to probe (1..port_count).
         concurrency: Maximum concurrent probes.
     """
-    var driver = IoUringDriver(sq_entries=4096)
-    var loop = EventLoop[IoUringDriver](driver^)
+    var loop = CompletionLoop(sq_entries=4096)
 
     var ports = List[Int]()
     for i in range(port_count):
