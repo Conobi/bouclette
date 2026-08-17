@@ -11,19 +11,12 @@ stopping to poll.
 See `boucle.completion` for the alternative model.
 """
 
-from boucle.socle.linux.epoll.syscalls import (
-    epoll_create,
-    epoll_ctl,
-    epoll_wait,
-    EpollOp,
-)
-from boucle.socle.linux.raw import epoll_event, EPOLLRDHUP
-from boucle.socle.linux.fd import close, close_unchecked
+from boucle.drivers import _ReadinessDriver
+from boucle.handle import RawHandle
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
 from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
 
 
 trait ReadinessHandler(Movable, ImplicitlyDestructible):
@@ -47,67 +40,78 @@ trait ReadinessHandler(Movable, ImplicitlyDestructible):
         ...
 
 
-struct ReadinessLoop[Handler: ReadinessHandler]:
-    """Event loop driven by epoll readiness notifications.
+struct ReadinessLoop[Handler: ReadinessHandler](Movable):
+    """Opaque readiness event loop. Backend resolved at comptime.
 
     Register file descriptors with interest flags, then poll to
     discover which ones are ready for I/O. You perform the actual
     I/O yourself after being notified.
+
+    The underlying driver (epoll, kqueue, ...) is selected via the
+    comptime `_ReadinessDriver` alias in `boucle.drivers`.
     """
 
-    var _epfd: Int32
-    var _events: UnsafePointer[epoll_event, MutUntrackedOrigin]
-    var _max_events: Int32
+    var _driver: _ReadinessDriver
     var _handler: Self.Handler
 
     def __init__(
         out self, var handler: Self.Handler, *, max_events: Int32 = 64
     ) raises:
-        self._epfd = epoll_create()
-        self._max_events = max_events
-        self._events = alloc[epoll_event](Int(max_events))
+        """Create a readiness loop with the given handler.
+
+        Args:
+            handler: Callback object invoked for each readiness event.
+            max_events: Maximum events returned per poll() call
+                        (default 64).
+        """
+        self._driver = _ReadinessDriver(max_events=max_events)
         self._handler = handler^
 
-    def __del__(deinit self):
-        """Frees the event buffer and closes the epoll fd.
+    def __init__(out self, *, deinit take: Self):
+        """Move constructor."""
+        self._driver = take._driver^
+        self._handler = take._handler^
 
-        Errors from close() are detected only in debug builds
-        (via debug_assert inside close/unsafe_fd_as_arg).
+    def register(mut self, fd: RawHandle, interest: Interest, token: Token) raises:
+        """Add a file descriptor to the interest set.
+
+        Args:
+            fd: The file descriptor to monitor.
+            interest: Which I/O events to watch for.
+            token: Opaque token returned on notification.
         """
-        self._events.free()
-        close_unchecked(unsafe_fd=self._epfd)
+        self._driver.register(fd, interest, token)
 
-    def register(self, fd: Int32, interest: Interest, token: Token) raises:
-        """Add a file descriptor to the interest list."""
-        var ev = epoll_event(
-            events=interest.value | EPOLLRDHUP,
-            data=token.value,
-        )
-        epoll_ctl(self._epfd, EpollOp.ADD, fd, ev)
+    def modify(mut self, fd: RawHandle, interest: Interest, token: Token) raises:
+        """Modify the interest flags for a registered file descriptor.
 
-    def modify(self, fd: Int32, interest: Interest, token: Token) raises:
-        """Modify the interest flags for a registered file descriptor."""
-        var ev = epoll_event(
-            events=interest.value | EPOLLRDHUP,
-            data=token.value,
-        )
-        epoll_ctl(self._epfd, EpollOp.MOD, fd, ev)
+        Args:
+            fd: The registered file descriptor.
+            interest: New set of I/O events to watch for.
+            token: New opaque token for subsequent notifications.
+        """
+        self._driver.modify(fd, interest, token)
 
-    def deregister(self, fd: Int32) raises:
-        """Remove a file descriptor from the interest list."""
-        var ev = epoll_event()
-        epoll_ctl(self._epfd, EpollOp.DEL, fd, ev)
+    def deregister(mut self, fd: RawHandle) raises:
+        """Remove a file descriptor from the interest set.
+
+        Args:
+            fd: The registered file descriptor to remove.
+        """
+        self._driver.deregister(fd)
 
     def poll(mut self, *, timeout_ms: Int32 = -1) raises:
-        """Wait for readiness events and invoke handler for each."""
-        var n = epoll_wait(
-            self._epfd,
-            self._events,
-            max_events=self._max_events,
-            timeout=timeout_ms,
-        )
-        for i in range(Int(n)):
-            var ev = self._events[i]
+        """Wait for readiness events and invoke handler for each.
+
+        Calls the driver's poll(), then dispatches each returned
+        ReadinessEvent to the handler's on_ready callback.
+
+        Args:
+            timeout_ms: Maximum milliseconds to wait (-1 = infinite,
+                        0 = non-blocking).
+        """
+        var events = self._driver.poll(timeout_ms=timeout_ms)
+        for i in range(len(events)):
             # Construct a loop pointer with an unconstrained origin so it
             # doesn't alias with the `mut self._handler` borrow below.
             # Safety: the pointer is valid only for the duration of the
@@ -117,6 +121,6 @@ struct ReadinessLoop[Handler: ReadinessHandler]:
             )
             self._handler.on_ready(
                 loop_ptr,
-                Token(ev.data()),
-                Readiness(ev.events),
+                events[i].token,
+                events[i].readiness,
             )
