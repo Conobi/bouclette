@@ -16,7 +16,7 @@ picked up by the kernel on the next submit_and_wait.
 
 from std.memory import UnsafePointer
 from boucle.socle.ptr import null_ptr
-from boucle.socle.linux.raw import __kernel_timespec
+from boucle.timeout import Timeout
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.probe import PortStatus, result_from_connect_cqe
@@ -34,7 +34,7 @@ struct ConnectProbe(Movable):
         _connect_cmp: Completion token for the connect operation.
         _timeout_cmp: Completion token for the timeout operation.
         _cancel_cmp: Completion token for the cancel operation.
-        _ts: Timeout duration (owned by probe for SQE pointer stability).
+        _ts: Timeout value (owned by probe for SQE pointer stability).
         _driver_ptr: Type-erased driver pointer for cancel submission.
         _result_value: The resolved PortStatus (valid only when _result_set).
         _result_set: Whether result has been resolved.
@@ -50,7 +50,7 @@ struct ConnectProbe(Movable):
     var _connect_cmp: Completion
     var _timeout_cmp: Completion
     var _cancel_cmp: Completion
-    var _ts: __kernel_timespec
+    var _ts: Timeout
     var _driver_ptr: UnsafePointer[NoneType, MutAnyOrigin]
     var _result_value: PortStatus
     var _result_set: Bool
@@ -83,7 +83,7 @@ struct ConnectProbe(Movable):
         self._connect_cmp = Completion()
         self._timeout_cmp = Completion()
         self._cancel_cmp = Completion()
-        self._ts = __kernel_timespec(tv_sec=Int64(0), tv_nsec=Int64(0))
+        self._ts = Timeout(seconds=Int64(0), nanoseconds=Int64(0))
         self._driver_ptr = null_ptr[NoneType, MutAnyOrigin]()
         self._result_value = PortStatus.FILTERED
         self._result_set = False
@@ -109,10 +109,7 @@ struct ConnectProbe(Movable):
         self._connect_cmp = Completion()
         self._timeout_cmp = Completion()
         self._cancel_cmp = Completion()
-        self._ts = __kernel_timespec(
-            tv_sec=Int64(timeout_ms // 1000),
-            tv_nsec=Int64((timeout_ms % 1000) * 1_000_000),
-        )
+        self._ts = Timeout.from_ms(Int64(timeout_ms))
         self._driver_ptr = null_ptr[NoneType, MutAnyOrigin]()
         self._result_value = PortStatus.FILTERED
         self._result_set = False

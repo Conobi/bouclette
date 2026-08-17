@@ -2,6 +2,8 @@ from .handle import RawHandle, OwnedHandle
 from .token import Token
 from .error import IOError
 from .buffer import IOBuffer
+from .timeout import Timeout
+from .socle.ptr import null_ptr
 from .completion import CompletionLoop, Completion, CompletionFn
 # Backward compat — deprecated, remove in Phase 5
 from .completion import _LegacyCompletionHandler as CompletionHandler
