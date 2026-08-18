@@ -14,6 +14,7 @@ from std.memory import Pointer
 from std.sys.info import size_of
 
 from boucle.handle import RawHandle, OwnedHandle
+from boucle.error import IOError
 from boucle.socle.linux.fd import close as _fd_close
 from boucle.net.addr import (
     SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6,
@@ -42,8 +43,9 @@ from boucle.socle.linux.net.syscalls import (
     _getpeername_raw,
     _fcntl_getfl,
     _fcntl_setfl,
+    _getsockopt_int,
 )
-from boucle.socle.linux.errno import get_errno
+from boucle.socle.linux.errno import get_errno, Errno
 from boucle.socle.linux.raw import (
     sockaddr_in,
     sockaddr_in6,
@@ -55,6 +57,7 @@ from boucle.socle.linux.raw import (
     SO_REUSEPORT,
     SO_RCVTIMEO,
     SO_SNDTIMEO,
+    SO_ERROR,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
     O_NONBLOCK,
@@ -307,6 +310,13 @@ struct Socket(Movable):
             _fcntl_setfl(self._handle._raw, flags & ~Int32(O_NONBLOCK))
         else:
             _fcntl_setfl(self._handle._raw, flags | Int32(O_NONBLOCK))
+
+    def take_error(self) raises -> Optional[IOError]:
+        """Read and clear the pending socket error (SO_ERROR)."""
+        var val = _getsockopt_int(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_ERROR))
+        if val == 0:
+            return Optional[IOError]()
+        return IOError(Errno(errno=UInt16(val)))
 
     def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises:
         """Blocking `connect(2)` to the given address."""
