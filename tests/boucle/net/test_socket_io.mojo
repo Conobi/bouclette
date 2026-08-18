@@ -11,6 +11,7 @@ from std.testing import assert_true, assert_equal
 
 from boucle.handle import OwnedHandle
 from boucle.net.socket import Socket
+from boucle.net.options import Shutdown
 
 
 def _socketpair() raises -> Tuple[Int32, Int32]:
@@ -70,3 +71,21 @@ def main() raises:
     assert_equal(after_close, 0, "recv after peer close should return 0")
 
     print("PASS: Socket.recv() and Socket.send()")
+
+    # --- Test shutdown(WRITE) triggers EOF on peer recv ---
+    var fds2 = _socketpair()
+    var client = Socket(OwnedHandle(raw=fds2[0]))
+    var peer = Socket(OwnedHandle(raw=fds2[1]))
+
+    var msg2 = String("hi")
+    _ = client.send(msg2.as_bytes())
+    client.shutdown(Shutdown.WRITE)
+
+    var buf2 = InlineArray[UInt8, 64](fill=0)
+    var n = peer.recv(Span(buf2))
+    assert_equal(n, 2, "should receive 2 bytes before EOF")
+
+    var eof = peer.recv(Span(buf2))
+    assert_equal(eof, 0, "recv after shutdown(WRITE) should return 0 (EOF)")
+
+    print("PASS: Socket.shutdown()")

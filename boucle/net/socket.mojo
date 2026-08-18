@@ -23,6 +23,7 @@ from boucle.net.options import (
     SocketFlags,
     Protocol,
     Backlog,
+    Shutdown,
 )
 from boucle.socle.linux.net.syscalls import (
     _socket,
@@ -32,6 +33,7 @@ from boucle.socle.linux.net.syscalls import (
     _connect,
     _recv,
     _send,
+    _shutdown,
 )
 from boucle.socle.linux.errno import get_errno
 from boucle.socle.linux.raw import (
@@ -395,6 +397,10 @@ struct Socket(Movable):
             return n
         var errno = get_errno()
         raise String(Int(-errno))
+
+    def shutdown(self, how: Shutdown) raises:
+        """Shut down read, write, or both directions."""
+        _shutdown(self._handle._raw, how.value)
 
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
