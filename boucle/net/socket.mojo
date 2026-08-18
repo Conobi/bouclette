@@ -59,6 +59,7 @@ from boucle.socle.linux.raw import (
     IPPROTO_IPV6,
     IPV6_V6ONLY,
     O_NONBLOCK,
+    MSG_NOSIGNAL,
 )
 from boucle.socle.linux.raw.utils import _to_be
 
@@ -434,6 +435,89 @@ struct Socket(Movable):
             return n
         var errno = get_errno()
         raise String(Int(-errno))
+
+    def send_to[
+        origin: Origin,
+    ](self, buf: Span[UInt8, origin], ref addr: SocketAddrV4) raises -> Int:
+        """Send a datagram to `addr` via sendto(2).
+
+        Uses ``MSG_NOSIGNAL`` internally to suppress ``SIGPIPE`` on Linux.
+        Designed for unconnected UDP sockets — the destination address is
+        specified per-call rather than via a prior ``connect(2)``.
+
+        Uses external_call directly to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+
+        Args:
+            buf: Byte span to send.
+            addr: IPv4 destination address (ip + port).
+
+        Returns:
+            Number of bytes actually sent.
+
+        Raises:
+            On syscall failure.
+        """
+        var stor = addr.addr_stor()
+        var stor_p = Pointer(to=stor)
+        var n = external_call["sendto", Int](
+            self._handle._raw,
+            Pointer[UInt8, ImmStaticOrigin](
+                unsafe_from_address=Int(buf.unsafe_ptr())
+            ),
+            len(buf),
+            Int32(MSG_NOSIGNAL),
+            stor_p,
+            socklen_t(16),  # sizeof(sockaddr_in)
+        )
+        if n >= 0:
+            return n
+        var errno = get_errno()
+        raise String(Int(-errno))
+
+    def recv_from[
+        origin: MutOrigin,
+    ](self, buf: Span[UInt8, origin]) raises -> Tuple[Int, SocketAddrStorV4]:
+        """Receive a datagram and the sender's address via recvfrom(2).
+
+        Designed for unconnected UDP sockets. Returns a tuple of bytes
+        read and the sender's ``SocketAddrStorV4`` so the caller can
+        reply to the correct peer.
+
+        Uses InlineArray as raw buffer to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+
+        Args:
+            buf: Mutable byte span to receive into.
+
+        Returns:
+            A tuple of (bytes_read, sender_address).
+
+        Raises:
+            On syscall failure.
+        """
+        var addr_buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
+        var addrlen = socklen_t(16)
+        var addr_p = Pointer(to=addr_buf)
+        var len_p = Pointer(to=addrlen)
+        var n = external_call["recvfrom", Int](
+            self._handle._raw,
+            Pointer[UInt8, MutUntrackedOrigin](
+                unsafe_from_address=Int(buf.unsafe_ptr())
+            ),
+            len(buf),
+            Int32(0),
+            addr_p,
+            len_p,
+        )
+        if n < 0:
+            var errno = get_errno()
+            raise String(Int(-errno))
+        # Parse the raw buffer into a SocketAddrStorV4.
+        var result = SocketAddrStorV4()
+        var src = addr_p.unsafe_bitcast[sockaddr_in]()
+        result.addr = src[]
+        return (n, result)
 
     def shutdown(self, how: Shutdown) raises:
         """Shut down read, write, or both directions."""
