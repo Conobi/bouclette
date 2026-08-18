@@ -33,8 +33,7 @@ from boucle.socle.linux.net.syscalls import (
     _recv,
     _send,
 )
-from boucle.socle.linux.errno import get_errno, Errno
-from boucle.error import IOError
+from boucle.socle.linux.errno import get_errno
 from boucle.socle.linux.raw import (
     sockaddr_in6,
     socklen_t,
@@ -363,7 +362,7 @@ struct Socket(Movable):
         if n >= 0:
             return n
         var errno = get_errno()
-        raise String(IOError(Errno(errno=UInt16(errno))))
+        raise String(Int(-errno))
 
     def send[origin: Origin](self, buf: Span[UInt8, origin]) raises -> Int:
         """Send from buf. Returns bytes written (may be partial).
@@ -395,7 +394,7 @@ struct Socket(Movable):
         if n >= 0:
             return n
         var errno = get_errno()
-        raise String(IOError(Errno(errno=UInt16(errno))))
+        raise String(Int(-errno))
 
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
