@@ -40,6 +40,8 @@ from boucle.socle.linux.net.syscalls import (
     _setsockopt_timeval,
     _getsockname_raw,
     _getpeername_raw,
+    _fcntl_getfl,
+    _fcntl_setfl,
 )
 from boucle.socle.linux.errno import get_errno
 from boucle.socle.linux.raw import (
@@ -55,6 +57,7 @@ from boucle.socle.linux.raw import (
     SO_SNDTIMEO,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
+    O_NONBLOCK,
 )
 from boucle.socle.linux.raw.utils import _to_be
 
@@ -296,6 +299,14 @@ struct Socket(Movable):
     def set_send_timeout(self, ms: UInt64) raises:
         """Set send timeout (SO_SNDTIMEO). ms=0 disables."""
         _setsockopt_timeval(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_SNDTIMEO), ms)
+
+    def set_blocking(self, blocking: Bool) raises:
+        """Toggle blocking mode. True = blocking, False = non-blocking."""
+        var flags = _fcntl_getfl(self._handle._raw)
+        if blocking:
+            _fcntl_setfl(self._handle._raw, flags & ~Int32(O_NONBLOCK))
+        else:
+            _fcntl_setfl(self._handle._raw, flags | Int32(O_NONBLOCK))
 
     def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises:
         """Blocking `connect(2)` to the given address."""
