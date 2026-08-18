@@ -34,6 +34,7 @@ from boucle.socle.linux.net.syscalls import (
     _recv,
     _send,
     _shutdown,
+    _setsockopt_timeval,
 )
 from boucle.socle.linux.errno import get_errno
 from boucle.socle.linux.raw import (
@@ -44,6 +45,8 @@ from boucle.socle.linux.raw import (
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,
+    SO_RCVTIMEO,
+    SO_SNDTIMEO,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
 )
@@ -278,6 +281,14 @@ struct Socket(Movable):
             self._handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY),
             Int32(1) if value else Int32(0),
         )
+
+    def set_recv_timeout(self, ms: UInt64) raises:
+        """Set receive timeout (SO_RCVTIMEO). ms=0 disables."""
+        _setsockopt_timeval(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_RCVTIMEO), ms)
+
+    def set_send_timeout(self, ms: UInt64) raises:
+        """Set send timeout (SO_SNDTIMEO). ms=0 disables."""
+        _setsockopt_timeval(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_SNDTIMEO), ms)
 
     def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises:
         """Blocking `connect(2)` to the given address."""
