@@ -23,12 +23,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records result into the Tracker."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].last_result = result
@@ -42,11 +42,11 @@ def test_event_loop() raises:
     var loop = EventLoop(driver^)
 
     var tracker = Tracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 

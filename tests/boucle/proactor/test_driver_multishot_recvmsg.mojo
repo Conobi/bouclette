@@ -56,12 +56,12 @@ struct MultishotTracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and buffer ID."""
-        var self_ptr = Pointer[MultishotTracker, MutAnyOrigin](
+        var self_ptr = Pointer[MultishotTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         var idx = self_ptr[].count
@@ -119,9 +119,9 @@ def test_driver_multishot_recvmsg() raises:
     var driver = IoUringDriver(sq_entries=64)
 
     # Allocate data buffer pool (NUM_BUFS * BUF_SIZE bytes)
-    var buf_base = _heap_alloc[UInt8](NUM_BUFS * BUF_SIZE).as_unsafe_any_origin()
+    var buf_base = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(_heap_alloc[UInt8](NUM_BUFS * BUF_SIZE)))
     for i in range(NUM_BUFS * BUF_SIZE):
-        buf_base[i] = UInt8(0)
+        buf_base[unsafe_offset=i] = UInt8(0)
 
     var bufring = driver.register_buf_ring(
         buf_base,
@@ -159,19 +159,19 @@ def test_driver_multishot_recvmsg() raises:
     # msg_iovlen = 1 (offset 24, 8 bytes LE)
     recv_mhdr.unsafe_offset(24)[] = UInt8(1)
 
-    var recv_msg_ptr = Pointer[msghdr, MutAnyOrigin](
+    var recv_msg_ptr = Pointer[msghdr, MutUntrackedOrigin](
         unsafe_from_address=Int(recv_mhdr)
     )
 
     # --- 6. Wire completion callback ---
     var tracker = MultishotTracker()
-    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+    var tracker_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=MultishotTracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 

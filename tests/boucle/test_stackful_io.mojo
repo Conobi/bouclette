@@ -60,12 +60,12 @@ def coro_body(mut y: CoroYielder) raises:
 
 
 def _on_io_complete(
-    ctx: Pointer[NoneType, MutAnyOrigin],
+    ctx: Pointer[NoneType, MutUntrackedOrigin],
     result: Int32,
     flags: UInt32,
 ):
     """On completion: store result in shared state and resume the coroutine."""
-    var state_ptr = Pointer[SharedState, MutAnyOrigin](
+    var state_ptr = Pointer[SharedState, MutUntrackedOrigin](
         unsafe_from_address=Int(ctx)
     )
     state_ptr[].io_result = result
@@ -90,7 +90,7 @@ def test_coro_with_completion_loop() raises:
     var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=state))
     )
-    var state_for_cb = Pointer[NoneType, MutAnyOrigin](
+    var state_for_cb = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=state))
     )
 
@@ -103,7 +103,7 @@ def test_coro_with_completion_loop() raises:
     # Wire the completion callback to shared state
     var loop = CompletionLoop(sq_entries=8)
     var cmp = Completion(invoke=_on_io_complete, context=state_for_cb)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 

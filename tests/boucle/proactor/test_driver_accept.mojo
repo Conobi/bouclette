@@ -27,12 +27,12 @@ struct AcceptTracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the accept result."""
-        var self_ptr = Pointer[AcceptTracker, MutAnyOrigin](
+        var self_ptr = Pointer[AcceptTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -58,7 +58,7 @@ def test_driver_accept() raises:
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", Pointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutUntrackedOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -78,25 +78,25 @@ def test_driver_accept() raises:
 
     # Set up accept completion.
     var accept_tracker = AcceptTracker()
-    var accept_ctx = Pointer[NoneType, MutAnyOrigin](
+    var accept_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=accept_tracker))
     )
     var accept_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=accept_ctx
     )
-    var accept_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var accept_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=accept_cmp))
     )
 
     # Set up connect completion.
     var connect_tracker = AcceptTracker()
-    var connect_ctx = Pointer[NoneType, MutAnyOrigin](
+    var connect_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=connect_tracker))
     )
     var connect_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=connect_ctx
     )
-    var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=connect_cmp))
     )
 

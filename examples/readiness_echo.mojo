@@ -40,7 +40,7 @@ struct EchoHandler(ReadinessHandler):
         self.read_fd = move.read_fd
         self.got_event = move.got_event
         self.bytes_read = move.bytes_read
-        self.buf = move.buf
+        self.buf = move.buf^
 
     def on_ready(
         mut self,
@@ -82,7 +82,7 @@ def main() raises:
     assert_equal(loop._handler.bytes_read, _MSG_LEN)
     # Verify byte content matches "hello"
     for i in range(_MSG_LEN):
-        assert_equal(Int(loop._handler.buf[i]), Int(_MSG.unsafe_ptr()[i]))
+        assert_equal(Int(loop._handler.buf[i]), Int(_MSG.unsafe_ptr()[unsafe_offset=i]))
 
     loop.deregister(read_fd)
     _ = syscall[__NR_close, Scalar[DType.int32]](read_fd)

@@ -104,7 +104,9 @@ def test_results_sorted() raises:
     batch.run_cooperative(loop)
     assert_equal(len(batch.results()), 5)
     for i in range(1, len(batch.results())):
-        assert_true(batch.results()[i].port > batch.results()[i - 1].port)
+        var cur_port = batch.results()[i].port
+        var prev_port = batch.results()[i - 1].port
+        assert_true(cur_port > prev_port)
 
 
 def main() raises:

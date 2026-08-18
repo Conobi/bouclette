@@ -1130,7 +1130,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
 
 
 struct NoRegisterArg:
-    comptime ENABLE_RINGS = RegisterArg[MutAnyOrigin](
+    comptime ENABLE_RINGS = RegisterArg[MutUntrackedOrigin](
         opcode=IoUringRegisterOp.REGISTER_ENABLE_RINGS,
         arg_unsafe_ptr=null_ptr[c_void, ImmStaticOrigin](),
         nr_args=0,

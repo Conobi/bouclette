@@ -62,7 +62,7 @@ struct TestCoro(Movable):
     provides the same resume/query API, with explicit cleanup via close().
     """
 
-    var _ptr: Pointer[CoroHandle, MutAnyOrigin]
+    var _ptr: Pointer[CoroHandle, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -70,7 +70,7 @@ struct TestCoro(Movable):
         user_data: Pointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
         stack_size: UInt = 65536,
     ) raises:
-        self._ptr = unsafe_alloc[CoroHandle](1).as_unsafe_any_origin()
+        self._ptr = Pointer[CoroHandle, MutUntrackedOrigin](unsafe_from_address=Int(unsafe_alloc[CoroHandle](1)))
         var h = CoroHandle(body, user_data, stack_size)
         self._ptr.unsafe_write(h^)
 
@@ -93,7 +93,7 @@ struct TestCoro(Movable):
         """Forward can_resume to the underlying CoroHandle."""
         return self._ptr[].can_resume()
 
-    def raw_ptr(self) -> Pointer[CoroHandle, MutAnyOrigin]:
+    def raw_ptr(self) -> Pointer[CoroHandle, MutUntrackedOrigin]:
         """Access the raw pointer (for tests that need the address)."""
         return self._ptr
 

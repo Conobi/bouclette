@@ -103,7 +103,9 @@ struct ProbeBatch:
             var offset = batches[batch_idx].offset
 
             # Heap-allocate probes for pointer stability (wire_context takes address).
-            var probes = unsafe_alloc[ConnectProbe](batch_size).as_unsafe_any_origin()
+            var probes = Pointer[ConnectProbe, MutUntrackedOrigin](
+                unsafe_from_address=Int(unsafe_alloc[ConnectProbe](batch_size))
+            )
 
             # Initialize all probes (track count for cleanup on failure).
             var initialized = 0
@@ -190,7 +192,7 @@ struct ProbeBatch:
 
     @staticmethod
     def _all_done(
-        probes: Pointer[ConnectProbe, MutAnyOrigin], count: Int
+        probes: Pointer[ConnectProbe, MutUntrackedOrigin], count: Int
     ) -> Bool:
         """Check if all probes in the batch have completed.
 
@@ -208,7 +210,7 @@ struct ProbeBatch:
 
     @staticmethod
     def _drain_batch(
-        probes: Pointer[ConnectProbe, MutAnyOrigin],
+        probes: Pointer[ConnectProbe, MutUntrackedOrigin],
         count: Int,
         mut loop: CompletionLoop,
     ):

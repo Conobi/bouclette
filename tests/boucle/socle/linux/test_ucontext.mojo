@@ -25,7 +25,7 @@ from boucle.socle.linux.mm import (
 from boucle.socle.linux.raw import PAGE_SIZE, UCONTEXT_SIZE
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
-from std.memory.unsafe import unsafe_memset
+from std.memory import unsafe_memset
 from std.testing import assert_equal, assert_true
 from std.ffi import external_call
 
@@ -47,10 +47,10 @@ def _trampoline_write42(args_raw: Int):
     """
     var args = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
     var caller_ctx = Pointer[UInt8, MutUntrackedOrigin](
-        unsafe_from_address=args[0]
+        unsafe_from_address=args[unsafe_offset=0]
     )
     var shared = Pointer[Int, MutUntrackedOrigin](
-        unsafe_from_address=args[1]
+        unsafe_from_address=args[unsafe_offset=1]
     )
     shared[] = 42
     # Swap back to caller — allocate a throwaway save buffer
@@ -67,10 +67,10 @@ def _trampoline_pingpong(args_raw: Int):
     """
     var args = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
     var caller_ctx = Pointer[UInt8, MutUntrackedOrigin](
-        unsafe_from_address=args[0]
+        unsafe_from_address=args[unsafe_offset=0]
     )
     var counter = Pointer[Int, MutUntrackedOrigin](
-        unsafe_from_address=args[1]
+        unsafe_from_address=args[unsafe_offset=1]
     )
 
     # Allocate our own save-context for resumption
@@ -116,8 +116,8 @@ def test_ucontext_round_trip() raises:
 
     # Pack trampoline args: [caller_ctx address, shared address]
     var args = unsafe_alloc[Int](2)
-    args[0] = Int(caller_ctx)
-    args[1] = Int(shared)
+    args[unsafe_offset=0] = Int(caller_ctx)
+    args[unsafe_offset=1] = Int(shared)
 
     # Allocate stack: guard page (PROT_NONE) + usable region (RW)
     var total_size = PAGE_SIZE + STACK_SIZE
@@ -174,8 +174,8 @@ def test_pingpong() raises:
     var coro_ctx = alloc_ucontext()
 
     var args = unsafe_alloc[Int](2)
-    args[0] = Int(caller_ctx)
-    args[1] = Int(counter)
+    args[unsafe_offset=0] = Int(caller_ctx)
+    args[unsafe_offset=1] = Int(counter)
 
     var total_size = PAGE_SIZE + STACK_SIZE
     var stack_mem = mmap_anonymous(

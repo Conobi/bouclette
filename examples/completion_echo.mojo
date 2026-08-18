@@ -45,12 +45,12 @@ struct Slot:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = Pointer[Slot, MutAnyOrigin](
+        var self_ptr = Pointer[Slot, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -92,21 +92,21 @@ def main() raises:
 
     # Wire accept completion.
     var accept_slot = Slot()
-    var accept_ctx = Pointer[NoneType, MutAnyOrigin](
+    var accept_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=accept_slot))
     )
     var accept_cmp = Completion(invoke=Slot.on_complete, context=accept_ctx)
-    var accept_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var accept_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=accept_cmp))
     )
 
     # Wire connect completion.
     var connect_slot = Slot()
-    var connect_ctx = Pointer[NoneType, MutAnyOrigin](
+    var connect_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=connect_slot))
     )
     var connect_cmp = Completion(invoke=Slot.on_complete, context=connect_ctx)
-    var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=connect_cmp))
     )
 
@@ -127,29 +127,29 @@ def main() raises:
 
     # Wire send completion.
     var send_slot = Slot()
-    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+    var send_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_slot))
     )
     var send_cmp = Completion(invoke=Slot.on_complete, context=send_ctx)
-    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var send_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     # Wire recv completion.
     var recv_slot = Slot()
-    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+    var recv_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_slot))
     )
     var recv_cmp = Completion(invoke=Slot.on_complete, context=recv_ctx)
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
-    var msg_ptr = Pointer[UInt8, MutAnyOrigin](
+    var msg_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(_MSG.unsafe_ptr())
     )
     var recv_buf = List[UInt8](length=16, fill=0)
-    var recv_ptr = Pointer[UInt8, MutAnyOrigin](
+    var recv_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(recv_buf.unsafe_ptr())
     )
 
@@ -164,7 +164,7 @@ def main() raises:
 
     # Verify byte content.
     for i in range(_MSG_LEN):
-        assert_equal(Int(recv_buf[i]), Int(_MSG.unsafe_ptr()[i]))
+        assert_equal(Int(recv_buf[i]), Int(_MSG.unsafe_ptr()[unsafe_offset=i]))
 
     # Close the accepted fd; the Socket destructors handle client/server.
     _ = external_call["close", Int32](accepted_fd)

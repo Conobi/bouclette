@@ -47,7 +47,9 @@ def test_property(port_count: Int, concurrency: Int) raises:
 
     # Postcondition: sorted by port ascending
     for i in range(1, len(batch.results())):
-        assert_true(batch.results()[i].port > batch.results()[i - 1].port)
+        var cur_port = batch.results()[i].port
+        var prev_port = batch.results()[i - 1].port
+        assert_true(cur_port > prev_port)
 
 
 def main() raises:

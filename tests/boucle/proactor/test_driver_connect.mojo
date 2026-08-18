@@ -27,12 +27,12 @@ struct ConnectTracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the connect result."""
-        var self_ptr = Pointer[ConnectTracker, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -60,7 +60,7 @@ def test_driver_connect() raises:
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", Pointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutUntrackedOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -78,11 +78,11 @@ def test_driver_connect() raises:
     # Set up driver and completion.
     var driver = IoUringDriver(sq_entries=16)
     var tracker = ConnectTracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=ConnectTracker.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
@@ -107,11 +107,11 @@ def test_driver_connect() raises:
     # --- Test 2: Connect to refused port (ECONNREFUSED) ---
 
     var tracker2 = ConnectTracker()
-    var ctx2 = Pointer[NoneType, MutAnyOrigin](
+    var ctx2 = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker2))
     )
     var cmp2 = Completion(invoke=ConnectTracker.on_complete, context=ctx2)
-    var cmp2_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp2_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp2))
     )
 

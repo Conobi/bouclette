@@ -16,7 +16,7 @@ struct _State:
 
 def _increment_body(mut y: Yielder) raises:
     """Body that increments state.value by 10, yields, then adds 5 more."""
-    var sp = Pointer[_State, MutAnyOrigin](
+    var sp = Pointer[_State, MutUntrackedOrigin](
         unsafe_from_address=Int(y.user_data())
     )
     sp[].value += 10

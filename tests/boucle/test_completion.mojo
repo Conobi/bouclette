@@ -32,12 +32,12 @@ struct Counter:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that increments count and stores result."""
-        var self_ptr = Pointer[Counter, MutAnyOrigin](
+        var self_ptr = Pointer[Counter, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].count += 1
@@ -57,12 +57,12 @@ struct ResultSlot:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = Pointer[ResultSlot, MutAnyOrigin](
+        var self_ptr = Pointer[ResultSlot, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -76,11 +76,11 @@ def test_nop_single() raises:
     """Submit a single NOP and verify the callback fires."""
     var loop = CompletionLoop(sq_entries=8)
     var tracker = Counter()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Counter.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
     loop.submit_nop(cmp_ptr)
@@ -94,11 +94,11 @@ def test_nop_multiple() raises:
     """Submit five NOPs and verify all callbacks fire."""
     var loop = CompletionLoop(sq_entries=8)
     var tracker = Counter()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
 
-    var cmps = _heap_alloc[Completion](5).as_unsafe_any_origin()
+    var cmps = Pointer[Completion, MutUntrackedOrigin](unsafe_from_address=Int(_heap_alloc[Completion](5)))
     for i in range(5):
         cmps.unsafe_offset(i).unsafe_write(Completion(invoke=Counter.on_complete, context=ctx))
 
@@ -117,11 +117,11 @@ def test_nop_batched() raises:
     """Submit 12 NOPs through a 4-entry SQ, ticking between batches."""
     var loop = CompletionLoop(sq_entries=4)
     var tracker = Counter()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
 
-    var cmps = _heap_alloc[Completion](12).as_unsafe_any_origin()
+    var cmps = Pointer[Completion, MutUntrackedOrigin](unsafe_from_address=Int(_heap_alloc[Completion](12)))
     for i in range(12):
         cmps.unsafe_offset(i).unsafe_write(Completion(invoke=Counter.on_complete, context=ctx))
 
@@ -162,27 +162,27 @@ def test_submit_cancel_cancels_pending_recv() raises:
 
     # Wire recv completion.
     var recv_slot = ResultSlot()
-    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+    var recv_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_slot))
     )
     var recv_cmp = Completion(invoke=ResultSlot.on_complete, context=recv_ctx)
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
     # Wire cancel completion.
     var cancel_slot = ResultSlot()
-    var cancel_ctx = Pointer[NoneType, MutAnyOrigin](
+    var cancel_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cancel_slot))
     )
     var cancel_cmp = Completion(invoke=ResultSlot.on_complete, context=cancel_ctx)
-    var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cancel_cmp))
     )
 
     # Submit a recv that will park (no data on the socket).
     var buf = List[UInt8](length=16, fill=0)
-    var buf_ptr = Pointer[UInt8, MutAnyOrigin](
+    var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
     loop.submit_recv(read_fd, buf_ptr, UInt32(16), recv_cmp_ptr)
@@ -235,12 +235,12 @@ struct MultishotTracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that checks IORING_CQE_F_MORE flag."""
-        var self_ptr = Pointer[MultishotTracker, MutAnyOrigin](
+        var self_ptr = Pointer[MultishotTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].count += 1
@@ -289,13 +289,13 @@ def test_accept_multishot_produces_more_flag() raises:
     # Wire the multishot accept completion via IoUringDriver.
     var driver = IoUringDriver(sq_entries=8)
     var tracker = MultishotTracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(
         invoke=MultishotTracker.on_complete, context=ctx
     )
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
     driver.submit_accept_multishot(RawHandle(Int(listen_fd)), cmp_ptr)

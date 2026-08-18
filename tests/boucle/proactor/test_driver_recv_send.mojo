@@ -25,12 +25,12 @@ struct ResultTracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result."""
-        var self_ptr = Pointer[ResultTracker, MutAnyOrigin](
+        var self_ptr = Pointer[ResultTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -50,7 +50,7 @@ def test_driver_recv_send() raises:
     )
     if Int(sp_res) != 0:
         var en = external_call[
-            "__errno_location", Pointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutUntrackedOrigin]
         ]()
         raise String("socketpair failed, errno=") + String(Int(en[]))
 
@@ -76,33 +76,33 @@ def test_driver_recv_send() raises:
 
     # Wire send completion.
     var send_tracker = ResultTracker()
-    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+    var send_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_tracker))
     )
     var send_cmp = Completion(
         invoke=ResultTracker.on_complete, context=send_ctx
     )
-    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var send_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     # Wire recv completion.
     var recv_tracker = ResultTracker()
-    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+    var recv_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_tracker))
     )
     var recv_cmp = Completion(
         invoke=ResultTracker.on_complete, context=recv_ctx
     )
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
-    # Cast buffer pointers to MutAnyOrigin for the driver API.
-    var send_buf_ptr = Pointer[UInt8, MutAnyOrigin](
+    # Cast buffer pointers to MutUntrackedOrigin for the driver API.
+    var send_buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(send_buf)
     )
-    var recv_buf_ptr = Pointer[UInt8, MutAnyOrigin](
+    var recv_buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(recv_buf)
     )
 

@@ -22,17 +22,17 @@ struct CoopTracker:
 
     def wire(mut self):
         """Wire the Completion callback to point at this tracker instance."""
-        self.cmp.context = Pointer[NoneType, MutAnyOrigin](
+        self.cmp.context = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=self))
         )
         self.cmp.invoke = Self._on_nop
 
     @staticmethod
     def _on_nop(
-        ctx: Pointer[NoneType, MutAnyOrigin], result: Int32, flags: UInt32
+        ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int32, flags: UInt32
     ):
         """Completion callback that sets nop_fired=True on the owning tracker."""
-        var self_ptr = Pointer[CoopTracker, MutAnyOrigin](
+        var self_ptr = Pointer[CoopTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].nop_fired = True
@@ -45,7 +45,7 @@ def test_probe_cooperative() raises:
     var tracker = CoopTracker()
     tracker.wire()
     loop.submit_nop(
-        Pointer[Completion, MutAnyOrigin](
+        Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=tracker.cmp))
         )
     )

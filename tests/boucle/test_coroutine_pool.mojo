@@ -23,7 +23,7 @@ struct Counter(Movable):
 
 def _body(mut y: CoroYielder) raises -> None:
     var udata = y.user_data()
-    var ctr = Pointer[Counter, MutAnyOrigin](
+    var ctr = Pointer[Counter, MutUntrackedOrigin](
         unsafe_from_address=Int(udata)
     )
     ctr[].hits += 1

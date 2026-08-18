@@ -27,12 +27,12 @@ struct ConnectResult:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the connect result."""
-        var self_ptr = Pointer[ConnectResult, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectResult, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -56,7 +56,7 @@ def test_completion_connect() raises:
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", Pointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutUntrackedOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -80,11 +80,11 @@ def test_completion_connect() raises:
 
     # Wire completion callback.
     var slot = ConnectResult()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=slot))
     )
     var cmp = Completion(invoke=ConnectResult.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 

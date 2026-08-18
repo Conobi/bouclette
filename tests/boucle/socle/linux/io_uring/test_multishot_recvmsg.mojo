@@ -43,12 +43,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         print(
@@ -78,12 +78,12 @@ struct SimpleResult:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = Pointer[SimpleResult, MutAnyOrigin](
+        var self_ptr = Pointer[SimpleResult, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -142,22 +142,22 @@ def test_multishot_recvmsg() raises:
     comptime BUF_COUNT = 4
     var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT)
     for i in range(BUF_SIZE * BUF_COUNT):
-        pool[i] = 0
+        pool[unsafe_offset=i] = 0
 
     # --- 3. Create IoUringDriver ---
     var driver = IoUringDriver()
 
     # --- 4. Provide buffers ---
     var pb_slot = SimpleResult()
-    var pb_ctx = Pointer[NoneType, MutAnyOrigin](
+    var pb_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=pb_slot))
     )
     var pb_cmp = Completion(invoke=SimpleResult.on_complete, context=pb_ctx)
-    var pb_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var pb_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=pb_cmp))
     )
     driver.provide_buffers(
-        pool.as_unsafe_any_origin(),
+        Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(pool)),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
         group_id=UInt16(0),
@@ -170,23 +170,23 @@ def test_multishot_recvmsg() raises:
     # template msghdr. msg_namelen = 28 for IPv6 peer address.
     var msghdr_mem = _heap_alloc[UInt8](56).as_unsafe_any_origin()
     for i in range(56):
-        msghdr_mem[i] = 0
+        msghdr_mem[unsafe_offset=i] = 0
     # msg_namelen = 28 at offset 8
-    msghdr_mem[8] = 28
+    msghdr_mem[unsafe_offset=8] = 28
 
-    var msghdr_ptr = Pointer[msghdr, MutAnyOrigin](
+    var msghdr_ptr = Pointer[msghdr, MutUntrackedOrigin](
         unsafe_from_address=Int(msghdr_mem)
     )
 
     # --- 6. Submit multishot recvmsg ---
     var tracker = Tracker()
-    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+    var tracker_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=Tracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
     driver.submit_multishot_recvmsg(
@@ -260,22 +260,22 @@ def test_multishot_recvmsg() raises:
     # Read io_uring_recvmsg_out header from pool.unsafe_offset(buf_id * BUF_SIZE)
     var buf_start = pool.unsafe_offset(buf_id * BUF_SIZE)
     var namelen = (
-        Int(buf_start[0])
-        | (Int(buf_start[1]) << 8)
-        | (Int(buf_start[2]) << 16)
-        | (Int(buf_start[3]) << 24)
+        Int(buf_start[unsafe_offset=0])
+        | (Int(buf_start[unsafe_offset=1]) << 8)
+        | (Int(buf_start[unsafe_offset=2]) << 16)
+        | (Int(buf_start[unsafe_offset=3]) << 24)
     )
     var controllen = (
-        Int(buf_start[4])
-        | (Int(buf_start[5]) << 8)
-        | (Int(buf_start[6]) << 16)
-        | (Int(buf_start[7]) << 24)
+        Int(buf_start[unsafe_offset=4])
+        | (Int(buf_start[unsafe_offset=5]) << 8)
+        | (Int(buf_start[unsafe_offset=6]) << 16)
+        | (Int(buf_start[unsafe_offset=7]) << 24)
     )
     var payloadlen = (
-        Int(buf_start[8])
-        | (Int(buf_start[9]) << 8)
-        | (Int(buf_start[10]) << 16)
-        | (Int(buf_start[11]) << 24)
+        Int(buf_start[unsafe_offset=8])
+        | (Int(buf_start[unsafe_offset=9]) << 8)
+        | (Int(buf_start[unsafe_offset=10]) << 16)
+        | (Int(buf_start[unsafe_offset=11]) << 24)
     )
     print(
         "recvmsg_out: namelen=",
@@ -290,11 +290,11 @@ def test_multishot_recvmsg() raises:
     # Read payload after the header (16 bytes) + namelen + controllen
     var payload_offset = 16 + namelen + controllen
     print("payload_offset=", payload_offset)
-    var p0 = buf_start[payload_offset]
-    var p1 = buf_start[payload_offset + 1]
-    var p2 = buf_start[payload_offset + 2]
-    var p3 = buf_start[payload_offset + 3]
-    var p4 = buf_start[payload_offset + 4]
+    var p0 = buf_start[unsafe_offset=payload_offset]
+    var p1 = buf_start[unsafe_offset=payload_offset + 1]
+    var p2 = buf_start[unsafe_offset=payload_offset + 2]
+    var p3 = buf_start[unsafe_offset=payload_offset + 3]
+    var p4 = buf_start[unsafe_offset=payload_offset + 4]
     print(
         "payload: ",
         chr(Int(p0)),

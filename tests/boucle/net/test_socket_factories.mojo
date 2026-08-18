@@ -63,7 +63,7 @@ def _assert_in_listen_state(ref s: Socket) raises:
     )
     assert_equal(Int(res), -1)
     var en = external_call[
-        "__errno_location", Pointer[Int32, MutAnyOrigin]
+        "__errno_location", Pointer[Int32, MutUntrackedOrigin]
     ]()
     assert_equal(Int(en[]), EAGAIN)
 

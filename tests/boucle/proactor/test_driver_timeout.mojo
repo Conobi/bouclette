@@ -29,12 +29,12 @@ struct TimeoutTracker:
 
     @staticmethod
     def on_timeout(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback for the timeout completion."""
-        var self_ptr = Pointer[TimeoutTracker, MutAnyOrigin](
+        var self_ptr = Pointer[TimeoutTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].timeout_result = result
@@ -43,12 +43,12 @@ struct TimeoutTracker:
 
     @staticmethod
     def on_cancel(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback for the cancel completion."""
-        var self_ptr = Pointer[TimeoutTracker, MutAnyOrigin](
+        var self_ptr = Pointer[TimeoutTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].cancel_result = result
@@ -60,7 +60,7 @@ def test_driver_timeout() raises:
     """Submit a 5s timeout, cancel it immediately, verify both CQEs."""
     var driver = IoUringDriver(sq_entries=16)
     var tracker = TimeoutTracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
 
@@ -68,7 +68,7 @@ def test_driver_timeout() raises:
     var timeout_cmp = Completion(
         invoke=TimeoutTracker.on_timeout, context=ctx
     )
-    var timeout_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=timeout_cmp))
     )
 
@@ -76,7 +76,7 @@ def test_driver_timeout() raises:
     var cancel_cmp = Completion(
         invoke=TimeoutTracker.on_cancel, context=ctx
     )
-    var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cancel_cmp))
     )
 

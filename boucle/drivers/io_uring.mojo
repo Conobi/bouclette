@@ -62,14 +62,14 @@ struct IoUringDriver(IoDriver):
             var cqe = cq.__next__()
             if cqe.user_data == 0:
                 continue
-            var cmp = Pointer[Completion, MutAnyOrigin](
+            var cmp = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(cqe.user_data)
             )
             cmp[].fire(cqe.res, UInt32(cqe.flags.value))
         cq^.__deinit__()
 
     def submit_nop(
-        mut self, c: Pointer[Completion, MutAnyOrigin]
+        mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation with the given Completion token.
 
@@ -86,7 +86,7 @@ struct IoUringDriver(IoDriver):
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
         addr_len: UInt64,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a connect on socket `fd` to the given address.
 
@@ -109,7 +109,7 @@ struct IoUringDriver(IoDriver):
     def submit_timeout(
         mut self,
         ts: Pointer[NoneType, ImmStaticOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
@@ -127,8 +127,8 @@ struct IoUringDriver(IoDriver):
 
     def submit_cancel(
         mut self,
-        target: Pointer[Completion, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Cancel a previously submitted operation.
 
@@ -149,7 +149,7 @@ struct IoUringDriver(IoDriver):
     def submit_accept(
         mut self,
         fd: RawHandle,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue an accept on listening socket `fd`.
 
@@ -165,9 +165,9 @@ struct IoUringDriver(IoDriver):
     def submit_recv(
         mut self,
         fd: RawHandle,
-        buf: Pointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutUntrackedOrigin],
         len: UInt32,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a recv from socket `fd` into `buf`.
 
@@ -190,9 +190,9 @@ struct IoUringDriver(IoDriver):
     def submit_send(
         mut self,
         fd: RawHandle,
-        buf: Pointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutUntrackedOrigin],
         len: UInt32,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a send on socket `fd` from `buf`.
 
@@ -215,8 +215,8 @@ struct IoUringDriver(IoDriver):
     def submit_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: Pointer[NoneType, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -237,8 +237,8 @@ struct IoUringDriver(IoDriver):
     def submit_sendmsg(
         mut self,
         fd: RawHandle,
-        msg: Pointer[NoneType, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a sendmsg on socket `fd`.
 
@@ -260,12 +260,12 @@ struct IoUringDriver(IoDriver):
 
     def provide_buffers(
         mut self,
-        buf_base: Pointer[UInt8, MutAnyOrigin],
+        buf_base: Pointer[UInt8, MutUntrackedOrigin],
         buf_size: Int,
         count: Int,
         group_id: UInt16,
         base_buf_id: UInt16,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Register count contiguous buffers with io_uring.
 
@@ -299,7 +299,7 @@ struct IoUringDriver(IoDriver):
         mut self,
         fd: RawHandle,
         buf_group: UInt16,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a multishot recv with provided buffer selection (TCP).
 
@@ -327,7 +327,7 @@ struct IoUringDriver(IoDriver):
     def submit_accept_multishot(
         mut self,
         fd: RawHandle,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a multishot accept on listening socket `fd`.
 
@@ -349,9 +349,9 @@ struct IoUringDriver(IoDriver):
     def submit_multishot_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: Pointer[msghdr, MutAnyOrigin],
+        msg: Pointer[msghdr, MutUntrackedOrigin],
         buf_group: UInt16,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a multishot recvmsg with provided buffer selection.
 
@@ -393,7 +393,7 @@ struct IoUringDriver(IoDriver):
 
     def register_buf_ring(
         mut self,
-        buf_base: Pointer[UInt8, MutAnyOrigin],
+        buf_base: Pointer[UInt8, MutUntrackedOrigin],
         buf_size: UInt32,
         count: Int,
         group_id: UInt16,

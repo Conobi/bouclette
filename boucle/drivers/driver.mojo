@@ -41,7 +41,7 @@ trait IoDriver(Movable):
         ...
 
     def submit_nop(
-        mut self, c: Pointer[Completion, MutAnyOrigin]
+        mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation.
 
@@ -56,7 +56,7 @@ trait IoDriver(Movable):
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
         addr_len: UInt64,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a connect on socket `fd` to the given address.
 
@@ -72,7 +72,7 @@ trait IoDriver(Movable):
     def submit_timeout(
         mut self,
         ts: Pointer[NoneType, ImmStaticOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
@@ -86,8 +86,8 @@ trait IoDriver(Movable):
 
     def submit_cancel(
         mut self,
-        target: Pointer[Completion, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Cancel a previously submitted operation.
 
@@ -106,7 +106,7 @@ trait IoDriver(Movable):
     def submit_accept(
         mut self,
         fd: RawHandle,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue an accept on listening socket `fd`.
 
@@ -122,9 +122,9 @@ trait IoDriver(Movable):
     def submit_recv(
         mut self,
         fd: RawHandle,
-        buf: Pointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutUntrackedOrigin],
         len: UInt32,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a recv from socket `fd` into `buf`.
 
@@ -139,9 +139,9 @@ trait IoDriver(Movable):
     def submit_send(
         mut self,
         fd: RawHandle,
-        buf: Pointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutUntrackedOrigin],
         len: UInt32,
-        c: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a send on socket `fd` from `buf`.
 
@@ -159,8 +159,8 @@ trait IoDriver(Movable):
     def submit_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: Pointer[NoneType, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -176,8 +176,8 @@ trait IoDriver(Movable):
     def submit_sendmsg(
         mut self,
         fd: RawHandle,
-        msg: Pointer[NoneType, MutAnyOrigin],
-        c: Pointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a sendmsg on socket `fd`.
 

@@ -39,12 +39,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         print(
@@ -128,9 +128,9 @@ def test_register_buf_ring() raises:
     # --- 4. Allocate buffer pool: 4 x 1024 ---
     comptime BUF_SIZE = 1024
     comptime BUF_COUNT = 4
-    var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT).as_unsafe_any_origin()
+    var pool = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(_heap_alloc[UInt8](BUF_SIZE * BUF_COUNT)))
     for i in range(BUF_SIZE * BUF_COUNT):
-        pool[i] = UInt8(0)
+        pool[unsafe_offset=i] = UInt8(0)
 
     # --- 5. IoUringDriver + register_buf_ring + submit_recv_multishot ---
     var driver = IoUringDriver()
@@ -145,13 +145,13 @@ def test_register_buf_ring() raises:
 
     # Wire recv multishot completion.
     var tracker = Tracker()
-    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+    var tracker_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=Tracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
     driver.submit_recv_multishot(
@@ -198,11 +198,11 @@ def test_register_buf_ring() raises:
 
     # Payload at offset 0 of selected buffer
     var buf_start = pool.unsafe_offset(buf_id * BUF_SIZE)
-    assert_equal(Int(buf_start[0]), ord("h"))
-    assert_equal(Int(buf_start[1]), ord("e"))
-    assert_equal(Int(buf_start[2]), ord("l"))
-    assert_equal(Int(buf_start[3]), ord("l"))
-    assert_equal(Int(buf_start[4]), ord("o"))
+    assert_equal(Int(buf_start[unsafe_offset=0]), ord("h"))
+    assert_equal(Int(buf_start[unsafe_offset=1]), ord("e"))
+    assert_equal(Int(buf_start[unsafe_offset=2]), ord("l"))
+    assert_equal(Int(buf_start[unsafe_offset=3]), ord("l"))
+    assert_equal(Int(buf_start[unsafe_offset=4]), ord("o"))
 
     # --- 8. Return buffer via add_buffer (userspace store, no SQE) ---
     bring.add_buffer(UInt16(buf_id))
@@ -239,9 +239,9 @@ def test_register_buf_ring() raises:
 
     var buf_id2 = (Int(recv2_flags) >> IORING_CQE_BUFFER_SHIFT) & 0xFFFF
     var buf2_start = pool.unsafe_offset(buf_id2 * BUF_SIZE)
-    assert_equal(Int(buf2_start[0]), ord("h"))
-    assert_equal(Int(buf2_start[1]), ord("i"))
-    assert_equal(Int(buf2_start[2]), ord("!"))
+    assert_equal(Int(buf2_start[unsafe_offset=0]), ord("h"))
+    assert_equal(Int(buf2_start[unsafe_offset=1]), ord("i"))
+    assert_equal(Int(buf2_start[unsafe_offset=2]), ord("!"))
 
     bring.add_buffer(UInt16(buf_id2))
 

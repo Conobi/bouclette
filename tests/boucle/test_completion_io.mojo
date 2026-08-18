@@ -25,12 +25,12 @@ struct IOResult:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the I/O result."""
-        var self_ptr = Pointer[IOResult, MutAnyOrigin](
+        var self_ptr = Pointer[IOResult, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -55,16 +55,16 @@ def test_completion_io() raises:
     # ── Send "hello" through CompletionLoop ──────────────────────────────
 
     var send_slot = IOResult()
-    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+    var send_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_slot))
     )
     var send_cmp = Completion(invoke=IOResult.on_complete, context=send_ctx)
-    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var send_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     var msg = String("hello")
-    var msg_ptr = Pointer[UInt8, MutAnyOrigin](
+    var msg_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
     loop.submit_send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
@@ -76,16 +76,16 @@ def test_completion_io() raises:
     # ── Recv through CompletionLoop ──────────────────────────────────────
 
     var recv_slot = IOResult()
-    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+    var recv_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_slot))
     )
     var recv_cmp = Completion(invoke=IOResult.on_complete, context=recv_ctx)
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
     var buf = List[UInt8](length=16, fill=0)
-    var buf_ptr = Pointer[UInt8, MutAnyOrigin](
+    var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
     loop.submit_recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)

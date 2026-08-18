@@ -24,12 +24,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].called = True
@@ -49,7 +49,7 @@ def test_provide_buffers() raises:
     comptime BUF_COUNT = 4
     var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT)
     for i in range(BUF_SIZE * BUF_COUNT):
-        pool[i] = 0
+        pool[unsafe_offset=i] = 0
 
     print("pool address=", Int(pool))
 
@@ -57,16 +57,16 @@ def test_provide_buffers() raises:
 
     # Wire completion callback.
     var tracker = Tracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     driver.provide_buffers(
-        pool.as_unsafe_any_origin(),
+        Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(pool)),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
         group_id=UInt16(1),

@@ -180,7 +180,7 @@ struct ConnectProbe(Movable):
         # Submit connect SQE.
         var addr_ptr = self._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
-        var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=self._connect_cmp))
         )
         loop.submit_connect(
@@ -191,7 +191,7 @@ struct ConnectProbe(Movable):
         var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
             unsafe_from_address=Int(Pointer(to=self._ts))
         )
-        var timeout_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=self._timeout_cmp))
         )
         loop.submit_timeout(ts_ptr, timeout_cmp_ptr)
@@ -216,12 +216,12 @@ struct ConnectProbe(Movable):
 
         if self._cancel_target == UInt8(1):
             # Cancel the timeout.
-            var target_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(
                     Pointer(to=self._timeout_cmp)
                 )
             )
-            var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(
                     Pointer(to=self._cancel_cmp)
                 )
@@ -229,12 +229,12 @@ struct ConnectProbe(Movable):
             loop.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
         elif self._cancel_target == UInt8(2):
             # Cancel the connect.
-            var target_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(
                     Pointer(to=self._connect_cmp)
                 )
             )
-            var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(
                     Pointer(to=self._cancel_cmp)
                 )

@@ -16,7 +16,7 @@ def test_driver_sq_space() raises:
 
     # After submitting a NOP, space decreases.
     var cmp = Completion()
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
     var space_before = driver.sq_space()

@@ -43,12 +43,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         print(
@@ -78,12 +78,12 @@ struct SimpleResult:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = Pointer[SimpleResult, MutAnyOrigin](
+        var self_ptr = Pointer[SimpleResult, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -168,22 +168,22 @@ def test_multishot_recv() raises:
     comptime BUF_COUNT = 4
     var pool = _heap_alloc[UInt8](BUF_SIZE * BUF_COUNT)
     for i in range(BUF_SIZE * BUF_COUNT):
-        pool[i] = 0
+        pool[unsafe_offset=i] = 0
 
     # --- 5. IoUringDriver + provide_buffers + submit_recv_multishot ---
     var driver = IoUringDriver()
 
     # Wire provide_buffers completion.
     var pb_slot = SimpleResult()
-    var pb_ctx = Pointer[NoneType, MutAnyOrigin](
+    var pb_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=pb_slot))
     )
     var pb_cmp = Completion(invoke=SimpleResult.on_complete, context=pb_ctx)
-    var pb_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var pb_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=pb_cmp))
     )
     driver.provide_buffers(
-        pool.as_unsafe_any_origin(),
+        Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(pool)),
         buf_size=BUF_SIZE,
         count=BUF_COUNT,
         group_id=UInt16(7),
@@ -193,13 +193,13 @@ def test_multishot_recv() raises:
 
     # Wire recv multishot completion.
     var tracker = Tracker()
-    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+    var tracker_ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=Tracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
     driver.submit_recv_multishot(
@@ -262,11 +262,11 @@ def test_multishot_recv() raises:
 
     # Payload at offset 0 of the chosen buffer (no recvmsg_out header)
     var buf_start = pool.unsafe_offset(buf_id * BUF_SIZE)
-    var p0 = buf_start[0]
-    var p1 = buf_start[1]
-    var p2 = buf_start[2]
-    var p3 = buf_start[3]
-    var p4 = buf_start[4]
+    var p0 = buf_start[unsafe_offset=0]
+    var p1 = buf_start[unsafe_offset=1]
+    var p2 = buf_start[unsafe_offset=2]
+    var p3 = buf_start[unsafe_offset=3]
+    var p4 = buf_start[unsafe_offset=4]
     print(
         "payload: ",
         chr(Int(p0)),

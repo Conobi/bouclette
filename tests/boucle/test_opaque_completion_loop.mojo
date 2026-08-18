@@ -25,12 +25,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: Pointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records result into the Tracker."""
-        var self_ptr = Pointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].last_result = result
@@ -42,11 +42,11 @@ def test_nop_single() raises:
     """Submit a single NOP and verify the callback fires."""
     var loop = CompletionLoop(sq_entries=16)
     var tracker = Tracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
@@ -61,7 +61,7 @@ def test_nop_multiple() raises:
     """Submit three NOPs and verify all callbacks fire."""
     var loop = CompletionLoop(sq_entries=16)
     var tracker = Tracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
 
@@ -69,13 +69,13 @@ def test_nop_multiple() raises:
     var cmp2 = Completion(invoke=Tracker.on_complete, context=ctx)
     var cmp3 = Completion(invoke=Tracker.on_complete, context=ctx)
 
-    var p1 = Pointer[Completion, MutAnyOrigin](
+    var p1 = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp1))
     )
-    var p2 = Pointer[Completion, MutAnyOrigin](
+    var p2 = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp2))
     )
-    var p3 = Pointer[Completion, MutAnyOrigin](
+    var p3 = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp3))
     )
 
@@ -91,11 +91,11 @@ def test_run_once() raises:
     """Verify run_once() blocks until a completion fires."""
     var loop = CompletionLoop(sq_entries=16)
     var tracker = Tracker()
-    var ctx = Pointer[NoneType, MutAnyOrigin](
+    var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
