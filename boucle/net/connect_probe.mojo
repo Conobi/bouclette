@@ -14,7 +14,7 @@ issue where SQEs queued during CQE processing are not reliably
 picked up by the kernel on the next submit_and_wait.
 """
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from boucle.socle.ptr import null_ptr
 from boucle.timeout import Timeout
 from boucle.net.socket import Socket
@@ -50,7 +50,7 @@ struct ConnectProbe(Movable):
     var _timeout_cmp: Completion
     var _cancel_cmp: Completion
     var _ts: Timeout
-    var _driver_ptr: UnsafePointer[NoneType, MutAnyOrigin]
+    var _driver_ptr: Pointer[NoneType, MutUntrackedOrigin]
     var _result_value: PortStatus
     var _result_set: Bool
     var _resolved_by: UInt8
@@ -83,7 +83,7 @@ struct ConnectProbe(Movable):
         self._timeout_cmp = Completion()
         self._cancel_cmp = Completion()
         self._ts = Timeout(seconds=Int64(0), nanoseconds=Int64(0))
-        self._driver_ptr = null_ptr[NoneType, MutAnyOrigin]()
+        self._driver_ptr = null_ptr[NoneType, MutUntrackedOrigin]()
         self._result_value = PortStatus.FILTERED
         self._result_set = False
         self._resolved_by = UInt8(0)
@@ -109,7 +109,7 @@ struct ConnectProbe(Movable):
         self._timeout_cmp = Completion()
         self._cancel_cmp = Completion()
         self._ts = Timeout.from_ms(Int64(timeout_ms))
-        self._driver_ptr = null_ptr[NoneType, MutAnyOrigin]()
+        self._driver_ptr = null_ptr[NoneType, MutUntrackedOrigin]()
         self._result_value = PortStatus.FILTERED
         self._result_set = False
         self._resolved_by = UInt8(0)
@@ -118,26 +118,26 @@ struct ConnectProbe(Movable):
         self._total_cqes = 0
         self._done = False
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor.
 
         Args:
-            take: The source ConnectProbe to move from.
+            move: The source ConnectProbe to move from.
         """
-        self.socket = take.socket^
-        self._addr_stor = take._addr_stor
-        self._connect_cmp = take._connect_cmp^
-        self._timeout_cmp = take._timeout_cmp^
-        self._cancel_cmp = take._cancel_cmp^
-        self._ts = take._ts
-        self._driver_ptr = take._driver_ptr
-        self._result_value = take._result_value
-        self._result_set = take._result_set
-        self._resolved_by = take._resolved_by
-        self._cancel_submitted = take._cancel_submitted
-        self._cancel_target = take._cancel_target
-        self._total_cqes = take._total_cqes
-        self._done = take._done
+        self.socket = move.socket^
+        self._addr_stor = move._addr_stor
+        self._connect_cmp = move._connect_cmp^
+        self._timeout_cmp = move._timeout_cmp^
+        self._cancel_cmp = move._cancel_cmp^
+        self._ts = move._ts
+        self._driver_ptr = move._driver_ptr
+        self._result_value = move._result_value
+        self._result_set = move._result_set
+        self._resolved_by = move._resolved_by
+        self._cancel_submitted = move._cancel_submitted
+        self._cancel_target = move._cancel_target
+        self._total_cqes = move._total_cqes
+        self._done = move._done
 
     def wire_context(mut self):
         """Wire completion context pointers and callbacks to self.
@@ -146,8 +146,8 @@ struct ConnectProbe(Movable):
         Sets each Completion's context to point to this probe and assigns
         the appropriate static callback function.
         """
-        var self_ptr = UnsafePointer[NoneType, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self))
+        var self_ptr = Pointer[NoneType, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self))
         )
         self._connect_cmp.context = self_ptr
         self._connect_cmp.invoke = Self._on_connect_cb
@@ -173,26 +173,26 @@ struct ConnectProbe(Movable):
             raise "insufficient SQ space for atomic submit"
 
         # Store loop pointer for cancel submission via flush_cancel.
-        self._driver_ptr = UnsafePointer[NoneType, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=loop))
+        self._driver_ptr = Pointer[NoneType, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=loop))
         )
 
         # Submit connect SQE.
         var addr_ptr = self._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
-        var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self._connect_cmp))
+        var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            unsafe_from_address=Int(Pointer(to=self._connect_cmp))
         )
         loop.submit_connect(
             self.socket.raw(), addr_ptr, addr_len, connect_cmp_ptr
         )
 
         # Submit timeout SQE.
-        var ts_ptr = UnsafePointer[NoneType, StaticConstantOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self._ts))
+        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=self._ts))
         )
-        var timeout_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self._timeout_cmp))
+        var timeout_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+            unsafe_from_address=Int(Pointer(to=self._timeout_cmp))
         )
         loop.submit_timeout(ts_ptr, timeout_cmp_ptr)
 
@@ -216,27 +216,27 @@ struct ConnectProbe(Movable):
 
         if self._cancel_target == UInt8(1):
             # Cancel the timeout.
-            var target_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            var target_cmp_ptr = Pointer[Completion, MutAnyOrigin](
                 unsafe_from_address=Int(
-                    UnsafePointer(to=self._timeout_cmp)
+                    Pointer(to=self._timeout_cmp)
                 )
             )
-            var cancel_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
                 unsafe_from_address=Int(
-                    UnsafePointer(to=self._cancel_cmp)
+                    Pointer(to=self._cancel_cmp)
                 )
             )
             loop.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
         elif self._cancel_target == UInt8(2):
             # Cancel the connect.
-            var target_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            var target_cmp_ptr = Pointer[Completion, MutAnyOrigin](
                 unsafe_from_address=Int(
-                    UnsafePointer(to=self._connect_cmp)
+                    Pointer(to=self._connect_cmp)
                 )
             )
-            var cancel_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
+            var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
                 unsafe_from_address=Int(
-                    UnsafePointer(to=self._cancel_cmp)
+                    Pointer(to=self._cancel_cmp)
                 )
             )
             loop.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
@@ -281,7 +281,7 @@ struct ConnectProbe(Movable):
 
     @staticmethod
     def _on_connect_cb(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
@@ -301,7 +301,7 @@ struct ConnectProbe(Movable):
             result: The io_uring CQE result.
             flags: The io_uring CQE flags.
         """
-        var self_ptr = UnsafePointer[ConnectProbe, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectProbe, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[]._total_cqes += 1
@@ -332,7 +332,7 @@ struct ConnectProbe(Movable):
 
     @staticmethod
     def _on_timeout_cb(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
@@ -352,7 +352,7 @@ struct ConnectProbe(Movable):
             result: The io_uring CQE result.
             flags: The io_uring CQE flags.
         """
-        var self_ptr = UnsafePointer[ConnectProbe, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectProbe, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[]._total_cqes += 1
@@ -383,7 +383,7 @@ struct ConnectProbe(Movable):
 
     @staticmethod
     def _on_cancel_cb(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):
@@ -397,7 +397,7 @@ struct ConnectProbe(Movable):
             result: The io_uring CQE result (ignored).
             flags: The io_uring CQE flags (ignored).
         """
-        var self_ptr = UnsafePointer[ConnectProbe, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectProbe, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[]._total_cqes += 1

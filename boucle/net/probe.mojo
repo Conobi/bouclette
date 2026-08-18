@@ -82,14 +82,14 @@ struct ProbeResult(Movable):
         self.port = port
         self.status = status
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor.
 
         Args:
-            take: The source ProbeResult to move from.
+            move: The source ProbeResult to move from.
         """
-        self.port = take.port
-        self.status = take.status
+        self.port = move.port
+        self.status = move.status
 
 
 def result_from_connect_cqe(result: Int32) -> PortStatus:
@@ -134,14 +134,14 @@ struct BatchSpec(Movable):
         self.offset = offset
         self.size = size
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor.
 
         Args:
-            take: The source BatchSpec to move from.
+            move: The source BatchSpec to move from.
         """
-        self.offset = take.offset
-        self.size = take.size
+        self.offset = move.offset
+        self.size = move.size
 
 
 def compute_batches(*, total: Int, concurrency: Int) -> List[BatchSpec]:

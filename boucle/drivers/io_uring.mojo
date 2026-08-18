@@ -5,9 +5,9 @@ Completion pointer recovery) and submit methods (nop, connect,
 timeout, cancel).
 """
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 
 from boucle.socle.linux.io_uring import IoUring
 from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers
@@ -40,9 +40,9 @@ struct IoUringDriver(IoDriver):
         """
         self._ring = IoUring[](sq_entries=sq_entries)
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self._ring = take._ring^
+        self._ring = move._ring^
 
     def tick(mut self, wait: Bool) raises:
         """Submit pending SQEs and dispatch completed operations.
@@ -62,14 +62,14 @@ struct IoUringDriver(IoDriver):
             var cqe = cq.__next__()
             if cqe.user_data == 0:
                 continue
-            var cmp = UnsafePointer[Completion, MutAnyOrigin](
+            var cmp = Pointer[Completion, MutAnyOrigin](
                 unsafe_from_address=Int(cqe.user_data)
             )
             cmp[].fire(cqe.res, UInt32(cqe.flags.value))
-        cq^.__del__()
+        cq^.__deinit__()
 
     def submit_nop(
-        mut self, c: UnsafePointer[Completion, MutAnyOrigin]
+        mut self, c: Pointer[Completion, MutAnyOrigin]
     ) raises:
         """Queue a no-op operation with the given Completion token.
 
@@ -84,9 +84,9 @@ struct IoUringDriver(IoDriver):
     def submit_connect(
         mut self,
         fd: RawHandle,
-        addr: UnsafePointer[UInt8, StaticConstantOrigin],
+        addr: Pointer[UInt8, ImmStaticOrigin],
         addr_len: UInt64,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a connect on socket `fd` to the given address.
 
@@ -99,7 +99,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var addr_cv = UnsafePointer[c_void, StaticConstantOrigin](
+        var addr_cv = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(addr)
         )
         _ = Connect(sq.__next__(), fd, addr_cv, addr_len).user_data(
@@ -108,8 +108,8 @@ struct IoUringDriver(IoDriver):
 
     def submit_timeout(
         mut self,
-        ts: UnsafePointer[NoneType, StaticConstantOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        ts: Pointer[NoneType, ImmStaticOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
@@ -120,15 +120,15 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var ts_cv = UnsafePointer[c_void, StaticConstantOrigin](
+        var ts_cv = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(ts)
         )
         _ = Timeout(sq.__next__(), ts_cv).user_data(UInt64(Int(c)))
 
     def submit_cancel(
         mut self,
-        target: UnsafePointer[Completion, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        target: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Cancel a previously submitted operation.
 
@@ -149,7 +149,7 @@ struct IoUringDriver(IoDriver):
     def submit_accept(
         mut self,
         fd: RawHandle,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue an accept on listening socket `fd`.
 
@@ -165,9 +165,9 @@ struct IoUringDriver(IoDriver):
     def submit_recv(
         mut self,
         fd: RawHandle,
-        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutAnyOrigin],
         len: UInt32,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a recv from socket `fd` into `buf`.
 
@@ -180,7 +180,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
         )
         _ = Recv(sq.__next__(), fd, buf_ptr, UInt(len)).user_data(
@@ -190,9 +190,9 @@ struct IoUringDriver(IoDriver):
     def submit_send(
         mut self,
         fd: RawHandle,
-        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutAnyOrigin],
         len: UInt32,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a send on socket `fd` from `buf`.
 
@@ -205,7 +205,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
         )
         _ = Send(sq.__next__(), fd, buf_ptr, UInt(len)).user_data(
@@ -215,8 +215,8 @@ struct IoUringDriver(IoDriver):
     def submit_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[NoneType, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -229,7 +229,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
         _ = RecvMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
@@ -237,8 +237,8 @@ struct IoUringDriver(IoDriver):
     def submit_sendmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[NoneType, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a sendmsg on socket `fd`.
 
@@ -253,19 +253,19 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
         _ = SendMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
 
     def provide_buffers(
         mut self,
-        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
+        buf_base: Pointer[UInt8, MutAnyOrigin],
         buf_size: Int,
         count: Int,
         group_id: UInt16,
         base_buf_id: UInt16,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Register count contiguous buffers with io_uring.
 
@@ -283,7 +283,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var buf_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf_base)
         )
         _ = ProvideBuffers(
@@ -299,7 +299,7 @@ struct IoUringDriver(IoDriver):
         mut self,
         fd: RawHandle,
         buf_group: UInt16,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a multishot recv with provided buffer selection (TCP).
 
@@ -317,7 +317,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var null_buf = null_ptr[c_void, StaticConstantOrigin]()
+        var null_buf = null_ptr[c_void, ImmStaticOrigin]()
         _ = Recv(sq.__next__(), fd, null_buf, UInt(0))
             .ioprio(UInt16(IORING_RECV_MULTISHOT))
             .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
@@ -327,7 +327,7 @@ struct IoUringDriver(IoDriver):
     def submit_accept_multishot(
         mut self,
         fd: RawHandle,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a multishot accept on listening socket `fd`.
 
@@ -349,9 +349,9 @@ struct IoUringDriver(IoDriver):
     def submit_multishot_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[msghdr, MutAnyOrigin],
+        msg: Pointer[msghdr, MutAnyOrigin],
         buf_group: UInt16,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a multishot recvmsg with provided buffer selection.
 
@@ -371,7 +371,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var msg_ptr = UnsafePointer[c_void, StaticConstantOrigin](
+        var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
         _ = RecvMsg(sq.__next__(), fd, msg_ptr)
@@ -393,7 +393,7 @@ struct IoUringDriver(IoDriver):
 
     def register_buf_ring(
         mut self,
-        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
+        buf_base: Pointer[UInt8, MutAnyOrigin],
         buf_size: UInt32,
         count: Int,
         group_id: UInt16,
@@ -427,13 +427,19 @@ struct IoUringDriver(IoDriver):
         var ring_bytes = Int(entries) * _IO_URING_BUF_SIZE
         var ring_mem = _heap_alloc[UInt8](ring_bytes).as_unsafe_any_origin()
         for i in range(ring_bytes):
-            ring_mem[i] = UInt8(0)
+            ring_mem[unsafe_offset=i] = UInt8(0)
 
+        var ring_mem_ut = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(ring_mem)
+        )
+        var buf_base_ut = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(buf_base)
+        )
         var bring = BufRing(
-            ring_mem,
+            ring_mem_ut,
             entries,
             group_id,
-            buf_base,
+            buf_base_ut,
             buf_size,
             UInt32(count),
         )

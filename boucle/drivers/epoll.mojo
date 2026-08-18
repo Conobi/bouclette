@@ -6,8 +6,8 @@ monolithic ReadinessLoop so the driver can be tested independently
 and swapped for other backends (kqueue, IOCP) on other platforms.
 """
 
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 
 from boucle.socle.linux.epoll.syscalls import (
     epoll_create,
@@ -34,7 +34,7 @@ struct EpollDriver(ReadinessDriver):
     """
 
     var _epfd: Int32
-    var _events: UnsafePointer[epoll_event, MutUntrackedOrigin]
+    var _events: Pointer[epoll_event, MutUntrackedOrigin]
     var _max_events: Int32
 
     def __init__(out self, *, max_events: Int32 = 64) raises:
@@ -46,21 +46,21 @@ struct EpollDriver(ReadinessDriver):
         """
         self._epfd = epoll_create()
         self._max_events = max_events
-        self._events = alloc[epoll_event](Int(max_events))
+        self._events = unsafe_alloc[epoll_event](Int(max_events))
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self._epfd = take._epfd
-        self._events = take._events
-        self._max_events = take._max_events
+        self._epfd = move._epfd
+        self._events = move._events
+        self._max_events = move._max_events
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Free the event buffer and close the epoll fd.
 
         Errors from close() are detected only in debug builds
         (via debug_assert inside close_unchecked).
         """
-        self._events.free()
+        self._events.unsafe_free()
         close_unchecked(unsafe_fd=self._epfd)
 
     def register(
@@ -130,7 +130,7 @@ struct EpollDriver(ReadinessDriver):
         )
         var result = List[ReadinessEvent](capacity=Int(n))
         for i in range(Int(n)):
-            var ev = self._events[i]
+            var ev = self._events[unsafe_offset=i]
             result.append(
                 ReadinessEvent(Token(ev.data()), Readiness(ev.events))
             )

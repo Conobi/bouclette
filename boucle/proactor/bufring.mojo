@@ -13,8 +13,8 @@ store-release; the kernel reads it with a load-acquire.
 """
 
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.sys.info import size_of
 
 
@@ -84,21 +84,21 @@ struct BufRing(Movable):
     only.
     """
 
-    var ring_addr: UnsafePointer[UInt8, MutAnyOrigin]
+    var ring_addr: Pointer[UInt8, MutUntrackedOrigin]
     var ring_entries: UInt32
     var mask: UInt32
     var bgid: UInt16
-    var buf_base: UnsafePointer[UInt8, MutAnyOrigin]
+    var buf_base: Pointer[UInt8, MutUntrackedOrigin]
     var buf_size: UInt32
     var buf_count: UInt32
     var owns_ring: Bool
 
     def __init__(
         out self,
-        ring_addr: UnsafePointer[UInt8, MutAnyOrigin],
+        ring_addr: Pointer[UInt8, MutUntrackedOrigin],
         ring_entries: UInt32,
         bgid: UInt16,
-        buf_base: UnsafePointer[UInt8, MutAnyOrigin],
+        buf_base: Pointer[UInt8, MutUntrackedOrigin],
         buf_size: UInt32,
         buf_count: UInt32,
     ):
@@ -138,43 +138,43 @@ struct BufRing(Movable):
         buffer ring. The consumer must move-assign the real BufRing into
         place before any add_buffer / buf_base access.
         """
-        self.ring_addr = null_ptr[UInt8, MutAnyOrigin]()
+        self.ring_addr = null_ptr[UInt8, MutUntrackedOrigin]()
         self.ring_entries = UInt32(0)
         self.mask = UInt32(0)
         self.bgid = UInt16(0)
-        self.buf_base = null_ptr[UInt8, MutAnyOrigin]()
+        self.buf_base = null_ptr[UInt8, MutUntrackedOrigin]()
         self.buf_size = UInt32(0)
         self.buf_count = UInt32(0)
         self.owns_ring = False
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self.ring_addr = take.ring_addr
-        self.ring_entries = take.ring_entries
-        self.mask = take.mask
-        self.bgid = take.bgid
-        self.buf_base = take.buf_base
-        self.buf_size = take.buf_size
-        self.buf_count = take.buf_count
-        self.owns_ring = take.owns_ring
-        _ = take.owns_ring
+        self.ring_addr = move.ring_addr
+        self.ring_entries = move.ring_entries
+        self.mask = move.mask
+        self.bgid = move.bgid
+        self.buf_base = move.buf_base
+        self.buf_size = move.buf_size
+        self.buf_count = move.buf_count
+        self.owns_ring = move.owns_ring
+        _ = move.owns_ring
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Free the ring memory if this instance owns it."""
         if self.owns_ring:
-            self.ring_addr.free()
+            self.ring_addr.unsafe_free()
 
     @always_inline
-    def _tail_ptr(self) -> UnsafePointer[UInt16, MutAnyOrigin]:
+    def _tail_ptr(self) -> Pointer[UInt16, MutUntrackedOrigin]:
         """Return a pointer to the ring tail (overlaid in slot 0's resv field)."""
-        return UnsafePointer[UInt16, MutAnyOrigin](
+        return Pointer[UInt16, MutUntrackedOrigin](
             unsafe_from_address=Int(self.ring_addr) + _IO_URING_BUF_TAIL_OFFSET
         )
 
     @always_inline
-    def _entry_ptr(self, slot: UInt32) -> UnsafePointer[UInt8, MutAnyOrigin]:
+    def _entry_ptr(self, slot: UInt32) -> Pointer[UInt8, MutUntrackedOrigin]:
         """Return a pointer to the start of the ring entry at `slot`."""
-        return UnsafePointer[UInt8, MutAnyOrigin](
+        return Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(self.ring_addr) + Int(slot) * _IO_URING_BUF_SIZE
         )
 
@@ -192,15 +192,15 @@ struct BufRing(Movable):
         """
         var ent = self._entry_ptr(slot)
         # Store addr at _BUF_ADDR_OFFSET (8 bytes)
-        UnsafePointer[UInt64, MutAnyOrigin](
+        Pointer[UInt64, MutUntrackedOrigin](
             unsafe_from_address=Int(ent) + _BUF_ADDR_OFFSET
         )[] = addr
         # len at _BUF_LEN_OFFSET (4 bytes)
-        UnsafePointer[UInt32, MutAnyOrigin](
+        Pointer[UInt32, MutUntrackedOrigin](
             unsafe_from_address=Int(ent) + _BUF_LEN_OFFSET
         )[] = len
         # bid at _BUF_BID_OFFSET (2 bytes)
-        UnsafePointer[UInt16, MutAnyOrigin](
+        Pointer[UInt16, MutUntrackedOrigin](
             unsafe_from_address=Int(ent) + _BUF_BID_OFFSET
         )[] = bid
         # resv at _IO_URING_BUF_TAIL_OFFSET -- DO NOT touch when slot == 0

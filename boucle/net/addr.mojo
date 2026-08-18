@@ -13,7 +13,7 @@ Traits
 """
 
 from std.sys.info import align_of, size_of
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 from boucle.net.ip import IpAddrV4, IpAddrV6
 from boucle.net.options import AddrFamily
@@ -32,24 +32,24 @@ from boucle.socle.linux.raw import (
 # ===----------------------------------------------------------------------=== #
 
 
-trait SocketAddr(Defaultable, ImplicitlyDestructible):
+trait SocketAddr(Defaultable, Deinitable, Movable):
     comptime ADDR_LEN: socklen_t
 
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
         ...
 
 
-trait SocketAddrMut(Defaultable, ImplicitlyDestructible):
+trait SocketAddrMut(Defaultable, Deinitable):
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
         ...
 
     def len_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
+    ) -> Pointer[Int8, ImmStaticOrigin]:
         ...
 
 
@@ -85,15 +85,15 @@ struct SocketAddrStorAnyMut[Addr: SocketAddr](SocketAddrMut):
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
         return self.addr.addr_unsafe_ptr()
 
     @always_inline
     def len_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[Int8, StaticConstantOrigin]:
-        return UnsafePointer[Int8, StaticConstantOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self.len))
+    ) -> Pointer[Int8, ImmStaticOrigin]:
+        return Pointer[Int8, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=self.len))
         )
 
 
@@ -115,7 +115,7 @@ struct SocketAddrStorV4(TrivialRegisterPassable, SocketAddr):
 
     @always_inline
     def __init__[
-        origin: ImmutOrigin
+        origin: ImmOrigin
     ](out self, ref [origin] addr: SocketAddrV4):
         comptime assert size_of[Self]() == 16
         comptime assert align_of[Self]() == 4
@@ -125,20 +125,20 @@ struct SocketAddrStorV4(TrivialRegisterPassable, SocketAddr):
 
         self.addr = sockaddr_in()
         self.addr.sin_family = AddrFamily.INET.id
-        self.addr.sin_port = _to_be(addr.port)
+        self.addr.sin_port = _to_be[DType.uint16, 1](addr.port)
         # Reinterpret the 4 octets as a __be32 (network-order u32).
         self.addr.sin_addr_s_addr = (
-            UnsafePointer(to=addr.octets())
-            .bitcast[__be32]()
-            .load[alignment = align_of[addr.Octets]()]()
+            Pointer(to=addr.octets())
+            .unsafe_bitcast[__be32]()
+            .unsafe_load[alignment = align_of[addr.Octets]()]()
         )
 
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
-        return UnsafePointer[UInt8, StaticConstantOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self.addr))
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
+        return Pointer[UInt8, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=self.addr))
         )
 
 
@@ -192,7 +192,7 @@ struct SocketAddrStorV6(TrivialRegisterPassable, SocketAddr):
 
     @always_inline
     def __init__[
-        origin: ImmutOrigin
+        origin: ImmOrigin
     ](out self, ref [origin] addr: SocketAddrV6):
         comptime assert size_of[Self]() == 28
         comptime assert align_of[Self]() == 4
@@ -200,25 +200,25 @@ struct SocketAddrStorV6(TrivialRegisterPassable, SocketAddr):
         # Convert 8x uint16 segments (host order) to big-endian bytes,
         # then pack into four UInt32 fields (sin6_addr_a/b/c/d).
         # _to_be byte-swaps each uint16 to network (big-endian) order.
-        var be_segs = _to_be(addr.segments())
-        var src = UnsafePointer(to=be_segs).bitcast[UInt32]()
+        var be_segs = _to_be[DType.uint16, 8](addr.segments())
+        var src = Pointer(to=be_segs).unsafe_bitcast[UInt32]()
 
         self.addr = sockaddr_in6()
         self.addr.sin6_family = AddrFamily.INET6.id
-        self.addr.sin6_port = _to_be(addr.port)
+        self.addr.sin6_port = _to_be[DType.uint16, 1](addr.port)
         self.addr.sin6_flowinfo = 0
-        self.addr.sin6_addr_a = src[0]
-        self.addr.sin6_addr_b = src[1]
-        self.addr.sin6_addr_c = src[2]
-        self.addr.sin6_addr_d = src[3]
+        self.addr.sin6_addr_a = src[unsafe_offset=0]
+        self.addr.sin6_addr_b = src[unsafe_offset=1]
+        self.addr.sin6_addr_c = src[unsafe_offset=2]
+        self.addr.sin6_addr_d = src[unsafe_offset=3]
         self.addr.sin6_scope_id = addr.scope_id
 
     @always_inline
     def addr_unsafe_ptr(
         ref self,
-    ) -> UnsafePointer[UInt8, StaticConstantOrigin]:
-        return UnsafePointer[UInt8, StaticConstantOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self.addr))
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
+        return Pointer[UInt8, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=self.addr))
         )
 
 

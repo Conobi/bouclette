@@ -5,8 +5,8 @@ concurrency limit. Ensures no FD leaks by draining all in-flight probes
 before destruction, even on exception paths.
 """
 
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from boucle.net.addr import SocketAddrV4
 from boucle.net.probe import (
     PortStatus,
@@ -103,7 +103,7 @@ struct ProbeBatch:
             var offset = batches[batch_idx].offset
 
             # Heap-allocate probes for pointer stability (wire_context takes address).
-            var probes = alloc[ConnectProbe](batch_size).as_unsafe_any_origin()
+            var probes = unsafe_alloc[ConnectProbe](batch_size).as_unsafe_any_origin()
 
             # Initialize all probes (track count for cleanup on failure).
             var initialized = 0
@@ -117,32 +117,32 @@ struct ProbeBatch:
                         self._target.ip.octets[3],
                         port=UInt16(self._ports[port_idx]),
                     )
-                    (probes + i).init_pointee_move(
+                    probes.unsafe_offset(i).unsafe_write(
                         ConnectProbe(target=target, timeout_ms=self._timeout_ms)
                     )
                     initialized += 1
             except e:
                 for j in range(initialized):
-                    (probes + j).destroy_pointee()
-                probes.free()
+                    probes.unsafe_offset(j).unsafe_deinit_pointee()
+                probes.unsafe_free()
                 raise e^
 
             # Wire context (sets up callback pointers to each probe).
             for i in range(batch_size):
-                (probes + i)[].wire_context()
+                probes.unsafe_offset(i)[].wire_context()
 
             # Submit all probes in this batch (track count for drain on failure).
             var submitted = 0
             try:
                 for i in range(batch_size):
-                    (probes + i)[].submit(loop)
+                    probes.unsafe_offset(i)[].submit(loop)
                     submitted += 1
             except e:
                 if submitted > 0:
                     Self._drain_batch(probes, submitted, loop)
                 for i in range(batch_size):
-                    (probes + i).destroy_pointee()
-                probes.free()
+                    probes.unsafe_offset(i).unsafe_deinit_pointee()
+                probes.unsafe_free()
                 raise e^
 
             # Cooperative poll loop with deferred cancel pattern.
@@ -150,32 +150,32 @@ struct ProbeBatch:
                 while not Self._all_done(probes, batch_size):
                     loop.run_once()
                     for i in range(batch_size):
-                        (probes + i)[].flush_cancel(loop)
+                        probes.unsafe_offset(i)[].flush_cancel(loop)
             except e:
                 # Drain all in-flight probes before re-raising.
                 Self._drain_batch(probes, batch_size, loop)
                 for i in range(batch_size):
-                    (probes + i).destroy_pointee()
-                probes.free()
+                    probes.unsafe_offset(i).unsafe_deinit_pointee()
+                probes.unsafe_free()
                 raise e^
 
             # Collect results from completed probes.
             for i in range(batch_size):
                 debug_assert(
-                    (probes + i)[].result_is_set(), "result not set at collection"
+                    probes.unsafe_offset(i)[].result_is_set(), "result not set at collection"
                 )
                 var port_idx = offset + i
                 self._results.append(
                     ProbeResult(
                         port=self._ports[port_idx],
-                        status=(probes + i)[].result_status(),
+                        status=probes.unsafe_offset(i)[].result_status(),
                     )
                 )
 
             # Destroy probes (Socket RAII closes FDs).
             for i in range(batch_size):
-                (probes + i).destroy_pointee()
-            probes.free()
+                probes.unsafe_offset(i).unsafe_deinit_pointee()
+            probes.unsafe_free()
 
         # Sort results by port ascending (insertion sort — small N).
         Self._sort_results(self._results)
@@ -190,7 +190,7 @@ struct ProbeBatch:
 
     @staticmethod
     def _all_done(
-        probes: UnsafePointer[ConnectProbe, MutAnyOrigin], count: Int
+        probes: Pointer[ConnectProbe, MutAnyOrigin], count: Int
     ) -> Bool:
         """Check if all probes in the batch have completed.
 
@@ -202,13 +202,13 @@ struct ProbeBatch:
             True if every probe's is_done() returns True.
         """
         for i in range(count):
-            if not (probes + i)[].is_done():
+            if not probes.unsafe_offset(i)[].is_done():
                 return False
         return True
 
     @staticmethod
     def _drain_batch(
-        probes: UnsafePointer[ConnectProbe, MutAnyOrigin],
+        probes: Pointer[ConnectProbe, MutAnyOrigin],
         count: Int,
         mut loop: CompletionLoop,
     ):
@@ -243,7 +243,7 @@ struct ProbeBatch:
             try:
                 loop.run_once()
                 for i in range(count):
-                    (probes + i)[].flush_cancel(loop)
+                    probes.unsafe_offset(i)[].flush_cancel(loop)
             except:
                 pass
             iters += 1
