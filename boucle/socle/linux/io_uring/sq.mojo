@@ -14,7 +14,7 @@ from boucle.socle.linux.io_uring.types import (
 )
 from boucle.socle.linux.utils import _size_eq, _align_eq
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 @always_inline
@@ -29,13 +29,13 @@ def _nop_data[
 struct Sq[type: SQE, polling: PollingMode](Movable, Sized, Boolable):
     """Submission Queue."""
 
-    var _head: UnsafePointer[UInt32, StaticConstantOrigin]
-    var _tail: UnsafePointer[UInt32, StaticConstantOrigin]
-    var _flags: UnsafePointer[UInt32, StaticConstantOrigin]
-    var dropped: UnsafePointer[UInt32, StaticConstantOrigin]
+    var _head: Pointer[UInt32, ImmStaticOrigin]
+    var _tail: Pointer[UInt32, ImmStaticOrigin]
+    var _flags: Pointer[UInt32, ImmStaticOrigin]
+    var dropped: Pointer[UInt32, ImmStaticOrigin]
 
-    var array: UnsafePointer[UInt32, StaticConstantOrigin]
-    var sqes: UnsafePointer[Sqe[Self.type], StaticConstantOrigin]
+    var array: Pointer[UInt32, ImmStaticOrigin]
+    var sqes: Pointer[Sqe[Self.type], ImmStaticOrigin]
 
     var sqe_head: UInt32
     var sqe_tail: UInt32
@@ -85,14 +85,14 @@ struct Sq[type: SQE, polling: PollingMode](Movable, Sized, Boolable):
             raise "invalid sq ring_mask value"
 
         if params.flags & IoUringSetupFlags.NO_SQARRAY:
-            self.array = null_ptr[UInt32, StaticConstantOrigin]()
+            self.array = null_ptr[UInt32, ImmStaticOrigin]()
         else:
             self.array = sq_cq_mem.unsafe_ptr[UInt32](
                 offset=params.sq_off.array, count=self.ring_entries
             )
             # Directly map `sq` slots to `sqes`.
             for i in range(self.ring_entries):
-                _atomic_store(self.array + i, UInt32(i))
+                _atomic_store(self.array.unsafe_offset(i), UInt32(i))
 
         self.sqes = sqes_mem.unsafe_ptr[Sqe[Self.type]](
             offset=0, count=self.ring_entries
@@ -101,22 +101,22 @@ struct Sq[type: SQE, polling: PollingMode](Movable, Sized, Boolable):
         self.sqe_tail = self._tail[]
 
     @always_inline
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Moves data of an existing Sq into a new one.
 
         Args:
-            take: The existing Sq.
+            move: The existing Sq.
         """
-        self._head = take._head
-        self._tail = take._tail
-        self._flags = take._flags
-        self.dropped = take.dropped
-        self.array = take.array
-        self.sqes = take.sqes
-        self.sqe_head = take.sqe_head
-        self.sqe_tail = take.sqe_tail
-        self.ring_mask = take.ring_mask
-        self.ring_entries = take.ring_entries
+        self._head = move._head
+        self._tail = move._tail
+        self._flags = move._flags
+        self.dropped = move.dropped
+        self.array = move.array
+        self.sqes = move.sqes
+        self.sqe_head = move.sqe_head
+        self.sqe_tail = move.sqe_tail
+        self.ring_mask = move.ring_mask
+        self.ring_entries = move.ring_entries
 
     # ===-------------------------------------------------------------------===#
     # Trait implementations
@@ -210,9 +210,9 @@ struct SqPtr[type: SQE, polling: PollingMode, sq_origin: MutOrigin](
     def __next__[
         origin: MutOrigin
     ](ref [origin]self) -> ref [origin] Sqe[Self.type]:
-        ptr = self.sq[].sqes + (self.sq[].sqe_tail & self.sq[].ring_mask)
+        var ptr = self.sq[].sqes.unsafe_offset(self.sq[].sqe_tail & self.sq[].ring_mask)
         self.sq[].sqe_tail += 1
-        mut_ptr = rebind[UnsafePointer[Sqe[Self.type], origin]](ptr)
+        var mut_ptr = rebind[Pointer[Sqe[Self.type], origin]](ptr)
         return _nop_data(mut_ptr[])
 
     @always_inline

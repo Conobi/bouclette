@@ -1,4 +1,4 @@
-"""io_uring syscall wrappers and kernel type definitions.
+"""Io_uring syscall wrappers and kernel type definitions.
 
 Provides the complete set of types and syscall wrappers needed to interact
 with the Linux io_uring interface: flag structs, SQE/CQE structures,
@@ -162,7 +162,7 @@ from boucle.socle.linux.raw import (
 from boucle.socle.linux.raw import syscall
 from boucle.socle.linux.raw.utils import DTypeArray
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 # ===----------------------------------------------------------------------=== #
@@ -865,9 +865,9 @@ struct Sqe[type: SQE](ImplicitlyCopyable, Movable):
 
     @always_inline
     def cmd(
-        mut self: Sqe[SQE128],
-    ) -> ref [self.addr3_or_optval_or_cmd] DTypeArray[DType.uint8, 80]:
-        return UnsafePointer(to=self.addr3_or_optval_or_cmd).bitcast[
+        mut self,
+    ) -> ref [self.addr3_or_optval_or_cmd] DTypeArray[DType.uint8, 80] where Self == Sqe[SQE128]:
+        return Pointer(to=self.addr3_or_optval_or_cmd).unsafe_bitcast[
             DTypeArray[DType.uint8, 80]
         ]()[]
 
@@ -884,8 +884,8 @@ struct Cqe[type: CQE](ImplicitlyCopyable, Movable):
 
     @always_inline
     def cmd(
-        self: Cqe[CQE32],
-    ) -> ref [self._big_cqe] type_of(self._big_cqe):
+        self,
+    ) -> ref [self._big_cqe] type_of(self._big_cqe) where Self == Cqe[CQE32]:
         return self._big_cqe
 
 
@@ -1014,7 +1014,7 @@ struct OwnedFd[is_registered: Bool = False](
         self._fd = unsafe_fd
 
     @always_inline("nodebug")
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Closes/unregisters the file descriptor."""
         comptime if Self.is_registered:
             var op = IoUringRsrcUpdate()
@@ -1030,7 +1030,7 @@ struct OwnedFd[is_registered: Bool = False](
                 # down; only fire the diagnostic for unexpected errors.
                 debug_assert(
                     String(e) == String(-Int(EINVAL)),
-                    "OwnedFd.__del__: io_uring_register failed: " + String(e),
+                    "OwnedFd.__deinit__: io_uring_register failed: " + String(e),
                 )
         else:
             close_unchecked(unsafe_fd=self._fd)
@@ -1058,7 +1058,7 @@ struct OwnedFd[is_registered: Bool = False](
 # ===----------------------------------------------------------------------=== #
 
 
-struct EnterArg[size: UInt, flags: IoUringEnterFlags, origin: ImmutOrigin](
+struct EnterArg[size: UInt, flags: IoUringEnterFlags, origin: ImmOrigin](
     TrivialRegisterPassable,
 ):
     """Argument for `io_uring_enter`.
@@ -1069,19 +1069,19 @@ struct EnterArg[size: UInt, flags: IoUringEnterFlags, origin: ImmutOrigin](
         origin: The origin of the enter argument.
     """
 
-    var arg_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin]
+    var arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin]
 
     @always_inline("nodebug")
     def __init__(
         out self,
         *,
-        arg_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
     ):
         self.arg_unsafe_ptr = arg_unsafe_ptr
 
 
-comptime NO_ENTER_ARG = EnterArg[0, IoUringEnterFlags(), StaticConstantOrigin](
-    arg_unsafe_ptr=null_ptr[c_void, StaticConstantOrigin]()
+comptime NO_ENTER_ARG = EnterArg[0, IoUringEnterFlags(), ImmStaticOrigin](
+    arg_unsafe_ptr=null_ptr[c_void, ImmStaticOrigin]()
 )
 
 
@@ -1111,7 +1111,7 @@ trait AsRegisterArg:
 struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
     var opcode: IoUringRegisterOp
     """The operation code."""
-    var arg_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin]
+    var arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin]
     """The pointer to resources for registration/deregistration."""
     var nr_args: UInt32
     """The number of resources for registration/deregistration."""
@@ -1121,7 +1121,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
         out self,
         *,
         opcode: IoUringRegisterOp,
-        arg_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         nr_args: UInt32,
     ):
         self.opcode = opcode
@@ -1132,7 +1132,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
 struct NoRegisterArg:
     comptime ENABLE_RINGS = RegisterArg[MutAnyOrigin](
         opcode=IoUringRegisterOp.REGISTER_ENABLE_RINGS,
-        arg_unsafe_ptr=null_ptr[c_void, StaticConstantOrigin](),
+        arg_unsafe_ptr=null_ptr[c_void, ImmStaticOrigin](),
         nr_args=0,
     )
 
@@ -1160,12 +1160,12 @@ struct IoUringRsrcUpdate(TrivialRegisterPassable, AsRegisterArg, Defaultable):
         ref [origin] self, *, unsafe_opcode: IoUringRegisterOp
     ) -> RegisterArg[origin]:
         _aligned_u64[Self]()
-        # Bind &self first: inlining UnsafePointer(to=self) into the
+        # Bind &self first: inlining Pointer(to=self) into the
         # constructor arg list risks losing the stack address mid-marshal.
-        var self_p = UnsafePointer(to=self)
+        var self_p = Pointer(to=self)
         return RegisterArg[origin](
             opcode=unsafe_opcode,
-            arg_unsafe_ptr=UnsafePointer[c_void, StaticConstantOrigin](
+            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
                 unsafe_from_address=Int(self_p)
             ),
             nr_args=1,
@@ -1213,12 +1213,12 @@ struct IoUringBufReg(AsRegisterArg, Defaultable, ImplicitlyCopyable, Movable):
     ) -> RegisterArg[origin]:
         _size_eq[Self, 40]()
         _align_eq[Self, 8]()
-        # Bind &self first: inlining UnsafePointer(to=self) into the
+        # Bind &self first: inlining Pointer(to=self) into the
         # constructor arg list risks losing the stack address mid-marshal.
-        var self_p = UnsafePointer(to=self)
+        var self_p = Pointer(to=self)
         return RegisterArg[origin](
             opcode=unsafe_opcode,
-            arg_unsafe_ptr=UnsafePointer[c_void, StaticConstantOrigin](
+            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
                 unsafe_from_address=Int(self_p)
             ),
             nr_args=1,
@@ -1257,9 +1257,9 @@ def io_uring_setup[
     """
     params.flags |= OwnedFd[is_registered].SETUP_FLAGS
 
-    # Bind the &params local first: inlining UnsafePointer(to=params) into the
+    # Bind the &params local first: inlining Pointer(to=params) into the
     # syscall arg list can let the stack slot be clobbered during marshaling.
-    var params_p = UnsafePointer(to=params)
+    var params_p = Pointer(to=params)
     var res = syscall[__NR_io_uring_setup, Scalar[DType.int64]](
         sq_entries, params_p
     )

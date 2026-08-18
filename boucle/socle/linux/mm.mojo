@@ -56,7 +56,7 @@ from boucle.socle.linux.raw import (
 from boucle.socle.linux.raw import syscall
 from boucle.socle.linux.raw.utils import is_64bit
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 @always_inline
@@ -68,13 +68,13 @@ def get_page_size() -> UInt:
 @always_inline
 def mmap(
     *,
-    unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+    unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
     len: UInt,
     prot: ProtFlags,
     flags: MapFlags,
     fd: Int32,
     offset: UInt64,
-) raises -> UnsafePointer[c_void, StaticConstantOrigin]:
+) raises -> Pointer[c_void, ImmStaticOrigin]:
     """Unsafely creates a file-backed memory mapping.
     [Linux]: https://man7.org/linux/man-pages/man2/mmap.2.html.
 
@@ -98,7 +98,7 @@ def mmap(
     """
     comptime assert is_64bit()
 
-    var res = syscall[__NR_mmap, UnsafePointer[c_void, StaticConstantOrigin]](
+    var res = syscall[__NR_mmap, Pointer[c_void, ImmStaticOrigin]](
         unsafe_ptr, len, prot, flags, fd, offset
     )
     unsafe_decode_ptr(res)
@@ -111,7 +111,7 @@ def mmap_anonymous(
     len: UInt,
     prot: ProtFlags,
     flags: MapFlags,
-) raises -> UnsafePointer[c_void, StaticConstantOrigin]:
+) raises -> Pointer[c_void, ImmStaticOrigin]:
     """Unsafely creates an anonymous memory mapping.
     [Linux]: https://man7.org/linux/man-pages/man2/mmap.2.html.
 
@@ -134,8 +134,8 @@ def mmap_anonymous(
     """
     comptime assert is_64bit()
 
-    var null_addr = null_ptr[c_void, StaticConstantOrigin]()
-    var res = syscall[__NR_mmap, UnsafePointer[c_void, StaticConstantOrigin]](
+    var null_addr = null_ptr[c_void, ImmStaticOrigin]()
+    var res = syscall[__NR_mmap, Pointer[c_void, ImmStaticOrigin]](
         null_addr, len, prot, flags | MapFlags(MAP_ANONYMOUS), Int32(-1), UInt64(0)
     )
     unsafe_decode_ptr(res)
@@ -143,7 +143,7 @@ def mmap_anonymous(
 
 
 @always_inline
-def munmap(*, unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin], len: UInt) raises:
+def munmap(*, unsafe_ptr: Pointer[c_void, ImmStaticOrigin], len: UInt) raises:
     """Unsafely removes a memory mapping.
     [Linux]: https://man7.org/linux/man-pages/man2/mmap.2.html.
 
@@ -165,7 +165,7 @@ def munmap(*, unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin], len: UInt
 
 @always_inline
 def madvise(
-    *, unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin], len: UInt, advice: Advice
+    *, unsafe_ptr: Pointer[c_void, ImmStaticOrigin], len: UInt, advice: Advice
 ) raises:
     """Unsafely declares the expected access pattern for the memory mapping.
     [Linux]: https://man7.org/linux/man-pages/man2/madvise.2.html.
@@ -189,7 +189,7 @@ def madvise(
 
 @always_inline
 def mprotect(
-    *, unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin], len: UInt, prot: ProtFlags
+    *, unsafe_ptr: Pointer[c_void, ImmStaticOrigin], len: UInt, prot: ProtFlags
 ) raises:
     """Changes the access protections for a memory region.
     [Linux]: https://man7.org/linux/man-pages/man2/mprotect.2.html.

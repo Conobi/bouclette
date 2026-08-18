@@ -52,7 +52,7 @@ struct IoUring[
         self = Self(sq_entries=sq_entries, params=Params())
 
     def __init__(out self, *, sq_entries: UInt32, params: Params) raises:
-        io_uring_params = IoUringParams()
+        var io_uring_params = IoUringParams()
         io_uring_params.cq_entries = params._cq_entries
         io_uring_params.flags = params.flags
         io_uring_params.sq_thread_cpu = params.sq_thread_cpu
@@ -73,17 +73,17 @@ struct IoUring[
             self.mem = MemoryMapping[Self.sqe, Self.cqe](sq_entries, params)
             self.fd = io_uring_setup[Self.is_registered](sq_entries, params)
         else:
-            fd = io_uring_setup[Self.is_registered](sq_entries, params)
+            var fd = io_uring_setup[Self.is_registered](sq_entries, params)
             if not params.features & IoUringFeatureFlags.SINGLE_MMAP:
                 raise "system outdated"
-            sq_len = _checked_add(params.sq_off.array, _checked_mul(params.sq_entries, UInt32(size_of[UInt32]())))
-            cq_len = _checked_add(params.cq_off.cqes, _checked_mul(params.cq_entries, UInt32(Self.cqe.size)))
-            sq_cq_mem = Region(
+            var sq_len = _checked_add(params.sq_off.array, _checked_mul(params.sq_entries, UInt32(size_of[UInt32]())))
+            var cq_len = _checked_add(params.cq_off.cqes, _checked_mul(params.cq_entries, UInt32(Self.cqe.size)))
+            var sq_cq_mem = Region(
                 fd=fd.unsafe_fd(),
                 offset=IORING_OFF_SQ_RING,
                 len=UInt(max(sq_len, cq_len)),
             )
-            sqes_mem = Region(
+            var sqes_mem = Region(
                 fd=fd.unsafe_fd(),
                 offset=IORING_OFF_SQES,
                 len=UInt(_checked_mul(params.sq_entries, UInt32(Self.sqe.size))),
@@ -100,23 +100,23 @@ struct IoUring[
         )
         self._cq = Cq[Self.cqe](params, sq_cq_mem=self.mem.sq_cq_mem)
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         # Ensure that `MemoryMapping` is released before `self.fd`
         # as it may depend on it.
-        self.mem^.__del__()
-        self.fd^.__del__()
+        self.mem^.__deinit__()
+        self.fd^.__deinit__()
 
     @always_inline
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Moves data of an existing IoUring into a new one.
 
         Args:
-            take: The existing IoUring.
+            move: The existing IoUring.
         """
-        self._sq = take._sq^
-        self._cq = take._cq^
-        self.fd = take.fd^
-        self.mem = take.mem^
+        self._sq = move._sq^
+        self._cq = move._cq^
+        self.fd = move.fd^
+        self.mem = move.mem^
 
     # ===-------------------------------------------------------------------===#
     # Methods
@@ -147,10 +147,10 @@ struct IoUring[
     def submit_and_wait(
         mut self, *, wait_nr: UInt32, arg: EnterArg
     ) raises -> UInt32:
-        submitted = self._sq.flush()
-        flags = IoUringEnterFlags()
+        var submitted = self._sq.flush()
+        var flags = IoUringEnterFlags()
 
-        cq_needs_enter = wait_nr > 0 or self.cq_needs_enter()
+        var cq_needs_enter = wait_nr > 0 or self.cq_needs_enter()
 
         if self.sq_needs_enter(submitted, flags) or cq_needs_enter:
             if cq_needs_enter:

@@ -8,17 +8,17 @@ from boucle.socle.linux.io_uring.types import (
     IoUringParams,
 )
 from boucle.socle.linux.utils import _size_eq, _align_eq
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 struct Cq[type: CQE](Movable, Sized, Boolable):
     """Completion Queue."""
 
-    var _head: UnsafePointer[UInt32, StaticConstantOrigin]
-    var _tail: UnsafePointer[UInt32, StaticConstantOrigin]
-    var flags: UnsafePointer[UInt32, StaticConstantOrigin]
-    var overflow: UnsafePointer[UInt32, StaticConstantOrigin]
-    var cqes: UnsafePointer[Cqe[Self.type], StaticConstantOrigin]
+    var _head: Pointer[UInt32, ImmStaticOrigin]
+    var _tail: Pointer[UInt32, ImmStaticOrigin]
+    var flags: Pointer[UInt32, ImmStaticOrigin]
+    var overflow: Pointer[UInt32, ImmStaticOrigin]
+    var cqes: Pointer[Cqe[Self.type], ImmStaticOrigin]
 
     var cqe_head: UInt32
     var cqe_tail: UInt32
@@ -68,21 +68,21 @@ struct Cq[type: CQE](Movable, Sized, Boolable):
         self.cqe_tail = self._tail[]
 
     @always_inline
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Moves data of an existing Cq into a new one.
 
         Args:
-            take: The existing Cq.
+            move: The existing Cq.
         """
-        self._head = take._head
-        self._tail = take._tail
-        self.flags = take.flags
-        self.overflow = take.overflow
-        self.cqes = take.cqes
-        self.cqe_head = take.cqe_head
-        self.cqe_tail = take.cqe_tail
-        self.ring_mask = take.ring_mask
-        self.ring_entries = take.ring_entries
+        self._head = move._head
+        self._tail = move._tail
+        self.flags = move.flags
+        self.overflow = move.overflow
+        self.cqes = move.cqes
+        self.cqe_head = move.cqe_head
+        self.cqe_tail = move.cqe_tail
+        self.ring_mask = move.ring_mask
+        self.ring_entries = move.ring_entries
 
     # ===-------------------------------------------------------------------===#
     # Trait implementations
@@ -136,7 +136,7 @@ struct CqPtr[type: CQE, cq_origin: MutOrigin](RegisterPassable, Sized, Boolable)
         self.cq = Pointer(to=cq)
 
     @always_inline
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         self.cq[].sync_head()
 
     # ===------------------------------------------------------------------=== #
@@ -153,9 +153,9 @@ struct CqPtr[type: CQE, cq_origin: MutOrigin](RegisterPassable, Sized, Boolable)
     ](ref [origin]self) -> ref [origin] Cqe[
         Self.type
     ]:
-        ptr = self.cq[].cqes + (self.cq[].cqe_head & self.cq[].ring_mask)
+        var ptr = self.cq[].cqes.unsafe_offset(self.cq[].cqe_head & self.cq[].ring_mask)
         self.cq[].cqe_head += 1
-        mut_ptr = rebind[UnsafePointer[Cqe[Self.type], origin]](ptr)
+        var mut_ptr = rebind[Pointer[Cqe[Self.type], origin]](ptr)
         return mut_ptr[]
 
     @always_inline

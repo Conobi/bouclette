@@ -1,6 +1,6 @@
 from std.sys.intrinsics import llvm_intrinsic, unlikely
 from std.sys.info import bit_width_of
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.atomic import Atomic, Ordering
 
 
@@ -36,7 +36,7 @@ struct AtomicOrdering(TrivialRegisterPassable):
 @always_inline("nodebug")
 def _atomic_load[
     type: DType, //, ordering: AtomicOrdering
-](unsafe_ptr: UnsafePointer[Scalar[type], StaticConstantOrigin]) -> Scalar[type]:
+](unsafe_ptr: Pointer[Scalar[type], ImmStaticOrigin]) -> Scalar[type]:
     comptime if ordering is AtomicOrdering.ACQUIRE:
         return Atomic[type].load[ordering = Ordering.ACQUIRE](unsafe_ptr)
     elif ordering is AtomicOrdering.RELAXED:
@@ -48,7 +48,7 @@ def _atomic_load[
 @always_inline("nodebug")
 def _atomic_store[
     type: DType
-](unsafe_ptr: UnsafePointer[Scalar[type], StaticConstantOrigin], rhs: Scalar[type]):
+](unsafe_ptr: Pointer[Scalar[type], ImmStaticOrigin], rhs: Scalar[type]):
     Atomic[type].store[ordering = Ordering.RELEASE](
         unsafe_ptr.unsafe_mut_cast[True](), rhs
     )
@@ -90,12 +90,12 @@ def _one_less_than_next_power_of_two(value: UInt32) -> UInt32:
     if value <= 1:
         return 0
 
-    p = value - 1
+    var p = value - 1
     # Because `p > 0`, it cannot consist entirely of leading zeros.
     # That means the shift is always in-bounds, and some processors
     # (such as Intel pre-Haswell) have more efficient ctlz
     # intrinsics when the argument is non-zero.
-    z = llvm_intrinsic["llvm.ctlz", UInt32, has_side_effect=False](p, True)
+    var z = llvm_intrinsic["llvm.ctlz", UInt32, has_side_effect=False](p, True)
     return UInt32.MAX >> z
 
 @always_inline("nodebug")
@@ -129,7 +129,7 @@ def _checked_add(lhs: UInt32, rhs: UInt32) raises -> UInt32:
     Raises:
         If an overflow occurs.
     """
-    res = _add_with_overflow(lhs, rhs)
+    var res = _add_with_overflow(lhs, rhs)
     if unlikely(res.overflow):
         raise "integer overflow"
     return res.value
@@ -149,7 +149,7 @@ def _checked_mul(lhs: UInt32, rhs: UInt32) raises -> UInt32:
     Raises:
         If an overflow occurs.
     """
-    res = llvm_intrinsic[
+    var res = llvm_intrinsic[
         "llvm.umul.with.overflow",
         _AddOverflowResult,
     ](lhs, rhs)

@@ -33,7 +33,7 @@ def get_errno() -> Int32:
     use `is_eintr` and `unsafe_decode_result` instead.
     """
     return external_call[
-        "__errno_location", UnsafePointer[Int32, MutUntrackedOrigin]
+        "__errno_location", Pointer[Int32, MutUntrackedOrigin]
     ]()[]
 
 
@@ -154,7 +154,7 @@ def unsafe_decode_result[
 
 @always_inline("nodebug")
 def unsafe_decode_ptr(
-    unsafe_ptr: UnsafePointer[Int8, StaticConstantOrigin],
+    unsafe_ptr: Pointer[Int8, ImmStaticOrigin],
 ) raises:
     _check_for_errors(Scalar[DType.int64](Int(unsafe_ptr)))
 

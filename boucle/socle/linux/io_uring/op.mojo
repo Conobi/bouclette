@@ -11,7 +11,7 @@ from boucle.socle.linux.io_uring.types import (
 from boucle.socle.linux.fd import UnsafeFd, NoFd
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 @always_inline
@@ -127,7 +127,7 @@ struct Read[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         _prep_rw(
@@ -144,7 +144,7 @@ struct Read[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -199,7 +199,7 @@ struct Write[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         _prep_rw(
@@ -216,7 +216,7 @@ struct Write[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -261,7 +261,7 @@ struct Recv[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         _prep_rw(
@@ -278,7 +278,7 @@ struct Recv[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -328,7 +328,7 @@ struct RecvMsg[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt = 1,
     ):
         _prep_rw(
@@ -345,7 +345,7 @@ struct RecvMsg[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt = 1,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -395,7 +395,7 @@ struct SendMsg[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt = 1,
     ):
         _prep_rw(
@@ -412,7 +412,7 @@ struct SendMsg[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt = 1,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -452,7 +452,7 @@ struct Send[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         _prep_rw(
@@ -469,7 +469,7 @@ struct Send[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         len: UInt,
     ):
         self = Self(sqe, IoUringFd[False](unsafe_fd=fd), unsafe_ptr, len)
@@ -509,8 +509,8 @@ struct Accept[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         self = Self(
             sqe,
             fd,
-            null_ptr[c_void, StaticConstantOrigin](),
-            null_ptr[c_void, StaticConstantOrigin](),
+            null_ptr[c_void, ImmStaticOrigin](),
+            null_ptr[c_void, ImmStaticOrigin](),
         )
 
     @always_inline
@@ -524,8 +524,8 @@ struct Accept[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        addr_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        addr_len_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        addr_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
+        addr_len_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
     ):
         _prep_addr(
             sqe,
@@ -541,8 +541,8 @@ struct Accept[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        addr_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
-        addr_len_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        addr_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
+        addr_len_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
     ):
         self = Self(
             sqe,
@@ -591,7 +591,7 @@ struct Connect[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: Fd,
-        addr_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        addr_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         addr_len: UInt64,
     ):
         _prep_addr(
@@ -608,7 +608,7 @@ struct Connect[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
-        addr_unsafe_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        addr_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
         addr_len: UInt64,
     ):
         self = Self(
@@ -647,7 +647,7 @@ struct Timeout[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
     def __init__(
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
-        ts_ptr: UnsafePointer[c_void, StaticConstantOrigin],
+        ts_ptr: Pointer[c_void, ImmStaticOrigin],
         count: UInt64 = 0,
     ):
         _prep_rw(
@@ -746,7 +746,7 @@ struct ProvideBuffers[type: SQE, origin: MutOrigin](RegisterPassable, Operation)
     def __init__(
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
-        buf_base: UnsafePointer[c_void, StaticConstantOrigin],
+        buf_base: Pointer[c_void, ImmStaticOrigin],
         buf_size: UInt32,
         count: UInt32,
         group_id: UInt16,

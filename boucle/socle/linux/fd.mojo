@@ -32,7 +32,7 @@ def close(*, unsafe_fd: UnsafeFd) raises:
 def close_unchecked(*, unsafe_fd: UnsafeFd):
     """Closes an unsafe file descriptor without raising.
 
-    Intended for destructor paths (`__del__`) that cannot propagate errors.
+    Intended for destructor paths (`__deinit__`) that cannot propagate errors.
     Uses `debug_assert` for validation — prefer `close` in non-destructor code.
     """
     debug_assert(unsafe_fd > -1, "invalid file descriptor")

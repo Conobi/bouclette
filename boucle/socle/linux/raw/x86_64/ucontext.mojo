@@ -1,4 +1,4 @@
-"""x86_64 glibc ucontext_t layout constants.
+"""X86_64 glibc ucontext_t layout constants.
 
 These offsets are specific to x86_64 Linux with glibc (not musl).
 sizeof(ucontext_t) = 968 on glibc 2.28+.

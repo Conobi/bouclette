@@ -1,4 +1,4 @@
-"""aarch64 glibc ucontext_t layout constants.
+"""Aarch64 glibc ucontext_t layout constants.
 
 Reference: glibc `sysdeps/unix/sysv/linux/aarch64/sys/ucontext.h`.
 

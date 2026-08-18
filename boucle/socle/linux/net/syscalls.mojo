@@ -10,7 +10,7 @@ bridge lives in ``boucle.net.socket``.
 """
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 @always_inline
@@ -37,7 +37,7 @@ def _socket(domain: Int32, type_flags: Int32, protocol: Int32) raises -> Int32:
 @always_inline
 def _bind(
     fd: Int32,
-    addr_ptr: UnsafePointer[UInt8, StaticConstantOrigin],
+    addr_ptr: Pointer[UInt8, ImmStaticOrigin],
     addr_len: Int32,
 ) raises:
     """Bind a socket to an address via bind(2).
@@ -91,9 +91,9 @@ def _setsockopt(
     """
     var val = value
     # Pre-capture the pointer in a named local — passing
-    # UnsafePointer(to=val) inline can clobber val's stack slot
+    # Pointer(to=val) inline can clobber val's stack slot
     # during external_call arg marshaling.
-    var val_p = UnsafePointer(to=val)
+    var val_p = Pointer(to=val)
     var res = external_call["setsockopt", Int32](
         fd,
         level,
@@ -108,7 +108,7 @@ def _setsockopt(
 @always_inline
 def _connect(
     fd: Int32,
-    addr_ptr: UnsafePointer[UInt8, StaticConstantOrigin],
+    addr_ptr: Pointer[UInt8, ImmStaticOrigin],
     addr_len: Int32,
 ) raises:
     """Connect a socket to an address via connect(2).

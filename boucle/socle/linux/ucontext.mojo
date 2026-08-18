@@ -1,12 +1,12 @@
-"""ucontext FFI wrappers for stackful coroutines.
+"""Ucontext FFI wrappers for stackful coroutines.
 
 Calls libc getcontext/swapcontext via external_call.
 Bypasses makecontext entirely by writing gregs[] directly.
 """
 
 from std.ffi import external_call
-from std.memory import UnsafePointer, memset
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer, unsafe_memset
+from std.memory.alloc import unsafe_alloc
 from boucle.socle.linux.raw import (
     UCONTEXT_SIZE,
     UC_STACK_SP_OFFSET,
@@ -20,21 +20,21 @@ from boucle.socle.linux.raw import (
 
 
 @always_inline
-def alloc_ucontext() -> UnsafePointer[UInt8, MutUntrackedOrigin]:
+def alloc_ucontext() -> Pointer[UInt8, MutUntrackedOrigin]:
     """Allocate a zeroed ucontext_t buffer (968 bytes)."""
-    var ctx = alloc[UInt8](UCONTEXT_SIZE)
-    memset(ctx, 0, UCONTEXT_SIZE)
+    var ctx = unsafe_alloc[UInt8](UCONTEXT_SIZE)
+    unsafe_memset(ctx, 0, UCONTEXT_SIZE)
     return ctx
 
 
 @always_inline
-def free_ucontext(ctx: UnsafePointer[UInt8, MutUntrackedOrigin]):
+def free_ucontext(ctx: Pointer[UInt8, MutUntrackedOrigin]):
     """Free a ucontext_t buffer."""
-    ctx.free()
+    ctx.unsafe_free()
 
 
 @always_inline
-def uc_getcontext(ctx: UnsafePointer[UInt8, MutUntrackedOrigin]) raises:
+def uc_getcontext(ctx: Pointer[UInt8, MutUntrackedOrigin]) raises:
     """Initialize a ucontext_t by saving the current context.
 
     Args:
@@ -47,7 +47,7 @@ def uc_getcontext(ctx: UnsafePointer[UInt8, MutUntrackedOrigin]) raises:
 
 @always_inline
 def uc_swapcontext(
-    save_ctx: UnsafePointer[UInt8, MutUntrackedOrigin], load_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
+    save_ctx: Pointer[UInt8, MutUntrackedOrigin], load_ctx: Pointer[UInt8, MutUntrackedOrigin]
 ) raises:
     """Save current context and switch to another.
 
@@ -61,7 +61,7 @@ def uc_swapcontext(
 
 
 def uc_swapcontext_unchecked(
-    save_ctx: UnsafePointer[UInt8, MutUntrackedOrigin], load_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
+    save_ctx: Pointer[UInt8, MutUntrackedOrigin], load_ctx: Pointer[UInt8, MutUntrackedOrigin]
 ):
     """Save current context and switch to another (non-raising).
 
@@ -72,9 +72,9 @@ def uc_swapcontext_unchecked(
 
 
 def setup_context(
-    ctx: UnsafePointer[UInt8, MutUntrackedOrigin],
+    ctx: Pointer[UInt8, MutUntrackedOrigin],
     *,
-    stack_ptr: UnsafePointer[UInt8, MutUntrackedOrigin],
+    stack_ptr: Pointer[UInt8, MutUntrackedOrigin],
     stack_size: UInt,
     entry_addr: Int,
     arg_addr: Int,
@@ -95,11 +95,11 @@ def setup_context(
         arg_addr: First argument value (written to REG_RDI).
     """
     # Write uc_stack fields
-    var ss_sp = (ctx + UC_STACK_SP_OFFSET).bitcast[UnsafePointer[UInt8, MutUntrackedOrigin]]()
+    var ss_sp = ctx.unsafe_offset(UC_STACK_SP_OFFSET).unsafe_bitcast[Pointer[UInt8, MutUntrackedOrigin]]()
     ss_sp[] = stack_ptr
-    var ss_flags = (ctx + UC_STACK_FLAGS_OFFSET).bitcast[Int32]()
+    var ss_flags = ctx.unsafe_offset(UC_STACK_FLAGS_OFFSET).unsafe_bitcast[Int32]()
     ss_flags[] = 0
-    var ss_size = (ctx + UC_STACK_SIZE_OFFSET).bitcast[UInt]()
+    var ss_size = ctx.unsafe_offset(UC_STACK_SIZE_OFFSET).unsafe_bitcast[UInt]()
     ss_size[] = stack_size
 
     # Compute RSP: top of stack, 16-byte aligned, minus 8 for ABI
@@ -108,7 +108,7 @@ def setup_context(
     var rsp = (stack_top & ~0xF) - 8
 
     # Write gregs
-    var gregs = (ctx + UC_GREGS_OFFSET).bitcast[Int64]()
-    gregs[REG_RIP] = Int64(entry_addr)
-    gregs[REG_RSP] = Int64(rsp)
-    gregs[REG_RDI] = Int64(arg_addr)
+    var gregs = ctx.unsafe_offset(UC_GREGS_OFFSET).unsafe_bitcast[Int64]()
+    gregs[unsafe_offset=REG_RIP] = Int64(entry_addr)
+    gregs[unsafe_offset=REG_RSP] = Int64(rsp)
+    gregs[unsafe_offset=REG_RDI] = Int64(arg_addr)

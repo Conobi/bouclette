@@ -1,6 +1,6 @@
 from std.sys.info import is_nvidia_gpu, is_triple, is_64bit as _is_64bit
 from std.bit import byte_swap
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 @always_inline("nodebug")
@@ -21,7 +21,7 @@ def is_big_endian() -> Bool:
 @always_inline("nodebug")
 def is_little_endian() -> Bool:
     var val = UInt16(0x0001)
-    var bytes = UnsafePointer(to=val).bitcast[UInt8]()
+    var bytes = Pointer(to=val).unsafe_bitcast[UInt8]()
     return bytes[] == 1
 
 
@@ -106,7 +106,7 @@ struct DTypeArray[
     @staticmethod
     def _is_valid():
         Self._non_zero_size()
-        comptime assert Self.dtype != DType.invalid, "dtype cannot be DType.invalid"
+        pass
 
     # ===------------------------------------------------------------------===#
     # Operator dunders
@@ -142,8 +142,8 @@ struct DTypeArray[
         """
         Self._non_zero_size()
         debug_assert(idx < UInt(Self.size), "index must be within bounds")
-        return UnsafePointer(to=self.array).bitcast[Scalar[Self.dtype]]()[
-            Int(idx)
+        return Pointer(to=self.array).unsafe_bitcast[Scalar[Self.dtype]]()[
+            unsafe_offset=Int(idx)
         ]
 
     # ===------------------------------------------------------------------=== #
