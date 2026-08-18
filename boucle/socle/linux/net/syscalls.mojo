@@ -12,7 +12,7 @@ bridge lives in ``boucle.net.socket``.
 from std.ffi import external_call
 from std.memory import Pointer
 
-from boucle.socle.linux.raw import MSG_NOSIGNAL, F_GETFL, F_SETFL
+from boucle.socle.linux.raw import MSG_NOSIGNAL, F_GETFL, F_SETFL, socklen_t
 
 
 @always_inline
@@ -271,5 +271,47 @@ def _fcntl_setfl(fd: Int32, flags: Int32) raises:
         On syscall failure.
     """
     var res = external_call["fcntl", Int32](fd, Int32(F_SETFL), flags)
+    if res < 0:
+        raise String(Int(res))
+
+
+@always_inline
+def _getsockname_raw(
+    fd: Int32,
+    addr_p: Pointer[UInt8, MutUntrackedOrigin],
+    len_p: Pointer[socklen_t, MutUntrackedOrigin],
+) raises:
+    """getsockname(2) raw wrapper.
+
+    Args:
+        fd: Socket file descriptor.
+        addr_p: Pointer to the sockaddr buffer.
+        len_p: Pointer to the address length (in/out).
+
+    Raises:
+        On syscall failure.
+    """
+    var res = external_call["getsockname", Int32](fd, addr_p, len_p)
+    if res < 0:
+        raise String(Int(res))
+
+
+@always_inline
+def _getpeername_raw(
+    fd: Int32,
+    addr_p: Pointer[UInt8, MutUntrackedOrigin],
+    len_p: Pointer[socklen_t, MutUntrackedOrigin],
+) raises:
+    """getpeername(2) raw wrapper.
+
+    Args:
+        fd: Socket file descriptor.
+        addr_p: Pointer to the sockaddr buffer.
+        len_p: Pointer to the address length (in/out).
+
+    Raises:
+        On syscall failure.
+    """
+    var res = external_call["getpeername", Int32](fd, addr_p, len_p)
     if res < 0:
         raise String(Int(res))

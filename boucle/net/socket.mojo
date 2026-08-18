@@ -15,8 +15,11 @@ from std.sys.info import size_of
 
 from boucle.handle import RawHandle, OwnedHandle
 from boucle.socle.linux.fd import close as _fd_close
-from boucle.net.addr import SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6
-from boucle.net.ip import IpAddrV6
+from boucle.net.addr import (
+    SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6,
+    SocketAddrStorV4, SocketAddrStorV6,
+)
+from boucle.net.ip import IpAddrV4, IpAddrV6
 from boucle.net.options import (
     AddrFamily,
     SocketType,
@@ -35,9 +38,12 @@ from boucle.socle.linux.net.syscalls import (
     _send,
     _shutdown,
     _setsockopt_timeval,
+    _getsockname_raw,
+    _getpeername_raw,
 )
 from boucle.socle.linux.errno import get_errno
 from boucle.socle.linux.raw import (
+    sockaddr_in,
     sockaddr_in6,
     socklen_t,
     AF_INET,
@@ -50,6 +56,7 @@ from boucle.socle.linux.raw import (
     IPPROTO_IPV6,
     IPV6_V6ONLY,
 )
+from boucle.socle.linux.raw.utils import _to_be
 
 
 # ===----------------------------------------------------------------------=== #
@@ -412,6 +419,47 @@ struct Socket(Movable):
     def shutdown(self, how: Shutdown) raises:
         """Shut down read, write, or both directions."""
         _shutdown(self._handle._raw, how.value)
+
+    def local_addr_v4(self) raises -> SocketAddrStorV4:
+        """Return the local IPv4 address bound to this socket.
+
+        Uses InlineArray as raw buffer to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+        """
+        var buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
+        var addrlen = socklen_t(16)
+        var buf_p = Pointer(to=buf)
+        var len_p = Pointer(to=addrlen)
+        var res = external_call["getsockname", Int32](
+            self._handle._raw, buf_p, len_p,
+        )
+        if res < 0:
+            raise String(Int(-get_errno()))
+        # Parse the raw buffer into a sockaddr_in.
+        var result = SocketAddrStorV4()
+        var src = buf_p.unsafe_bitcast[sockaddr_in]()
+        result.addr = src[]
+        return result
+
+    def local_addr_v6(self) raises -> SocketAddrStorV6:
+        """Return the local IPv6 address bound to this socket.
+
+        Uses InlineArray as raw buffer to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+        """
+        var buf = InlineArray[UInt8, 28](fill=0)  # sizeof(sockaddr_in6)
+        var addrlen = socklen_t(28)
+        var buf_p = Pointer(to=buf)
+        var len_p = Pointer(to=addrlen)
+        var res = external_call["getsockname", Int32](
+            self._handle._raw, buf_p, len_p,
+        )
+        if res < 0:
+            raise String(Int(-get_errno()))
+        var result = SocketAddrStorV6()
+        var src = buf_p.unsafe_bitcast[sockaddr_in6]()
+        result.addr = src[]
+        return result
 
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
