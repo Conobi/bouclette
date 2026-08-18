@@ -85,7 +85,12 @@ def _sys_socket(
 def _sys_bind[Addr: SocketAddrStor](ref handle: OwnedHandle, ref addr: Addr) raises:
     """Bind a socket to a SocketAddrStor address."""
     var stor = addr.addr_stor()
-    _bind(handle.raw(), stor.addr_unsafe_ptr(), Int32(Addr.AddrStorType.ADDR_LEN))
+    # Pre-capture pointer and fd in named locals — passing
+    # Pointer(to=x) inline can clobber x's stack slot during
+    # external_call arg marshaling.
+    var ptr = stor.addr_unsafe_ptr()
+    var fd = handle.raw()
+    _bind(fd, ptr, Int32(Addr.AddrStorType.ADDR_LEN))
 
 
 @always_inline
@@ -96,8 +101,14 @@ def _sys_listen(ref handle: OwnedHandle, backlog: Backlog) raises:
 
 @always_inline
 def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) raises:
-    """Connect a socket to a SocketAddr (storage variant)."""
-    _connect(handle.raw(), addr.addr_unsafe_ptr(), Int32(Addr.ADDR_LEN))
+    """Connect a socket to a SocketAddr (storage variant).
+
+    Pre-captures pointer and fd in named locals to prevent
+    external_call arg marshaling from clobbering the stack slot.
+    """
+    var ptr = addr.addr_unsafe_ptr()
+    var fd = handle.raw()
+    _connect(fd, ptr, Int32(Addr.ADDR_LEN))
 
 
 # ===----------------------------------------------------------------------=== #
@@ -445,9 +456,6 @@ struct Socket(Movable):
         Designed for unconnected UDP sockets — the destination address is
         specified per-call rather than via a prior ``connect(2)``.
 
-        Uses external_call directly to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-
         Args:
             buf: Byte span to send.
             addr: IPv4 destination address (ip + port).
@@ -459,16 +467,19 @@ struct Socket(Movable):
             On syscall failure.
         """
         var stor = addr.addr_stor()
-        var stor_p = Pointer(to=stor)
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var stor_p = Pointer(to=stor.addr)
+        var fd = self._handle._raw
         var n = external_call["sendto", Int](
-            self._handle._raw,
+            fd,
             Pointer[UInt8, ImmStaticOrigin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
             len(buf),
             Int32(MSG_NOSIGNAL),
             stor_p,
-            socklen_t(16),  # sizeof(sockaddr_in)
+            socklen_t(size_of[sockaddr_in]()),
         )
         if n >= 0:
             return n
@@ -484,9 +495,6 @@ struct Socket(Movable):
         read and the sender's ``SocketAddrStorV4`` so the caller can
         reply to the correct peer.
 
-        Uses InlineArray as raw buffer to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-
         Args:
             buf: Mutable byte span to receive into.
 
@@ -496,12 +504,15 @@ struct Socket(Movable):
         Raises:
             On syscall failure.
         """
-        var addr_buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
-        var addrlen = socklen_t(16)
-        var addr_p = Pointer(to=addr_buf)
+        var addr = sockaddr_in()
+        var addrlen = socklen_t(size_of[sockaddr_in]())
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
+        var fd = self._handle._raw
         var n = external_call["recvfrom", Int](
-            self._handle._raw,
+            fd,
             Pointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
@@ -513,10 +524,8 @@ struct Socket(Movable):
         if n < 0:
             var errno = get_errno()
             raise String(Int(-errno))
-        # Parse the raw buffer into a SocketAddrStorV4.
         var result = SocketAddrStorV4()
-        var src = addr_p.unsafe_bitcast[sockaddr_in]()
-        result.addr = src[]
+        result.addr = addr
         return (n, result)
 
     def shutdown(self, how: Shutdown) raises:
@@ -524,84 +533,67 @@ struct Socket(Movable):
         _shutdown(self._handle._raw, how.value)
 
     def local_addr_v4(self) raises -> SocketAddrStorV4:
-        """Return the local IPv4 address bound to this socket.
-
-        Uses InlineArray as raw buffer to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-        """
-        var buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
-        var addrlen = socklen_t(16)
-        var buf_p = Pointer(to=buf)
+        """Return the local IPv4 address bound to this socket."""
+        var addr = sockaddr_in()
+        var addrlen = socklen_t(size_of[sockaddr_in]())
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var res = external_call["getsockname", Int32](
-            self._handle._raw, buf_p, len_p,
-        )
+        var fd = self._handle._raw
+        var res = external_call["getsockname", Int32](fd, addr_p, len_p)
         if res < 0:
             raise String(Int(-get_errno()))
-        # Parse the raw buffer into a sockaddr_in.
         var result = SocketAddrStorV4()
-        var src = buf_p.unsafe_bitcast[sockaddr_in]()
-        result.addr = src[]
+        result.addr = addr
         return result
 
     def local_addr_v6(self) raises -> SocketAddrStorV6:
-        """Return the local IPv6 address bound to this socket.
-
-        Uses InlineArray as raw buffer to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-        """
-        var buf = InlineArray[UInt8, 28](fill=0)  # sizeof(sockaddr_in6)
-        var addrlen = socklen_t(28)
-        var buf_p = Pointer(to=buf)
+        """Return the local IPv6 address bound to this socket."""
+        var addr = sockaddr_in6()
+        var addrlen = socklen_t(size_of[sockaddr_in6]())
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var res = external_call["getsockname", Int32](
-            self._handle._raw, buf_p, len_p,
-        )
+        var fd = self._handle._raw
+        var res = external_call["getsockname", Int32](fd, addr_p, len_p)
         if res < 0:
             raise String(Int(-get_errno()))
         var result = SocketAddrStorV6()
-        var src = buf_p.unsafe_bitcast[sockaddr_in6]()
-        result.addr = src[]
+        result.addr = addr
         return result
 
     def peer_addr_v4(self) raises -> SocketAddrStorV4:
-        """Return the peer IPv4 address of a connected socket.
-
-        Uses InlineArray as raw buffer to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-        """
-        var buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
-        var addrlen = socklen_t(16)
-        var buf_p = Pointer(to=buf)
+        """Return the peer IPv4 address of a connected socket."""
+        var addr = sockaddr_in()
+        var addrlen = socklen_t(size_of[sockaddr_in]())
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var res = external_call["getpeername", Int32](
-            self._handle._raw, buf_p, len_p,
-        )
+        var fd = self._handle._raw
+        var res = external_call["getpeername", Int32](fd, addr_p, len_p)
         if res < 0:
             raise String(Int(-get_errno()))
         var result = SocketAddrStorV4()
-        var src = buf_p.unsafe_bitcast[sockaddr_in]()
-        result.addr = src[]
+        result.addr = addr
         return result
 
     def peer_addr_v6(self) raises -> SocketAddrStorV6:
-        """Return the peer IPv6 address of a connected socket.
-
-        Uses InlineArray as raw buffer to work around the TRP pointer
-        corruption issue in Mojo 1.0.0.
-        """
-        var buf = InlineArray[UInt8, 28](fill=0)  # sizeof(sockaddr_in6)
-        var addrlen = socklen_t(28)
-        var buf_p = Pointer(to=buf)
+        """Return the peer IPv6 address of a connected socket."""
+        var addr = sockaddr_in6()
+        var addrlen = socklen_t(size_of[sockaddr_in6]())
+        # Pre-capture pointers — passing Pointer(to=x) inline can
+        # clobber x's stack slot during external_call arg marshaling.
+        var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var res = external_call["getpeername", Int32](
-            self._handle._raw, buf_p, len_p,
-        )
+        var fd = self._handle._raw
+        var res = external_call["getpeername", Int32](fd, addr_p, len_p)
         if res < 0:
             raise String(Int(-get_errno()))
         var result = SocketAddrStorV6()
-        var src = buf_p.unsafe_bitcast[sockaddr_in6]()
-        result.addr = src[]
+        result.addr = addr
         return result
 
     def close(mut self) raises:

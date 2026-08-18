@@ -4,57 +4,21 @@ Creates two UDP IPv4 sockets: a receiver bound to 127.0.0.1 on an
 ephemeral port, and a sender that uses send_to to deliver a datagram.
 The receiver calls recv_from to read the datagram and verify the
 sender's source address.
-
-Uses external_call for bind to work around the TRP pointer corruption
-issue in Mojo 1.0.0.
 """
 
-from std.ffi import external_call
 from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
-from boucle.handle import OwnedHandle
 from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
-from boucle.net.ip import IpAddrV4
-from boucle.socle.linux.raw import (
-    sockaddr_in,
-    socklen_t,
-    AF_INET,
-)
+from boucle.net.addr import SocketAddrV4
 from boucle.socle.linux.raw.utils import _to_be
-from boucle.socle.linux.errno import get_errno
-
-
-def _bind_v4(ref sock: Socket, ref addr: SocketAddrV4) raises:
-    """Bind a socket to an IPv4 address using external_call directly.
-
-    Works around the TRP pointer corruption issue in Mojo 1.0.0
-    by using InlineArray as intermediate buffer.
-    """
-    var stor = addr.addr_stor()
-    var buf = InlineArray[UInt8, 16](fill=0)
-    var buf_p = Pointer(to=buf)
-    # Copy the sockaddr_in into the raw buffer.
-    var src_p = Pointer(to=stor.addr)
-    var dst = buf_p.unsafe_bitcast[sockaddr_in]()
-    dst[] = src_p[]
-    var res = external_call["bind", Int32](
-        sock.raw(),
-        buf_p,
-        socklen_t(16),
-    )
-    if res < 0:
-        var errno = get_errno()
-        raise String("bind failed: errno=", Int(errno))
 
 
 def main() raises:
     # --- Create UDP receiver socket, bind to 127.0.0.1:0 ---
     var receiver = Socket.udp_v4()
     receiver.set_blocking(True)
-    var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
-    _bind_v4(receiver, bind_addr)
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
 
     # --- Retrieve the ephemeral port assigned by the kernel ---
     var local = receiver.local_addr_v4()
