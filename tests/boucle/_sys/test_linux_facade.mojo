@@ -24,7 +24,7 @@ from boucle._sys.linux import (
 from std.testing import assert_true, assert_false
 
 
-def main() raises:
+def test_linux_facade() raises:
     # fd: comptime aliases and free function reachable
     var fd: UnsafeFd = NoFd
     assert_true(fd == -1)
@@ -50,3 +50,8 @@ def main() raises:
     free_ucontext(ctx)
 
     print("PASS")
+
+
+def main() raises:
+    test_linux_facade()
+    print("PASS: test_linux_facade.mojo")

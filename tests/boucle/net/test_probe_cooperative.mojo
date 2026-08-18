@@ -39,7 +39,7 @@ struct CoopTracker:
         self_ptr[].nop_fired = True
 
 
-def main() raises:
+def test_probe_cooperative() raises:
     var driver = IoUringDriver(sq_entries=256)
     var loop = EventLoop[IoUringDriver](driver^)
 
@@ -68,4 +68,8 @@ def main() raises:
 
     # The NOP should have fired during the batch's cooperative polling.
     assert_true(tracker.nop_fired)
-    print("PASS: test_probe_cooperative")
+
+
+def main() raises:
+    test_probe_cooperative()
+    print("PASS: test_probe_cooperative.mojo")

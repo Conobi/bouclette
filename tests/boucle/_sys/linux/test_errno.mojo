@@ -2,7 +2,7 @@ from boucle._sys.linux.errno import Errno, _check_for_errors
 from std.testing import assert_true, assert_false
 
 
-def main() raises:
+def test_errno() raises:
     # Construction from raw errno number
     var e = Errno(errno=13)
     assert_true(e is Errno.EACCES)
@@ -60,4 +60,7 @@ def main() raises:
         caught_big = True
     assert_true(caught_big)
 
-    print("All errno tests passed.")
+
+def main() raises:
+    test_errno()
+    print("PASS: test_errno.mojo")

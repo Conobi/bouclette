@@ -3,7 +3,7 @@ from std.testing import assert_true
 from std.ffi import external_call
 
 
-def main() raises:
+def test_handle() raises:
     # Dup stdin to get a valid fd (using external_call directly to avoid
     # a Mojo 0.26.2 mojopkg crash when importing from multiple submodules).
     var raw = external_call["dup", Int32](Int32(0))
@@ -26,4 +26,8 @@ def main() raises:
     assert_true(caught_neg)
 
     # handle2 goes out of scope here and __del__ closes the fd automatically.
-    print("All handle tests passed.")
+
+
+def main() raises:
+    test_handle()
+    print("PASS: test_handle.mojo")

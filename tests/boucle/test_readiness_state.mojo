@@ -2,7 +2,7 @@ from boucle.readiness_state import Readiness
 from std.testing import assert_true, assert_false
 
 
-def main() raises:
+def test_readiness_state() raises:
     var r = Readiness(0x001)  # EPOLLIN
     assert_true(r.is_readable())
     assert_false(r.is_writable())
@@ -26,4 +26,7 @@ def main() raises:
     assert_true(rw.is_readable())
     assert_true(rw.is_writable())
 
-    print("All readiness state tests passed.")
+
+def main() raises:
+    test_readiness_state()
+    print("PASS: test_readiness_state.mojo")

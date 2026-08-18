@@ -10,7 +10,7 @@ from boucle._sys.linux.io_uring import (
 from std.testing import assert_true, assert_equal
 
 
-def main() raises:
+def test_setup() raises:
     # --- Test 1: io_uring_setup with 16 entries returns a valid fd ---
     var params = IoUringParams()
     params.flags |= IoUringSetupFlags.NO_SQARRAY
@@ -53,4 +53,7 @@ def main() raises:
             Int(idle), 0, "idle io_uring_enter must not raise or spin"
         )
 
-    print("All io_uring setup tests passed.")
+
+def main() raises:
+    test_setup()
+    print("PASS: test_setup.mojo")

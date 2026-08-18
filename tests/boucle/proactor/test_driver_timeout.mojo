@@ -57,7 +57,7 @@ struct TimeoutTracker:
         self_ptr[].cancel_fired = True
 
 
-def main() raises:
+def test_driver_timeout() raises:
     """Submit a 5s timeout, cancel it immediately, verify both CQEs."""
     var driver = IoUringDriver(sq_entries=16)
     var tracker = TimeoutTracker()
@@ -111,4 +111,7 @@ def main() raises:
         0,
     )
 
-    print("PASS: test_driver_timeout")
+
+def main() raises:
+    test_driver_timeout()
+    print("PASS: test_driver_timeout.mojo")

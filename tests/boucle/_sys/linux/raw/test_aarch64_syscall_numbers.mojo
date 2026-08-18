@@ -29,7 +29,7 @@ from boucle._sys.linux.raw.aarch64.general import (
 from std.testing import assert_equal
 
 
-def main() raises:
+def test_aarch64_syscall_numbers() raises:
     comptime if not is_aarch64:
         print("SKIP: aarch64-only test")
         return
@@ -57,4 +57,7 @@ def main() raises:
     assert_equal(__NR_io_uring_enter, 426)
     assert_equal(__NR_io_uring_register, 427)
 
-    print("All aarch64 syscall number assertions passed.")
+
+def main() raises:
+    test_aarch64_syscall_numbers()
+    print("PASS: test_aarch64_syscall_numbers.mojo")

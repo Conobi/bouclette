@@ -3,7 +3,7 @@ from boucle._sys.linux.errno import Errno
 from std.testing import assert_true, assert_false
 
 
-def main() raises:
+def test_error() raises:
     var would_block = IOError(Errno.EAGAIN)
     assert_true(would_block.is_would_block())
     assert_false(would_block.is_connection_reset())
@@ -29,4 +29,7 @@ def main() raises:
     var interrupted = IOError(Errno.EINTR)
     assert_true(interrupted.is_interrupted())
 
-    print("All error tests passed.")
+
+def main() raises:
+    test_error()
+    print("PASS: test_error.mojo")

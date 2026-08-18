@@ -30,7 +30,7 @@ from boucle._sys.linux.raw import UCONTEXT_SIZE, REG_RIP  # ucontext.mojo
 from std.testing import assert_equal
 
 
-def main() raises:
+def test_facade() raises:
     # Arch-stable Linux ABI values — identical across x86_64 and aarch64.
     assert_equal(EPOLLIN, 0x001, "epoll.mojo: EPOLLIN")
     assert_equal(EAGAIN, 11, "errno.mojo: EAGAIN")
@@ -61,3 +61,8 @@ def main() raises:
     _ = ts
 
     print("PASS")
+
+
+def main() raises:
+    test_facade()
+    print("PASS: test_facade.mojo")

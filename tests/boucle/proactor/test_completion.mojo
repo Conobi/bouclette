@@ -33,7 +33,7 @@ struct Tracker:
         self_ptr[].count += 1
 
 
-def main() raises:
+def test_completion() raises:
     """Exercise Completion fire dispatch."""
     var tracker = Tracker()
     var ctx = UnsafePointer[NoneType, MutAnyOrigin](
@@ -53,4 +53,7 @@ def main() raises:
     assert_equal(tracker.count, 2)
     assert_equal(Int(tracker.last_result), -111)
 
-    print("PASS: test_completion")
+
+def main() raises:
+    test_completion()
+    print("PASS: test_completion.mojo")

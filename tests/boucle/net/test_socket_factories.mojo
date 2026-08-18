@@ -68,7 +68,7 @@ def _assert_in_listen_state(ref s: Socket) raises:
     assert_equal(Int(en[]), EAGAIN)
 
 
-def main() raises:
+def test_socket_factories() raises:
     var tcp = Socket.tcp_listener_v6(0)
     assert_true(tcp.raw() > -1)
     _check_listener_opts(tcp)
@@ -82,4 +82,7 @@ def main() raises:
     var udp_port = _getsockname_port(udp)
     assert_true(udp_port != 0)
 
-    print("All socket factory tests passed.")
+
+def main() raises:
+    test_socket_factories()
+    print("PASS: test_socket_factories.mojo")

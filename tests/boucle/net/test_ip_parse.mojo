@@ -17,7 +17,7 @@ def _reject(s: String) raises:
     assert_true(not r, String("expected reject: ", s))
 
 
-def main() raises:
+def test_ip_parse() raises:
     # Canonical accepts.
     _expect("0.0.0.0", 0, 0, 0, 0)
     _expect("127.0.0.1", 127, 0, 0, 1)
@@ -36,4 +36,7 @@ def main() raises:
     _reject(".1.2.3.4")
     _reject("1.2.3.4 ")
 
-    print("All IP parse tests passed.")
+
+def main() raises:
+    test_ip_parse()
+    print("PASS: test_ip_parse.mojo")

@@ -4,7 +4,7 @@ from boucle._sys.linux.mm import (
 from std.testing import assert_true
 
 
-def main() raises:
+def test_mm() raises:
     # Allocate one page of anonymous memory
     var ptr = mmap_anonymous(
         len=4096,
@@ -22,4 +22,7 @@ def main() raises:
     # Unmap
     munmap(unsafe_ptr=ptr, len=4096)
 
-    print("All mm tests passed.")
+
+def main() raises:
+    test_mm()
+    print("PASS: test_mm.mojo")

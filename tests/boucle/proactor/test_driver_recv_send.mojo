@@ -38,7 +38,7 @@ struct ResultTracker:
         self_ptr[].fired = True
 
 
-def main() raises:
+def test_driver_recv_send() raises:
     """Run recv/send integration test."""
     # Create a connected socket pair (AF_UNIX=1, SOCK_STREAM=1).
     var fds = alloc[Int32](2)
@@ -148,4 +148,7 @@ def main() raises:
     _ = send_cmp
     _ = recv_cmp
 
-    print("PASS: test_driver_recv_send")
+
+def main() raises:
+    test_driver_recv_send()
+    print("PASS: test_driver_recv_send.mojo")

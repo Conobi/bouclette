@@ -13,7 +13,7 @@ from std.testing import assert_true, assert_equal
 comptime __NR_write = 1
 
 
-def main() raises:
+def test_epoll() raises:
     # Create epoll instance
     var epfd = epoll_create()
     assert_true(epfd > -1)
@@ -55,4 +55,7 @@ def main() raises:
     close(unsafe_fd=write_fd)
     close(unsafe_fd=epfd)
 
-    print("All epoll tests passed.")
+
+def main() raises:
+    test_epoll()
+    print("PASS: test_epoll.mojo")

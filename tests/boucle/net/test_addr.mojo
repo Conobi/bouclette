@@ -8,7 +8,7 @@ from std.testing import assert_equal, assert_true
 from std.sys.info import size_of
 
 
-def main() raises:
+def test_addr() raises:
     # --- SocketAddrV4 ---
     var addr4 = SocketAddrV4(127, 0, 0, 1, port=8080)
     assert_equal(addr4.port, UInt16(8080))
@@ -63,4 +63,7 @@ def main() raises:
     var b_addr_d_ptr = UnsafePointer(to=stor6b.addr.sin6_addr_d).bitcast[UInt8]()
     assert_equal(Int(b_addr_d_ptr[3]), 0x01)
 
-    print("All addr tests passed.")
+
+def main() raises:
+    test_addr()
+    print("PASS: test_addr.mojo")

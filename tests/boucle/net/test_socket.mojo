@@ -4,7 +4,7 @@ from boucle.net.options import Backlog
 from std.testing import assert_true
 
 
-def main() raises:
+def test_socket() raises:
     # TCP IPv4
     var tcp4 = Socket.tcp_v4()
     assert_true(tcp4.raw() > -1)
@@ -27,4 +27,7 @@ def main() raises:
     server.bind(addr)
     server.listen(Backlog.DEFAULT)
 
-    print("All socket tests passed.")
+
+def main() raises:
+    test_socket()
+    print("PASS: test_socket.mojo")

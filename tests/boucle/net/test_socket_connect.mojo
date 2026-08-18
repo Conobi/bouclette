@@ -65,7 +65,7 @@ def _recv_byte(fd: Int32) raises -> Int64:
     )
 
 
-def main() raises:
+def test_socket_connect() raises:
     var server = Socket.tcp_v4()
     var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
     server.bind(bind_addr)
@@ -116,4 +116,7 @@ def main() raises:
     assert_equal(udp_recvd, 1)
     assert_equal(udp_rx, UInt8(0x37))
 
-    print("All socket connect tests passed.")
+
+def main() raises:
+    test_socket_connect()
+    print("PASS: test_socket_connect.mojo")

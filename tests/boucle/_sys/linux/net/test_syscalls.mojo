@@ -4,7 +4,7 @@ from boucle.net.options import AddrFamily, SocketType, SocketFlags, Protocol, Ba
 from std.testing import assert_true
 
 
-def main() raises:
+def test_syscalls() raises:
     # Create a TCP socket directly via _sys wrapper
     var tcp = socket(AddrFamily.INET, SocketType.STREAM, Protocol.TCP)
     assert_true(tcp.raw() > -1)
@@ -29,4 +29,7 @@ def main() raises:
     # Listen
     listen(tcp_nb, Backlog.DEFAULT)
 
-    print("All syscall tests passed.")
+
+def main() raises:
+    test_syscalls()
+    print("PASS: test_syscalls.mojo")

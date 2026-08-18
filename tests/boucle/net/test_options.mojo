@@ -5,7 +5,7 @@ from boucle.net.options import (
 from std.testing import assert_equal, assert_true
 
 
-def main() raises:
+def test_options() raises:
     assert_equal(SocketType.STREAM.id, Int32(1))
     assert_equal(SocketType.DGRAM.id, Int32(2))
 
@@ -36,4 +36,7 @@ def main() raises:
 
     assert_equal(Shutdown.RDWR.value, Int32(2))
 
-    print("All options tests passed.")
+
+def main() raises:
+    test_options()
+    print("PASS: test_options.mojo")

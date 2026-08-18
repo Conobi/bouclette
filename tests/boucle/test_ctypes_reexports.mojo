@@ -12,7 +12,7 @@ from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
 
-def main() raises:
+def test_ctypes_reexports() raises:
     # c_void aliases Int8 in the raw layer (LP64 Linux convention used
     # so pointer arithmetic operates in bytes).
     assert_equal(size_of[c_void](), 1)
@@ -27,4 +27,7 @@ def main() raises:
     var v: c_void = 0
     assert_true(Int(v) == 0)
 
-    print("All ctypes re-export tests passed.")
+
+def main() raises:
+    test_ctypes_reexports()
+    print("PASS: test_ctypes_reexports.mojo")

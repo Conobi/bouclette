@@ -2,7 +2,7 @@ from boucle._sys.linux.fd import close, dup, UnsafeFd, NoFd, unsafe_fd_as_arg
 from std.testing import assert_true
 
 
-def main() raises:
+def test_fd() raises:
     # NoFd sentinel is -1
     assert_true(NoFd == -1)
 
@@ -33,4 +33,7 @@ def main() raises:
         caught_close = True
     assert_true(caught_close)
 
-    print("All fd tests passed.")
+
+def main() raises:
+    test_fd()
+    print("PASS: test_fd.mojo")

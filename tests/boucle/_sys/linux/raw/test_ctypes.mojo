@@ -11,7 +11,7 @@ from std.testing import assert_equal
 from std.sys.info import size_of
 
 
-def main() raises:
+def test_ctypes() raises:
     assert_equal(size_of[c_char](), 1)
     assert_equal(size_of[c_schar](), 1)
     assert_equal(size_of[c_uchar](), 1)
@@ -26,4 +26,8 @@ def main() raises:
     assert_equal(size_of[c_float](), 4)
     assert_equal(size_of[c_double](), 8)
     assert_equal(size_of[c_void](), 1)
-    print("All ctypes tests passed.")
+
+
+def main() raises:
+    test_ctypes()
+    print("PASS: test_ctypes.mojo")

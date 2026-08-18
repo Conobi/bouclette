@@ -40,7 +40,7 @@ struct ConnectTracker:
         self_ptr[].fired = True
 
 
-def main() raises:
+def test_driver_connect() raises:
     """Run connect integration tests."""
     # --- Test 1: Connect to open port (success) ---
 
@@ -137,4 +137,7 @@ def main() raises:
     _ = target2_stor
     _ = client2^
 
-    print("PASS: test_driver_connect")
+
+def main() raises:
+    test_driver_connect()
+    print("PASS: test_driver_connect.mojo")

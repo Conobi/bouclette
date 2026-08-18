@@ -40,7 +40,7 @@ struct AcceptTracker:
         self_ptr[].fired = True
 
 
-def main() raises:
+def test_driver_accept() raises:
     """Run accept integration test."""
     # Create a listening TCP socket on loopback ephemeral port.
     var server = Socket.tcp_v4()
@@ -133,4 +133,7 @@ def main() raises:
     _ = client^
     _ = server^
 
-    print("PASS: test_driver_accept")
+
+def main() raises:
+    test_driver_accept()
+    print("PASS: test_driver_accept.mojo")

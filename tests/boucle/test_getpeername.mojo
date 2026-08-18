@@ -40,7 +40,7 @@ def _accept_one(ref server: Socket) raises -> Int32:
     raise String("accept timed out")
 
 
-def main() raises:
+def test_getpeername() raises:
     # --- Test 1: IPv4 getpeername on an accepted connection ---
     var server = Socket.tcp_v4()
     var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
@@ -77,4 +77,7 @@ def main() raises:
         failed = True
     assert_true(failed, "expected getpeername to fail on unconnected socket")
 
-    print("All getpeername tests passed.")
+
+def main() raises:
+    test_getpeername()
+    print("PASS: test_getpeername.mojo")

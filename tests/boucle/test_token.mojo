@@ -2,7 +2,7 @@ from boucle.token import Token
 from std.testing import assert_true, assert_false, assert_equal
 
 
-def main() raises:
+def test_token() raises:
     var t1 = Token(0)
     var t2 = Token(42)
     var t3 = Token(42)
@@ -16,4 +16,7 @@ def main() raises:
     assert_equal(t1.value, UInt64(0))
     assert_equal(t2.value, UInt64(42))
 
-    print("All token tests passed.")
+
+def main() raises:
+    test_token()
+    print("PASS: test_token.mojo")

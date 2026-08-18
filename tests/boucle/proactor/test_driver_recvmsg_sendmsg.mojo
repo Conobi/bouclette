@@ -42,7 +42,7 @@ struct ResultTracker:
         self_ptr[].fired = True
 
 
-def main() raises:
+def test_driver_recvmsg_sendmsg() raises:
     """Run recvmsg/sendmsg integration test."""
     # --- 1. Create two UDP sockets ---
     var fd_a = external_call["socket", Int32](
@@ -259,4 +259,7 @@ def main() raises:
     _ = send_cmp
     _ = recv_cmp
 
-    print("PASS: test_driver_recvmsg_sendmsg")
+
+def main() raises:
+    test_driver_recvmsg_sendmsg()
+    print("PASS: test_driver_recvmsg_sendmsg.mojo")

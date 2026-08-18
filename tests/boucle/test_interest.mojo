@@ -2,7 +2,7 @@ from boucle.interest import Interest
 from std.testing import assert_true, assert_false, assert_equal
 
 
-def main() raises:
+def test_interest() raises:
     assert_true(Interest.READABLE.is_readable())
     assert_false(Interest.READABLE.is_writable())
     assert_true(Interest.WRITABLE.is_writable())
@@ -33,4 +33,7 @@ def main() raises:
     assert_false(Interest.ONESHOT.is_readable())
     assert_false(Interest.ONESHOT.is_writable())
 
-    print("All interest tests passed.")
+
+def main() raises:
+    test_interest()
+    print("PASS: test_interest.mojo")

@@ -35,7 +35,7 @@ struct Tracker:
         self_ptr[].count += 1
 
 
-def main() raises:
+def test_driver_nop() raises:
     """Submit a NOP through IoUringDriver, tick, and verify dispatch."""
     var driver = IoUringDriver(sq_entries=16)
     var tracker = Tracker()
@@ -53,4 +53,7 @@ def main() raises:
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
 
-    print("PASS: test_driver_nop")
+
+def main() raises:
+    test_driver_nop()
+    print("PASS: test_driver_nop.mojo")

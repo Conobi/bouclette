@@ -15,7 +15,7 @@ from std.testing import assert_equal
 from std.sys.info import size_of
 
 
-def main() raises:
+def test_net_structs() raises:
     assert_equal(size_of[in_addr](), 4)
     assert_equal(size_of[sockaddr_in](), 16)
     assert_equal(size_of[in6_addr](), 16)
@@ -48,4 +48,7 @@ def main() raises:
     assert_equal(IPPROTO_TCP, 6)
     assert_equal(IPPROTO_UDP, 17)
 
-    print("All net struct tests passed.")
+
+def main() raises:
+    test_net_structs()
+    print("PASS: test_net_structs.mojo")

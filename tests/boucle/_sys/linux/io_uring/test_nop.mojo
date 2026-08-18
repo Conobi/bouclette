@@ -3,7 +3,7 @@ from boucle._sys.linux.io_uring.op import Nop
 from std.testing import assert_equal
 
 
-def main() raises:
+def test_nop() raises:
     var ring = IoUring[](sq_entries=16)
 
     # Submit 16 NOPs
@@ -27,4 +27,7 @@ def main() raises:
     cq^.__del__()
     assert_equal(completed, to_submit)
 
-    print("All io_uring NOP tests passed.")
+
+def main() raises:
+    test_nop()
+    print("PASS: test_nop.mojo")

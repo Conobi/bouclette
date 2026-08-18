@@ -22,7 +22,7 @@ struct IOTracker(CompletionHandler):
         self.count += 1
 
 
-def main() raises:
+def test_completion_io() raises:
     # Create pipe
     var pipefd = InlineArray[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
@@ -58,4 +58,7 @@ def main() raises:
     _ = external_call["close", Int32](read_fd)
     _ = external_call["close", Int32](write_fd)
 
-    print("All completion I/O tests passed.")
+
+def main() raises:
+    test_completion_io()
+    print("PASS: test_completion_io.mojo")

@@ -4,7 +4,7 @@ from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
 
-def main() raises:
+def test_ops() raises:
     # Create a pipe
     var pipefd = InlineArray[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
@@ -52,4 +52,7 @@ def main() raises:
     _ = external_call["close", Int32](read_fd)
     _ = external_call["close", Int32](write_fd)
 
-    print("All io_uring ops tests passed.")
+
+def main() raises:
+    test_ops()
+    print("PASS: test_ops.mojo")

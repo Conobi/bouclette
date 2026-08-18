@@ -73,7 +73,7 @@ struct MultishotTracker:
         self_ptr[].count += 1
 
 
-def main() raises:
+def test_driver_multishot_recvmsg() raises:
     """Run multishot recvmsg integration test with provided buffer ring."""
     # --- 1. Create two UDP sockets ---
     var fd_recv = external_call["socket", Int32](
@@ -299,4 +299,7 @@ def main() raises:
     _ = recv_cmp
     _ = bufring
 
-    print("PASS: test_driver_multishot_recvmsg")
+
+def main() raises:
+    test_driver_multishot_recvmsg()
+    print("PASS: test_driver_multishot_recvmsg.mojo")

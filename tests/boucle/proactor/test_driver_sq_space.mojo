@@ -7,7 +7,7 @@ from boucle.proactor.completion import Completion
 from boucle.drivers.io_uring import IoUringDriver
 
 
-def main() raises:
+def test_driver_sq_space() raises:
     var driver = IoUringDriver(sq_entries=16)
 
     # Fresh driver should have space.
@@ -29,4 +29,7 @@ def main() raises:
     var space_final = driver.sq_space()
     assert_true(space_final >= space_before)
 
-    print("PASS: test_driver_sq_space")
+
+def main() raises:
+    test_driver_sq_space()
+    print("PASS: test_driver_sq_space.mojo")

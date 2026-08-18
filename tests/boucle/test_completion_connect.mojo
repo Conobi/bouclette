@@ -34,7 +34,7 @@ struct ConnectTracker(CompletionHandler):
         self.count += 1
 
 
-def main() raises:
+def test_completion_connect() raises:
     # Create a listening TCP socket on a loopback ephemeral port.
     var server = Socket.tcp_v4()
     var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
@@ -86,4 +86,7 @@ def main() raises:
     _ = client^
     _ = server^
 
-    print("All completion connect tests passed.")
+
+def main() raises:
+    test_completion_connect()
+    print("PASS: test_completion_connect.mojo")

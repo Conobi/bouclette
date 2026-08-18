@@ -2,7 +2,7 @@ from boucle.net.ip import IpAddrV4, IpAddrV6
 from std.testing import assert_equal
 
 
-def main() raises:
+def test_ip_display() raises:
     # IPv4 canonical decimal form.
     assert_equal(String(IpAddrV4(127, 0, 0, 1)), "127.0.0.1")
     assert_equal(String(IpAddrV4(0, 0, 0, 0)), "0.0.0.0")
@@ -23,4 +23,7 @@ def main() raises:
         "ff02:0:0:0:0:0:0:1",
     )
 
-    print("All IP display tests passed.")
+
+def main() raises:
+    test_ip_display()
+    print("PASS: test_ip_display.mojo")

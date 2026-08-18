@@ -33,7 +33,7 @@ def _check(ref s: Socket, level: Int32, optname: Int32, expected_nonzero: Bool) 
         assert_equal(v, 0)
 
 
-def main() raises:
+def test_socket_setopt() raises:
     var s = Socket.tcp_v6()
 
     _check(s, Int32(SOL_SOCKET), Int32(SO_REUSEADDR), False)
@@ -54,4 +54,7 @@ def main() raises:
     s.set_v6only(False)
     _check(s, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), False)
 
-    print("All socket setopt tests passed.")
+
+def main() raises:
+    test_socket_setopt()
+    print("PASS: test_socket_setopt.mojo")

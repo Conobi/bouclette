@@ -36,7 +36,7 @@ struct Tracker:
         self_ptr[].count += 1
 
 
-def main() raises:
+def test_event_loop() raises:
     """Wrap IoUringDriver in EventLoop, submit NOP, and run_once."""
     var driver = IoUringDriver(sq_entries=16)
     var loop = EventLoop(driver^)
@@ -56,4 +56,7 @@ def main() raises:
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
 
-    print("PASS: test_event_loop")
+
+def main() raises:
+    test_event_loop()
+    print("PASS: test_event_loop.mojo")
