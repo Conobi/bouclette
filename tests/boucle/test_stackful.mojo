@@ -1,7 +1,7 @@
 from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true
 
 
@@ -62,24 +62,24 @@ struct TestCoro(Movable):
     provides the same resume/query API, with explicit cleanup via close().
     """
 
-    var _ptr: UnsafePointer[CoroHandle, MutAnyOrigin]
+    var _ptr: Pointer[CoroHandle, MutAnyOrigin]
 
     def __init__(
         out self,
         body: def (mut CoroYielder) thin raises -> None,
-        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
+        user_data: Pointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
         stack_size: UInt = 65536,
     ) raises:
-        self._ptr = alloc[CoroHandle](1).as_unsafe_any_origin()
+        self._ptr = unsafe_alloc[CoroHandle](1).as_unsafe_any_origin()
         var h = CoroHandle(body, user_data, stack_size)
-        self._ptr.init_pointee_move(h^)
+        self._ptr.unsafe_write(h^)
 
-    def __init__(out self, *, deinit take: Self):
-        self._ptr = take._ptr
+    def __init__(out self, *, deinit move: Self):
+        self._ptr = move._ptr
 
-    def __del__(deinit self):
-        self._ptr.take_pointee().destroy()
-        self._ptr.free()
+    def __deinit__(deinit self):
+        self._ptr.unsafe_take_pointee().destroy()
+        self._ptr.unsafe_free()
 
     def resume(mut self) raises:
         """Forward resume to the underlying CoroHandle."""
@@ -93,7 +93,7 @@ struct TestCoro(Movable):
         """Forward can_resume to the underlying CoroHandle."""
         return self._ptr[].can_resume()
 
-    def raw_ptr(self) -> UnsafePointer[CoroHandle, MutAnyOrigin]:
+    def raw_ptr(self) -> Pointer[CoroHandle, MutAnyOrigin]:
         """Access the raw pointer (for tests that need the address)."""
         return self._ptr
 
@@ -102,26 +102,26 @@ struct TestCoro(Movable):
 
 
 def _single_yield_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_SingleYieldState]()
+    var state = y.user_data().unsafe_bitcast[_SingleYieldState]()
     state[].step = 1
     y.yield_to_caller()
     state[].step = 2
 
 
 def _run_to_completion_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_RunToCompletionState]()
+    var state = y.user_data().unsafe_bitcast[_RunToCompletionState]()
     state[].value = 42
 
 
 def _multiple_yields_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_CounterState]()
+    var state = y.user_data().unsafe_bitcast[_CounterState]()
     for _ in range(5):
         state[].counter += 1
         y.yield_to_caller()
 
 
 def _cumulative_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_CumulativeState]()
+    var state = y.user_data().unsafe_bitcast[_CumulativeState]()
     state[].total += 10
     y.yield_to_caller()
     state[].total += 20
@@ -134,7 +134,7 @@ def _error_immediate_body(mut y: CoroYielder) raises:
 
 
 def _error_after_yield_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_ErrorAfterYieldState]()
+    var state = y.user_data().unsafe_bitcast[_ErrorAfterYieldState]()
     state[].step = 1
     y.yield_to_caller()
     state[].step = 2
@@ -148,13 +148,13 @@ def test_create_destroy() raises:
     var coro = TestCoro(_run_to_completion_body)
     assert_true(coro.can_resume())
     assert_true(not coro.is_done())
-    # coro goes out of scope in CREATED state -- __del__ handles cleanup
+    # coro goes out of scope in CREATED state -- __deinit__ handles cleanup
 
 
 def test_single_yield() raises:
     var state = _SingleYieldState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_single_yield_body, user_data=state_ptr)
     coro.resume()
@@ -166,8 +166,8 @@ def test_single_yield() raises:
 
 def test_run_to_completion() raises:
     var state = _RunToCompletionState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_run_to_completion_body, user_data=state_ptr)
     coro.resume()
@@ -177,8 +177,8 @@ def test_run_to_completion() raises:
 
 def test_multiple_yields() raises:
     var state = _CounterState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_multiple_yields_body, user_data=state_ptr)
     for i in range(1, 6):
@@ -190,8 +190,8 @@ def test_multiple_yields() raises:
 
 def test_shared_state() raises:
     var state = _CumulativeState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_cumulative_body, user_data=state_ptr)
     coro.resume()
@@ -216,8 +216,8 @@ def test_error_propagation() raises:
 
 def test_error_after_yield() raises:
     var state = _ErrorAfterYieldState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_error_after_yield_body, user_data=state_ptr)
     coro.resume()
@@ -235,8 +235,8 @@ def test_error_after_yield() raises:
 def test_move_handle() raises:
     """CoroHandle move preserves stable _CoroInner address — resume works after move."""
     var state = _CounterState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     var coro = TestCoro(_multiple_yields_body, user_data=state_ptr)
     coro.resume()
@@ -256,7 +256,7 @@ def test_move_handle() raises:
 
 
 def _alternation_body(mut y: CoroYielder) raises:
-    var state = y.user_data().bitcast[_CounterState]()
+    var state = y.user_data().unsafe_bitcast[_CounterState]()
     state[].counter += 1
     y.yield_to_caller()
     state[].counter += 1
@@ -269,14 +269,14 @@ def test_multiple_live_coros() raises:
     var state_a = _CounterState(0)
     var state_b = _CounterState(0)
     var state_c = _CounterState(0)
-    var ptr_a = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state_a))
+    var ptr_a = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state_a))
     )
-    var ptr_b = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state_b))
+    var ptr_b = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state_b))
     )
-    var ptr_c = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state_c))
+    var ptr_c = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state_c))
     )
     var coro_a = TestCoro(_alternation_body, user_data=ptr_a)
     var coro_b = TestCoro(_alternation_body, user_data=ptr_b)
@@ -313,8 +313,8 @@ def test_multiple_live_coros() raises:
 def test_custom_stack_size() raises:
     """Custom stack_size parameter works (smaller than default)."""
     var state = _RunToCompletionState(0)
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
     # 16KB stack — well above what these trivial bodies need
     var coro = TestCoro(

@@ -25,7 +25,7 @@ def test_handle() raises:
         caught_neg = True
     assert_true(caught_neg)
 
-    # handle2 goes out of scope here and __del__ closes the fd automatically.
+    # handle2 goes out of scope here and __deinit__ closes the fd automatically.
 
 
 def main() raises:

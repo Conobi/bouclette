@@ -6,9 +6,9 @@ from std.testing import assert_equal, assert_true
 
 def test_ops() raises:
     # Create a pipe
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -18,7 +18,7 @@ def test_ops() raises:
 
     # Write "hello" via io_uring
     var msg = String("hello")
-    var msg_ptr = UnsafePointer[Int8, StaticConstantOrigin](
+    var msg_ptr = Pointer[Int8, ImmStaticOrigin](
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
     var sq = ring.sq()
@@ -30,11 +30,11 @@ def test_ops() raises:
     var cqe = cq.__next__()
     assert_equal(cqe.user_data, UInt64(1))
     assert_equal(cqe.res, Int32(5))
-    cq^.__del__()
+    cq^.__deinit__()
 
     # Read back via io_uring
     var buf = List[UInt8](length=16, fill=0)
-    var buf_ptr = UnsafePointer[Int8, StaticConstantOrigin](
+    var buf_ptr = Pointer[Int8, ImmStaticOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
     sq = ring.sq()
@@ -46,7 +46,7 @@ def test_ops() raises:
     cqe = cq.__next__()
     assert_equal(cqe.user_data, UInt64(2))
     assert_equal(cqe.res, Int32(5))  # 5 bytes read
-    cq^.__del__()
+    cq^.__deinit__()
 
     # Cleanup
     _ = external_call["close", Int32](read_fd)

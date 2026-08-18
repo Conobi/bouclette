@@ -1,7 +1,7 @@
 """Integration test: ConnectProbe with real io_uring."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.net.probe import PortStatus
@@ -24,8 +24,8 @@ def test_connect_open_port() raises:
     var bound_len = Int32(16)
     _ = external_call["getsockname", Int32](
         server.raw(),
-        UnsafePointer(to=bound).bitcast[Int8](),
-        UnsafePointer(to=bound_len).bitcast[Int8](),
+        Pointer(to=bound).unsafe_bitcast[Int8](),
+        Pointer(to=bound_len).unsafe_bitcast[Int8](),
     )
     var port = ((UInt16(bound.sin_port) << 8) | (UInt16(bound.sin_port) >> 8)) & UInt16(0xFFFF)
 

@@ -9,7 +9,7 @@ def test_buffer() raises:
     assert_equal(buf.len, UInt(64))
     assert_true(Int(buf.unsafe_ptr) != 0)
 
-    var ptr = UnsafePointer[Int8, StaticConstantOrigin](
+    var ptr = Pointer[Int8, ImmStaticOrigin](
         unsafe_from_address=Int(data.unsafe_ptr())
     )
     var buf2 = IOBuffer(unsafe_ptr=ptr, len=32)

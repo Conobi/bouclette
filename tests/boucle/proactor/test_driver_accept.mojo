@@ -1,7 +1,7 @@
 """Integration test: submit accept via IoUringDriver."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
@@ -27,12 +27,12 @@ struct AcceptTracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the accept result."""
-        var self_ptr = UnsafePointer[AcceptTracker, MutAnyOrigin](
+        var self_ptr = Pointer[AcceptTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -51,14 +51,14 @@ def test_driver_accept() raises:
     # Discover the kernel-assigned port via getsockname(2).
     var bound = sockaddr_in()
     var bound_len = Int32(16)
-    var bound_ptr = UnsafePointer(to=bound).bitcast[Int8]()
-    var bound_len_ptr = UnsafePointer(to=bound_len).bitcast[Int8]()
+    var bound_ptr = Pointer(to=bound).unsafe_bitcast[Int8]()
+    var bound_len_ptr = Pointer(to=bound_len).unsafe_bitcast[Int8]()
     var gs = external_call["getsockname", Int32](
         server.raw(), bound_ptr, bound_len_ptr
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutAnyOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -78,26 +78,26 @@ def test_driver_accept() raises:
 
     # Set up accept completion.
     var accept_tracker = AcceptTracker()
-    var accept_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_tracker))
+    var accept_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_tracker))
     )
     var accept_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=accept_ctx
     )
-    var accept_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_cmp))
+    var accept_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_cmp))
     )
 
     # Set up connect completion.
     var connect_tracker = AcceptTracker()
-    var connect_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_tracker))
+    var connect_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_tracker))
     )
     var connect_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=connect_ctx
     )
-    var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_cmp))
+    var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_cmp))
     )
 
     # Submit accept on the server socket first, then connect from client.

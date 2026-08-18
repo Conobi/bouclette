@@ -1,7 +1,7 @@
 """Tests for the _getpeername syscall wrapper."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
@@ -13,9 +13,9 @@ from boucle.net.socket import _getpeername
 def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
     """Extract the OS-assigned port from a bound IPv4 socket."""
     var stor = SocketAddrStorV4()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var slen = UInt32(16)
-    var len_p = UnsafePointer(to=slen)
+    var len_p = Pointer(to=slen)
     var res = external_call["getsockname", Int32](
         s.raw(), stor_p, len_p,
     )
@@ -28,9 +28,9 @@ def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
 def _accept_one(ref server: Socket) raises -> Int32:
     """Accept a single connection, retrying up to 1000 times."""
     var stor = SocketAddrStorV4()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var slen = UInt32(16)
-    var len_p = UnsafePointer(to=slen)
+    var len_p = Pointer(to=slen)
     for _ in range(1000):
         var res = external_call["accept4", Int32](
             server.raw(), stor_p, len_p, Int32(0),

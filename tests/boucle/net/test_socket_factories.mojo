@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
@@ -22,8 +22,8 @@ comptime SOCK_CLOEXEC = Int32(524288)
 def _getsockopt_int(ref s: Socket, level: Int32, optname: Int32) raises -> Int32:
     var val = Int32(-1)
     var optlen = UInt32(4)
-    var v_p = UnsafePointer(to=val)
-    var l_p = UnsafePointer(to=optlen)
+    var v_p = Pointer(to=val)
+    var l_p = Pointer(to=optlen)
     var res = external_call["getsockopt", Int32](
         s.raw(), level, optname, v_p, l_p,
     )
@@ -35,9 +35,9 @@ def _getsockopt_int(ref s: Socket, level: Int32, optname: Int32) raises -> Int32
 def _getsockname_port(ref s: Socket) raises -> UInt16:
     # IPv6 sockaddr is 28 bytes; sin6_port is at offset 2 (network order).
     var stor = SocketAddrStorV6()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var len = UInt32(28)
-    var len_p = UnsafePointer(to=len)
+    var len_p = Pointer(to=len)
     var res = external_call["getsockname", Int32](
         s.raw(), stor_p, len_p,
     )
@@ -56,14 +56,14 @@ def _check_listener_opts(ref s: Socket) raises:
 def _assert_in_listen_state(ref s: Socket) raises:
     # accept4 on a listening socket with no pending connection returns -1
     # with errno=EAGAIN. A non-LISTEN socket returns -1 with errno=EINVAL.
-    var null_addr = null_ptr[Int8, StaticConstantOrigin]()
-    var null_len = null_ptr[UInt32, StaticConstantOrigin]()
+    var null_addr = null_ptr[Int8, ImmStaticOrigin]()
+    var null_len = null_ptr[UInt32, ImmStaticOrigin]()
     var res = external_call["accept4", Int32](
         s.raw(), null_addr, null_len, SOCK_NONBLOCK | SOCK_CLOEXEC,
     )
     assert_equal(Int(res), -1)
     var en = external_call[
-        "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+        "__errno_location", Pointer[Int32, MutAnyOrigin]
     ]()
     assert_equal(Int(en[]), EAGAIN)
 

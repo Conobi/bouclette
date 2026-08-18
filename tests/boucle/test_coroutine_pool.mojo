@@ -6,7 +6,7 @@ from boucle.coroutine import (
     Yielder as CoroYielder,
     CoroutineBody as CoroBody,
 )
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 
@@ -17,13 +17,13 @@ struct Counter(Movable):
     def __init__(out self):
         self.hits = 0
 
-    def __init__(out self, *, deinit take: Self):
-        self.hits = take.hits
+    def __init__(out self, *, deinit move: Self):
+        self.hits = move.hits
 
 
 def _body(mut y: CoroYielder) raises -> None:
     var udata = y.user_data()
-    var ctr = UnsafePointer[Counter, MutAnyOrigin](
+    var ctr = Pointer[Counter, MutAnyOrigin](
         unsafe_from_address=Int(udata)
     )
     ctr[].hits += 1
@@ -34,8 +34,8 @@ def _body(mut y: CoroYielder) raises -> None:
 def test_pool_acquire_runs_body() raises:
     var pool = CoroutinePool(capacity=4)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=ctr))
+    var ctr_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=ctr))
     )
     var h = pool.acquire(_body, ctr_ptr)
     h[].resume()
@@ -52,8 +52,8 @@ def test_pool_recycles_handle() raises:
     proving the handle (and stack) was recycled, not reallocated."""
     var pool = CoroutinePool(capacity=4)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=ctr))
+    var ctr_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=ctr))
     )
     var h1 = pool.acquire(_body, ctr_ptr)
     var addr1 = Int(h1)
@@ -74,8 +74,8 @@ def test_pool_capacity_cap() raises:
     """Beyond `capacity`, release destroys the surplus."""
     var pool = CoroutinePool(capacity=2)
     var ctr = Counter()
-    var ctr_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=ctr))
+    var ctr_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=ctr))
     )
     var h1 = pool.acquire(_body, ctr_ptr)
     var h2 = pool.acquire(_body, ctr_ptr)

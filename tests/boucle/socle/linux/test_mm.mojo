@@ -14,9 +14,9 @@ def test_mm() raises:
     assert_true(Int(ptr) != 0)
 
     # Write and read back via a mutable pointer
-    var mut_ptr = ptr.bitcast[UInt8]().unsafe_mut_cast[True]()
-    mut_ptr.store(42)
-    var val = mut_ptr.load()
+    var mut_ptr = ptr.unsafe_bitcast[UInt8]().unsafe_mut_cast[True]()
+    mut_ptr.unsafe_store(42)
+    var val = mut_ptr.unsafe_load()
     assert_true(val == 42)
 
     # Unmap

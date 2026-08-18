@@ -6,8 +6,8 @@ successfully (result >= 0).
 
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.proactor.completion import Completion
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.testing import assert_equal, assert_true
 
 
@@ -24,12 +24,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result."""
-        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].called = True
@@ -57,12 +57,12 @@ def test_provide_buffers() raises:
 
     # Wire completion callback.
     var tracker = Tracker()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     driver.provide_buffers(
@@ -81,7 +81,7 @@ def test_provide_buffers() raises:
         "provide_buffers failed with result=" + String(tracker.result),
     )
 
-    pool.free()
+    pool.unsafe_free()
     _ = cmp
     print("test_provide_buffers PASSED")
 

@@ -19,9 +19,9 @@ def test_epoll() raises:
     assert_true(epfd > -1)
 
     # Create a pipe to watch
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -35,14 +35,14 @@ def test_epoll() raises:
     # symbol conflict with stdlib's internal "write" external_call)
     var msg = UInt8(1)
     _ = syscall[__NR_write, Int64](
-        write_fd, UnsafePointer(to=msg), UInt64(1)
+        write_fd, Pointer(to=msg), UInt64(1)
     )
 
     # Wait for events
-    var events = InlineArray[epoll_event, 4](fill=epoll_event())
+    var events = Array[epoll_event, 4](fill=epoll_event())
     var n = epoll_wait(
         epfd,
-        UnsafePointer(to=events).bitcast[epoll_event](),
+        Pointer(to=events).unsafe_bitcast[epoll_event](),
         max_events=4,
         timeout=100,
     )

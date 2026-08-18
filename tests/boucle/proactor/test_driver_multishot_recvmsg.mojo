@@ -12,8 +12,8 @@ Exercises the full BufRing + multishot recvmsg path:
 """
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.testing import assert_true
 
 from boucle.socle.linux.raw import (
@@ -43,25 +43,25 @@ struct MultishotTracker:
     """
 
     var count: Int
-    var results: InlineArray[Int32, 8]
-    var flags: InlineArray[UInt32, 8]
-    var buf_ids: InlineArray[UInt16, 8]
+    var results: Array[Int32, 8]
+    var flags: Array[UInt32, 8]
+    var buf_ids: Array[UInt16, 8]
 
     def __init__(out self):
         """Construct a zeroed tracker."""
         self.count = 0
-        self.results = InlineArray[Int32, 8](fill=Int32(0))
-        self.flags = InlineArray[UInt32, 8](fill=UInt32(0))
-        self.buf_ids = InlineArray[UInt16, 8](fill=UInt16(0))
+        self.results = Array[Int32, 8](fill=Int32(0))
+        self.flags = Array[UInt32, 8](fill=UInt32(0))
+        self.buf_ids = Array[UInt16, 8](fill=UInt16(0))
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and buffer ID."""
-        var self_ptr = UnsafePointer[MultishotTracker, MutAnyOrigin](
+        var self_ptr = Pointer[MultishotTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         var idx = self_ptr[].count
@@ -88,25 +88,25 @@ def test_driver_multishot_recvmsg() raises:
 
     # --- 2. Bind recv socket to 127.0.0.1:0 (ephemeral) ---
     # sockaddr_in: sin_family(2) sin_port(2) sin_addr(4) pad(8) = 16 bytes
-    var bind_addr = InlineArray[UInt8, 16](fill=0)
+    var bind_addr = Array[UInt8, 16](fill=0)
     bind_addr[0] = AF_INET  # sin_family low byte
     bind_addr[4] = 127      # sin_addr = 127.0.0.1
     bind_addr[7] = 1
 
     var bind_res = external_call["bind", Int32](
         fd_recv,
-        UnsafePointer(to=bind_addr).bitcast[c_void](),
+        Pointer(to=bind_addr).unsafe_bitcast[c_void](),
         Int32(16),
     )
     assert_true(Int(bind_res) == 0, "bind(fd_recv) failed")
 
     # --- 3. Discover recv socket's ephemeral port ---
-    var bound = InlineArray[UInt8, 16](fill=0)
+    var bound = Array[UInt8, 16](fill=0)
     var addrlen = Int32(16)
     var gsn_res = external_call["getsockname", Int32](
         fd_recv,
-        UnsafePointer(to=bound).bitcast[c_void](),
-        UnsafePointer(to=addrlen).bitcast[Int32](),
+        Pointer(to=bound).unsafe_bitcast[c_void](),
+        Pointer(to=addrlen).unsafe_bitcast[Int32](),
     )
     assert_true(Int(gsn_res) == 0, "getsockname failed")
     var port_hi = bound[2]
@@ -146,33 +146,33 @@ def test_driver_multishot_recvmsg() raises:
     # iovec template (16 bytes): iov_base(8) iov_len(8)
     var recv_iov = _heap_alloc[UInt8](16).as_unsafe_any_origin()
     for i in range(16):
-        (recv_iov + i)[] = UInt8(0)
+        recv_iov.unsafe_offset(i)[] = UInt8(0)
 
     # msghdr for recv (56 bytes) - minimal template
     var recv_mhdr = _heap_alloc[UInt8](56).as_unsafe_any_origin()
     for i in range(56):
-        (recv_mhdr + i)[] = UInt8(0)
+        recv_mhdr.unsafe_offset(i)[] = UInt8(0)
     # msg_iov = recv_iov pointer (offset 16, 8 bytes LE)
     var ri_addr = Int(recv_iov)
     for i in range(8):
-        (recv_mhdr + 16 + i)[] = UInt8((ri_addr >> (i * 8)) & 0xFF)
+        recv_mhdr.unsafe_offset(16 + i)[] = UInt8((ri_addr >> (i * 8)) & 0xFF)
     # msg_iovlen = 1 (offset 24, 8 bytes LE)
-    (recv_mhdr + 24)[] = UInt8(1)
+    recv_mhdr.unsafe_offset(24)[] = UInt8(1)
 
-    var recv_msg_ptr = UnsafePointer[msghdr, MutAnyOrigin](
+    var recv_msg_ptr = Pointer[msghdr, MutAnyOrigin](
         unsafe_from_address=Int(recv_mhdr)
     )
 
     # --- 6. Wire completion callback ---
     var tracker = MultishotTracker()
-    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=MultishotTracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
     # --- 7. Submit multishot recvmsg ---
@@ -188,37 +188,37 @@ def test_driver_multishot_recvmsg() raises:
     # Build destination sockaddr_in (16 bytes, heap-allocated)
     var dest_addr = _heap_alloc[UInt8](16).as_unsafe_any_origin()
     for i in range(16):
-        (dest_addr + i)[] = UInt8(0)
+        dest_addr.unsafe_offset(i)[] = UInt8(0)
     dest_addr[] = UInt8(AF_INET)
-    (dest_addr + 2)[] = port_hi        # sin_port (network byte order)
-    (dest_addr + 3)[] = port_lo
-    (dest_addr + 4)[] = UInt8(127)     # sin_addr 127.0.0.1
-    (dest_addr + 5)[] = UInt8(0)
-    (dest_addr + 6)[] = UInt8(0)
-    (dest_addr + 7)[] = UInt8(1)
+    dest_addr.unsafe_offset(2)[] = port_hi        # sin_port (network byte order)
+    dest_addr.unsafe_offset(3)[] = port_lo
+    dest_addr.unsafe_offset(4)[] = UInt8(127)     # sin_addr 127.0.0.1
+    dest_addr.unsafe_offset(5)[] = UInt8(0)
+    dest_addr.unsafe_offset(6)[] = UInt8(0)
+    dest_addr.unsafe_offset(7)[] = UInt8(1)
 
     # Send 3 datagrams with distinct payloads
     for dgram_idx in range(NUM_DATAGRAMS):
         var payload = _heap_alloc[UInt8](4).as_unsafe_any_origin()
         payload[] = UInt8(ord("D"))            # 'D'
-        (payload + 1)[] = UInt8(ord("G"))      # 'G'
-        (payload + 2)[] = UInt8(dgram_idx + 1) # 1, 2, 3
-        (payload + 3)[] = UInt8(ord("!"))      # '!'
+        payload.unsafe_offset(1)[] = UInt8(ord("G"))      # 'G'
+        payload.unsafe_offset(2)[] = UInt8(dgram_idx + 1) # 1, 2, 3
+        payload.unsafe_offset(3)[] = UInt8(ord("!"))      # '!'
         var sent = external_call["sendto", Int](
             fd_send,
-            UnsafePointer[c_void, StaticConstantOrigin](
+            Pointer[c_void, ImmStaticOrigin](
                 unsafe_from_address=Int(payload)
             ),
             UInt(4),
             Int32(0),
-            UnsafePointer[c_void, StaticConstantOrigin](
+            Pointer[c_void, ImmStaticOrigin](
                 unsafe_from_address=Int(dest_addr)
             ),
             Int32(16),
         )
         assert_true(sent == 4, "sendto failed for datagram " + String(dgram_idx))
         print("sent datagram", dgram_idx + 1, "of", NUM_DATAGRAMS)
-        payload.free()
+        payload.unsafe_free()
 
     # --- 10. Tick until all 3 completions fire ---
     var ticks = 0
@@ -291,10 +291,10 @@ def test_driver_multishot_recvmsg() raises:
 
     _ = external_call["close", Int32](fd_recv)
     _ = external_call["close", Int32](fd_send)
-    dest_addr.free()
-    recv_iov.free()
-    recv_mhdr.free()
-    buf_base.free()
+    dest_addr.unsafe_free()
+    recv_iov.unsafe_free()
+    recv_mhdr.unsafe_free()
+    buf_base.unsafe_free()
 
     _ = recv_cmp
     _ = bufring

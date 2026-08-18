@@ -1,7 +1,7 @@
 """Integration test: submit connect via IoUringDriver (success + refused)."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
@@ -27,12 +27,12 @@ struct ConnectTracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the connect result."""
-        var self_ptr = UnsafePointer[ConnectTracker, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -53,14 +53,14 @@ def test_driver_connect() raises:
     # Discover the kernel-assigned port via getsockname(2).
     var bound = sockaddr_in()
     var bound_len = Int32(16)
-    var bound_ptr = UnsafePointer(to=bound).bitcast[Int8]()
-    var bound_len_ptr = UnsafePointer(to=bound_len).bitcast[Int8]()
+    var bound_ptr = Pointer(to=bound).unsafe_bitcast[Int8]()
+    var bound_len_ptr = Pointer(to=bound_len).unsafe_bitcast[Int8]()
     var gs = external_call["getsockname", Int32](
         server.raw(), bound_ptr, bound_len_ptr
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutAnyOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -78,12 +78,12 @@ def test_driver_connect() raises:
     # Set up driver and completion.
     var driver = IoUringDriver(sq_entries=16)
     var tracker = ConnectTracker()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=ConnectTracker.on_complete, context=ctx)
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     # Submit connect and tick until completion fires.
@@ -107,12 +107,12 @@ def test_driver_connect() raises:
     # --- Test 2: Connect to refused port (ECONNREFUSED) ---
 
     var tracker2 = ConnectTracker()
-    var ctx2 = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker2))
+    var ctx2 = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker2))
     )
     var cmp2 = Completion(invoke=ConnectTracker.on_complete, context=ctx2)
-    var cmp2_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp2))
+    var cmp2_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp2))
     )
 
     # Connect to 127.0.0.1:1 — nothing should be listening there.

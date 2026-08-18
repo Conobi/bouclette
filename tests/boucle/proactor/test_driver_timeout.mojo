@@ -1,6 +1,6 @@
 """Integration test: submit timeout + cancel via IoUringDriver."""
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
@@ -29,12 +29,12 @@ struct TimeoutTracker:
 
     @staticmethod
     def on_timeout(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback for the timeout completion."""
-        var self_ptr = UnsafePointer[TimeoutTracker, MutAnyOrigin](
+        var self_ptr = Pointer[TimeoutTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].timeout_result = result
@@ -43,12 +43,12 @@ struct TimeoutTracker:
 
     @staticmethod
     def on_cancel(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback for the cancel completion."""
-        var self_ptr = UnsafePointer[TimeoutTracker, MutAnyOrigin](
+        var self_ptr = Pointer[TimeoutTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].cancel_result = result
@@ -60,30 +60,30 @@ def test_driver_timeout() raises:
     """Submit a 5s timeout, cancel it immediately, verify both CQEs."""
     var driver = IoUringDriver(sq_entries=16)
     var tracker = TimeoutTracker()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
 
     # Wire timeout completion.
     var timeout_cmp = Completion(
         invoke=TimeoutTracker.on_timeout, context=ctx
     )
-    var timeout_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=timeout_cmp))
+    var timeout_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=timeout_cmp))
     )
 
     # Wire cancel completion.
     var cancel_cmp = Completion(
         invoke=TimeoutTracker.on_cancel, context=ctx
     )
-    var cancel_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cancel_cmp))
+    var cancel_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cancel_cmp))
     )
 
     # Submit a 5-second timeout (long enough it won't fire naturally).
     var ts = __kernel_timespec(tv_sec=Int64(5), tv_nsec=Int64(0))
-    var ts_ptr = UnsafePointer[NoneType, StaticConstantOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=ts))
+    var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+        unsafe_from_address=Int(Pointer(to=ts))
     )
     driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
 

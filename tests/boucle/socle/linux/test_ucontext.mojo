@@ -23,8 +23,9 @@ from boucle.socle.linux.mm import (
     ProtFlags,
 )
 from boucle.socle.linux.raw import PAGE_SIZE, UCONTEXT_SIZE
-from std.memory import UnsafePointer, memset
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
+from std.memory.unsafe import unsafe_memset
 from std.testing import assert_equal, assert_true
 from std.ffi import external_call
 
@@ -44,19 +45,19 @@ def _trampoline_write42(args_raw: Int):
 
     args_raw -> Int[2]: [caller_ctx_addr, shared_addr].
     """
-    var args = UnsafePointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
-    var caller_ctx = UnsafePointer[UInt8, MutUntrackedOrigin](
+    var args = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
+    var caller_ctx = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=args[0]
     )
-    var shared = UnsafePointer[Int, MutUntrackedOrigin](
+    var shared = Pointer[Int, MutUntrackedOrigin](
         unsafe_from_address=args[1]
     )
     shared[] = 42
     # Swap back to caller — allocate a throwaway save buffer
-    var dummy = alloc[UInt8](UCONTEXT_SIZE)
-    memset(dummy, 0, UCONTEXT_SIZE)
+    var dummy = unsafe_alloc[UInt8](UCONTEXT_SIZE)
+    unsafe_memset(dummy, 0, UCONTEXT_SIZE)
     _ = external_call["swapcontext", Int32](dummy, caller_ctx)
-    # dummy.free() intentionally omitted — unreachable after final swap
+    # dummy.unsafe_free() intentionally omitted — unreachable after final swap
 
 
 def _trampoline_pingpong(args_raw: Int):
@@ -64,17 +65,17 @@ def _trampoline_pingpong(args_raw: Int):
 
     args_raw -> Int[2]: [caller_ctx_addr, counter_addr].
     """
-    var args = UnsafePointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
-    var caller_ctx = UnsafePointer[UInt8, MutUntrackedOrigin](
+    var args = Pointer[Int, MutUntrackedOrigin](unsafe_from_address=args_raw)
+    var caller_ctx = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=args[0]
     )
-    var counter = UnsafePointer[Int, MutUntrackedOrigin](
+    var counter = Pointer[Int, MutUntrackedOrigin](
         unsafe_from_address=args[1]
     )
 
     # Allocate our own save-context for resumption
-    var my_ctx = alloc[UInt8](UCONTEXT_SIZE)
-    memset(my_ctx, 0, UCONTEXT_SIZE)
+    var my_ctx = unsafe_alloc[UInt8](UCONTEXT_SIZE)
+    unsafe_memset(my_ctx, 0, UCONTEXT_SIZE)
 
     # Round 1: increment and yield
     counter[] = counter[] + 1
@@ -87,7 +88,7 @@ def _trampoline_pingpong(args_raw: Int):
     # Round 3: final increment and yield
     counter[] = counter[] + 1
     _ = external_call["swapcontext", Int32](my_ctx, caller_ctx)
-    # my_ctx.free() intentionally omitted — unreachable after final swap
+    # my_ctx.unsafe_free() intentionally omitted — unreachable after final swap
 
 
 # --- Tests ---
@@ -107,14 +108,14 @@ def test_ucontext_round_trip() raises:
     This is the critical risk gate: it proves that getcontext, swapcontext,
     gregs manipulation, function pointer extraction, and stack setup all work.
     """
-    var shared = alloc[Int](1)
+    var shared = unsafe_alloc[Int](1)
     shared[] = 0
 
     var caller_ctx = alloc_ucontext()
     var coro_ctx = alloc_ucontext()
 
     # Pack trampoline args: [caller_ctx address, shared address]
-    var args = alloc[Int](2)
+    var args = unsafe_alloc[Int](2)
     args[0] = Int(caller_ctx)
     args[1] = Int(shared)
 
@@ -126,7 +127,7 @@ def test_ucontext_round_trip() raises:
         flags=MapFlags.PRIVATE,
     )
     mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
-    var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
+    var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(stack_mem) + PAGE_SIZE
     )
 
@@ -135,7 +136,7 @@ def test_ucontext_round_trip() raises:
 
     # Extract trampoline function address
     var f = _trampoline_write42
-    var fn_addr = Int(UnsafePointer(to=f).bitcast[Int]()[])
+    var fn_addr = Int(Pointer(to=f).unsafe_bitcast[Int]()[])
     assert_true(fn_addr != 0, "function pointer address must be non-zero")
 
     setup_context(
@@ -156,8 +157,8 @@ def test_ucontext_round_trip() raises:
     munmap(unsafe_ptr=stack_mem, len=UInt(total_size))
     free_ucontext(caller_ctx)
     free_ucontext(coro_ctx)
-    shared.free()
-    args.free()
+    shared.unsafe_free()
+    args.unsafe_free()
 
 
 def test_pingpong() raises:
@@ -166,13 +167,13 @@ def test_pingpong() raises:
     The caller and coroutine swap back and forth 3 times, with the
     coroutine incrementing a shared counter at each step.
     """
-    var counter = alloc[Int](1)
+    var counter = unsafe_alloc[Int](1)
     counter[] = 0
 
     var caller_ctx = alloc_ucontext()
     var coro_ctx = alloc_ucontext()
 
-    var args = alloc[Int](2)
+    var args = unsafe_alloc[Int](2)
     args[0] = Int(caller_ctx)
     args[1] = Int(counter)
 
@@ -183,14 +184,14 @@ def test_pingpong() raises:
         flags=MapFlags.PRIVATE,
     )
     mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
-    var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
+    var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(stack_mem) + PAGE_SIZE
     )
 
     uc_getcontext(coro_ctx)
 
     var f = _trampoline_pingpong
-    var fn_addr = Int(UnsafePointer(to=f).bitcast[Int]()[])
+    var fn_addr = Int(Pointer(to=f).unsafe_bitcast[Int]()[])
 
     setup_context(
         coro_ctx,
@@ -216,8 +217,8 @@ def test_pingpong() raises:
     munmap(unsafe_ptr=stack_mem, len=UInt(total_size))
     free_ucontext(caller_ctx)
     free_ucontext(coro_ctx)
-    counter.free()
-    args.free()
+    counter.unsafe_free()
+    args.unsafe_free()
 
 
 def main() raises:

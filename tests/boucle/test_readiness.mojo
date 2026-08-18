@@ -20,15 +20,15 @@ struct Tracker(ReadinessHandler):
         self.last_readable = False
         self.last_writable = False
 
-    def __init__(out self, *, deinit take: Self):
-        self.count = take.count
-        self.last_token = take.last_token
-        self.last_readable = take.last_readable
-        self.last_writable = take.last_writable
+    def __init__(out self, *, deinit move: Self):
+        self.count = move.count
+        self.last_token = move.last_token
+        self.last_readable = move.last_readable
+        self.last_writable = move.last_writable
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
+        loop: Pointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
@@ -39,9 +39,9 @@ struct Tracker(ReadinessHandler):
 
 
 def test_pipe_readable() raises:
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -53,7 +53,7 @@ def test_pipe_readable() raises:
     # Write a byte to make read end readable (use raw syscall to avoid
     # name collision with Mojo's stdlib).
     var msg = UInt8(1)
-    _ = syscall[1, Scalar[DType.int64]](write_fd, UnsafePointer(to=msg), UInt64(1))
+    _ = syscall[1, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
 
     loop.poll(timeout_ms=100)
     assert_equal(loop._handler.count, 1)
@@ -67,9 +67,9 @@ def test_pipe_readable() raises:
 
 
 def test_pipe_writable() raises:
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -89,9 +89,9 @@ def test_pipe_writable() raises:
 
 
 def test_modify_interest() raises:
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -125,24 +125,24 @@ struct SelfDeregister(ReadinessHandler):
         self.bytes_read = 0
         self.dereg_failed = False
 
-    def __init__(out self, *, deinit take: Self):
-        self.read_fd = take.read_fd
-        self.fired = take.fired
-        self.bytes_read = take.bytes_read
-        self.dereg_failed = take.dereg_failed
+    def __init__(out self, *, deinit move: Self):
+        self.read_fd = move.read_fd
+        self.fired = move.fired
+        self.bytes_read = move.bytes_read
+        self.dereg_failed = move.dereg_failed
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
+        loop: Pointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
         self.fired += 1
         # Drain the pipe so subsequent polls don't re-fire on the same data.
-        var buf = InlineArray[UInt8, 16](fill=0)
+        var buf = Array[UInt8, 16](fill=0)
         var n = syscall[0, Scalar[DType.int64]](
             self.read_fd,
-            UnsafePointer(to=buf).bitcast[UInt8](),
+            Pointer(to=buf).unsafe_bitcast[UInt8](),
             UInt64(16),
         )
         self.bytes_read = Int(n)
@@ -154,9 +154,9 @@ struct SelfDeregister(ReadinessHandler):
 
 
 def test_self_deregister_in_on_ready() raises:
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -167,7 +167,7 @@ def test_self_deregister_in_on_ready() raises:
 
     # Write a byte so the read end becomes readable.
     var msg = UInt8(7)
-    _ = syscall[1, Scalar[DType.int64]](write_fd, UnsafePointer(to=msg), UInt64(1))
+    _ = syscall[1, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
 
     loop.poll(timeout_ms=100)
     assert_equal(loop._handler.fired, 1)

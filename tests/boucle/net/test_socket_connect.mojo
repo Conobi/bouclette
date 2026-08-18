@@ -1,5 +1,5 @@
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
@@ -9,9 +9,9 @@ from boucle.net.options import Backlog
 
 def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
     var stor = SocketAddrStorV4()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var len = UInt32(16)
-    var len_p = UnsafePointer(to=len)
+    var len_p = Pointer(to=len)
     var res = external_call["getsockname", Int32](
         s.raw(), stor_p, len_p,
     )
@@ -23,9 +23,9 @@ def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
 
 def _getsockname_port_v6(ref s: Socket) raises -> UInt16:
     var stor = SocketAddrStorV6()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var len = UInt32(28)
-    var len_p = UnsafePointer(to=len)
+    var len_p = Pointer(to=len)
     var res = external_call["getsockname", Int32](
         s.raw(), stor_p, len_p,
     )
@@ -37,9 +37,9 @@ def _getsockname_port_v6(ref s: Socket) raises -> UInt16:
 
 def _accept_one(ref server: Socket) raises -> Int32:
     var stor = SocketAddrStorV4()
-    var stor_p = UnsafePointer(to=stor)
+    var stor_p = Pointer(to=stor)
     var len = UInt32(16)
-    var len_p = UnsafePointer(to=len)
+    var len_p = Pointer(to=len)
     for _ in range(1000):
         var res = external_call["accept4", Int32](
             server.raw(), stor_p, len_p, Int32(0),
@@ -51,7 +51,7 @@ def _accept_one(ref server: Socket) raises -> Int32:
 
 def _send_byte(ref s: Socket, b: UInt8) raises -> Int64:
     var v = b
-    var v_p = UnsafePointer(to=v)
+    var v_p = Pointer(to=v)
     return external_call["send", Int64](
         s.raw(), v_p, UInt64(1), Int32(0),
     )
@@ -59,7 +59,7 @@ def _send_byte(ref s: Socket, b: UInt8) raises -> Int64:
 
 def _recv_byte(fd: Int32) raises -> Int64:
     var rx = UInt8(0)
-    var rx_p = UnsafePointer(to=rx)
+    var rx_p = Pointer(to=rx)
     return external_call["recv", Int64](
         fd, rx_p, UInt64(1), Int32(0),
     )
@@ -105,7 +105,7 @@ def test_socket_connect() raises:
     assert_equal(udp_sent, 1)
 
     var udp_rx = UInt8(0)
-    var udp_rx_p = UnsafePointer(to=udp_rx)
+    var udp_rx_p = Pointer(to=udp_rx)
     var udp_recvd = Int64(-1)
     for _ in range(1000):
         udp_recvd = external_call["recv", Int64](

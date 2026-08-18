@@ -13,8 +13,8 @@ from boucle.socle.linux.raw import (
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
 )
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
@@ -28,23 +28,23 @@ struct Tracker:
     """Records callback invocations for multishot recv completions."""
 
     var call_count: Int
-    var results: InlineArray[Int32, 8]
-    var flags_arr: InlineArray[UInt32, 8]
+    var results: Array[Int32, 8]
+    var flags_arr: Array[UInt32, 8]
 
     def __init__(out self):
         """Construct a zeroed tracker."""
         self.call_count = 0
-        self.results = InlineArray[Int32, 8](fill=0)
-        self.flags_arr = InlineArray[UInt32, 8](fill=0)
+        self.results = Array[Int32, 8](fill=0)
+        self.flags_arr = Array[UInt32, 8](fill=0)
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""
-        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         print(
@@ -73,13 +73,13 @@ def test_register_buf_ring() raises:
         listen_fd,
         Int32(IPPROTO_IPV6),
         Int32(IPV6_V6ONLY),
-        UnsafePointer(to=optval).bitcast[c_void](),
+        Pointer(to=optval).unsafe_bitcast[c_void](),
         Int32(4),
     )
-    var addr = InlineArray[UInt8, 28](fill=0)
+    var addr = Array[UInt8, 28](fill=0)
     addr[0] = UInt8(AF_INET6)
     addr[8 + 15] = UInt8(1)
-    var addr_ptr = UnsafePointer(to=addr).bitcast[c_void]()
+    var addr_ptr = Pointer(to=addr).unsafe_bitcast[c_void]()
     assert_equal(
         Int(external_call["bind", Int32](listen_fd, addr_ptr, Int32(28))),
         0,
@@ -87,12 +87,12 @@ def test_register_buf_ring() raises:
     assert_equal(
         Int(external_call["listen", Int32](listen_fd, Int32(1))), 0
     )
-    var bound = InlineArray[UInt8, 28](fill=0)
+    var bound = Array[UInt8, 28](fill=0)
     var addrlen = Int32(28)
     _ = external_call["getsockname", Int32](
         listen_fd,
-        UnsafePointer(to=bound).bitcast[c_void](),
-        UnsafePointer(to=addrlen).bitcast[Int32](),
+        Pointer(to=bound).unsafe_bitcast[c_void](),
+        Pointer(to=addrlen).unsafe_bitcast[Int32](),
     )
     var port_hi = bound[2]
     var port_lo = bound[3]
@@ -101,7 +101,7 @@ def test_register_buf_ring() raises:
     var client_fd = external_call["socket", Int32](
         Int32(AF_INET6), Int32(SOCK_STREAM), Int32(0)
     )
-    var dest = InlineArray[UInt8, 28](fill=0)
+    var dest = Array[UInt8, 28](fill=0)
     dest[0] = UInt8(AF_INET6)
     dest[2] = port_hi
     dest[3] = port_lo
@@ -110,7 +110,7 @@ def test_register_buf_ring() raises:
         Int(
             external_call["connect", Int32](
                 client_fd,
-                UnsafePointer(to=dest).bitcast[c_void](),
+                Pointer(to=dest).unsafe_bitcast[c_void](),
                 Int32(28),
             )
         ),
@@ -120,8 +120,8 @@ def test_register_buf_ring() raises:
     # --- 3. Accept the server-side socket ---
     var server_fd = external_call["accept", Int32](
         listen_fd,
-        null_ptr[c_void, StaticConstantOrigin](),
-        null_ptr[Int32, StaticConstantOrigin](),
+        null_ptr[c_void, ImmStaticOrigin](),
+        null_ptr[Int32, ImmStaticOrigin](),
     )
     assert_true(Int(server_fd) >= 0, "accept() failed")
 
@@ -145,21 +145,21 @@ def test_register_buf_ring() raises:
 
     # Wire recv multishot completion.
     var tracker = Tracker()
-    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=Tracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
     driver.submit_recv_multishot(
         fd=server_fd, buf_group=UInt16(11), c=recv_cmp_ptr
     )
 
     # --- 6. Send "hello" from client ---
-    var msg = InlineArray[UInt8, 5](fill=0)
+    var msg = Array[UInt8, 5](fill=0)
     msg[0] = UInt8(ord("h"))
     msg[1] = UInt8(ord("e"))
     msg[2] = UInt8(ord("l"))
@@ -167,7 +167,7 @@ def test_register_buf_ring() raises:
     msg[4] = UInt8(ord("o"))
     var sent = external_call["send", Int64](
         client_fd,
-        UnsafePointer(to=msg).bitcast[c_void](),
+        Pointer(to=msg).unsafe_bitcast[c_void](),
         UInt64(5),
         Int32(0),
     )
@@ -197,7 +197,7 @@ def test_register_buf_ring() raises:
     assert_true(buf_id < BUF_COUNT, "buf_id out of range")
 
     # Payload at offset 0 of selected buffer
-    var buf_start = pool + buf_id * BUF_SIZE
+    var buf_start = pool.unsafe_offset(buf_id * BUF_SIZE)
     assert_equal(Int(buf_start[0]), ord("h"))
     assert_equal(Int(buf_start[1]), ord("e"))
     assert_equal(Int(buf_start[2]), ord("l"))
@@ -208,13 +208,13 @@ def test_register_buf_ring() raises:
     bring.add_buffer(UInt16(buf_id))
 
     # --- 9. Send another payload, kernel should pick a buffer again ---
-    var msg2 = InlineArray[UInt8, 3](fill=0)
+    var msg2 = Array[UInt8, 3](fill=0)
     msg2[0] = UInt8(ord("h"))
     msg2[1] = UInt8(ord("i"))
     msg2[2] = UInt8(ord("!"))
     var sent2 = external_call["send", Int64](
         client_fd,
-        UnsafePointer(to=msg2).bitcast[c_void](),
+        Pointer(to=msg2).unsafe_bitcast[c_void](),
         UInt64(3),
         Int32(0),
     )
@@ -238,7 +238,7 @@ def test_register_buf_ring() raises:
     )
 
     var buf_id2 = (Int(recv2_flags) >> IORING_CQE_BUFFER_SHIFT) & 0xFFFF
-    var buf2_start = pool + buf_id2 * BUF_SIZE
+    var buf2_start = pool.unsafe_offset(buf_id2 * BUF_SIZE)
     assert_equal(Int(buf2_start[0]), ord("h"))
     assert_equal(Int(buf2_start[1]), ord("i"))
     assert_equal(Int(buf2_start[2]), ord("!"))
@@ -250,7 +250,7 @@ def test_register_buf_ring() raises:
     _ = external_call["close", Int32](client_fd)
     _ = external_call["close", Int32](server_fd)
     _ = external_call["close", Int32](listen_fd)
-    pool.free()
+    pool.unsafe_free()
     _ = recv_cmp
     _ = bring
     print("test_register_buf_ring PASSED")

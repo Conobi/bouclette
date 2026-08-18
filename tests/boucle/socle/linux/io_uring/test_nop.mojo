@@ -24,7 +24,7 @@ def test_nop() raises:
         var cqe = cq.__next__()
         assert_equal(cqe.user_data, UInt64(1))
         completed += 1
-    cq^.__del__()
+    cq^.__deinit__()
     assert_equal(completed, to_submit)
 
 

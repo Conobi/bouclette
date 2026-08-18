@@ -1,8 +1,8 @@
 """Integration test: submit_recv and submit_send via IoUringDriver."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
@@ -25,12 +25,12 @@ struct ResultTracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result."""
-        var self_ptr = UnsafePointer[ResultTracker, MutAnyOrigin](
+        var self_ptr = Pointer[ResultTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -41,7 +41,7 @@ struct ResultTracker:
 def test_driver_recv_send() raises:
     """Run recv/send integration test."""
     # Create a connected socket pair (AF_UNIX=1, SOCK_STREAM=1).
-    var fds = alloc[Int32](2)
+    var fds = unsafe_alloc[Int32](2)
     var sp_res = external_call["socketpair", Int32](
         Int32(1),  # AF_UNIX
         Int32(1),  # SOCK_STREAM
@@ -50,59 +50,59 @@ def test_driver_recv_send() raises:
     )
     if Int(sp_res) != 0:
         var en = external_call[
-            "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutAnyOrigin]
         ]()
         raise String("socketpair failed, errno=") + String(Int(en[]))
 
     var fd_a: RawHandle = fds[]
-    var fd_b: RawHandle = (fds + 1)[]
-    fds.free()
+    var fd_b: RawHandle = fds.unsafe_offset(1)[]
+    fds.unsafe_free()
 
     # Set up driver.
     var driver = IoUringDriver(sq_entries=16)
 
     # Prepare send buffer: "hello" (5 bytes).
-    var send_buf = alloc[UInt8](5)
+    var send_buf = unsafe_alloc[UInt8](5)
     send_buf[] = UInt8(104)        # 'h'
-    (send_buf + 1)[] = UInt8(101)  # 'e'
-    (send_buf + 2)[] = UInt8(108)  # 'l'
-    (send_buf + 3)[] = UInt8(108)  # 'l'
-    (send_buf + 4)[] = UInt8(111)  # 'o'
+    send_buf.unsafe_offset(1)[] = UInt8(101)  # 'e'
+    send_buf.unsafe_offset(2)[] = UInt8(108)  # 'l'
+    send_buf.unsafe_offset(3)[] = UInt8(108)  # 'l'
+    send_buf.unsafe_offset(4)[] = UInt8(111)  # 'o'
 
     # Prepare recv buffer: 16 bytes zeroed.
-    var recv_buf = alloc[UInt8](16)
+    var recv_buf = unsafe_alloc[UInt8](16)
     for i in range(16):
-        (recv_buf + i)[] = UInt8(0)
+        recv_buf.unsafe_offset(i)[] = UInt8(0)
 
     # Wire send completion.
     var send_tracker = ResultTracker()
-    var send_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_tracker))
+    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_tracker))
     )
     var send_cmp = Completion(
         invoke=ResultTracker.on_complete, context=send_ctx
     )
-    var send_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_cmp))
+    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     # Wire recv completion.
     var recv_tracker = ResultTracker()
-    var recv_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_tracker))
+    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_tracker))
     )
     var recv_cmp = Completion(
         invoke=ResultTracker.on_complete, context=recv_ctx
     )
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
     # Cast buffer pointers to MutAnyOrigin for the driver API.
-    var send_buf_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var send_buf_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(send_buf)
     )
-    var recv_buf_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var recv_buf_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(recv_buf)
     )
 
@@ -141,8 +141,8 @@ def test_driver_recv_send() raises:
     _ = external_call["close", Int32](fd_b)
 
     # Free buffers.
-    send_buf.free()
-    recv_buf.free()
+    send_buf.unsafe_free()
+    recv_buf.unsafe_free()
 
     # Keep completions alive past callback.
     _ = send_cmp

@@ -1,6 +1,6 @@
 """Test IoUringDriver.sq_space() returns available SQ slot count."""
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
@@ -16,8 +16,8 @@ def test_driver_sq_space() raises:
 
     # After submitting a NOP, space decreases.
     var cmp = Completion()
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
     var space_before = driver.sq_space()
     driver.submit_nop(cmp_ptr)

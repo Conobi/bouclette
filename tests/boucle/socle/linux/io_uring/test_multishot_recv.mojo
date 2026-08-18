@@ -17,8 +17,8 @@ from boucle.socle.linux.raw import (
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
 )
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc as _heap_alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
@@ -32,23 +32,23 @@ struct Tracker:
     """Records callback invocations for multishot recv completions."""
 
     var call_count: Int
-    var tokens: InlineArray[Int32, 8]
-    var flags_arr: InlineArray[UInt32, 8]
+    var tokens: Array[Int32, 8]
+    var flags_arr: Array[UInt32, 8]
 
     def __init__(out self):
         """Construct a zeroed tracker."""
         self.call_count = 0
-        self.tokens = InlineArray[Int32, 8](fill=0)
-        self.flags_arr = InlineArray[UInt32, 8](fill=0)
+        self.tokens = Array[Int32, 8](fill=0)
+        self.flags_arr = Array[UInt32, 8](fill=0)
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""
-        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         print(
@@ -78,12 +78,12 @@ struct SimpleResult:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = UnsafePointer[SimpleResult, MutAnyOrigin](
+        var self_ptr = Pointer[SimpleResult, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -104,15 +104,15 @@ def test_multishot_recv() raises:
         listen_fd,
         Int32(IPPROTO_IPV6),
         Int32(IPV6_V6ONLY),
-        UnsafePointer(to=optval).bitcast[c_void](),
+        Pointer(to=optval).unsafe_bitcast[c_void](),
         Int32(4),
     )
 
     # sockaddr_in6, ::1, port 0
-    var addr = InlineArray[UInt8, 28](fill=0)
+    var addr = Array[UInt8, 28](fill=0)
     addr[0] = UInt8(AF_INET6)
     addr[8 + 15] = UInt8(1)  # ::1
-    var addr_ptr = UnsafePointer(to=addr).bitcast[c_void]()
+    var addr_ptr = Pointer(to=addr).unsafe_bitcast[c_void]()
     var bind_res = external_call["bind", Int32](
         listen_fd, addr_ptr, Int32(28)
     )
@@ -123,12 +123,12 @@ def test_multishot_recv() raises:
     assert_equal(Int(listen_res), 0)
 
     # Read back the ephemeral port
-    var bound_addr = InlineArray[UInt8, 28](fill=0)
+    var bound_addr = Array[UInt8, 28](fill=0)
     var addrlen = Int32(28)
     var getsock_res = external_call["getsockname", Int32](
         listen_fd,
-        UnsafePointer(to=bound_addr).bitcast[c_void](),
-        UnsafePointer(to=addrlen).bitcast[Int32](),
+        Pointer(to=bound_addr).unsafe_bitcast[c_void](),
+        Pointer(to=addrlen).unsafe_bitcast[Int32](),
     )
     assert_equal(Int(getsock_res), 0)
     var port_hi = bound_addr[2]
@@ -142,14 +142,14 @@ def test_multishot_recv() raises:
     )
     assert_true(Int(client_fd) >= 0, "client socket failed")
 
-    var dest = InlineArray[UInt8, 28](fill=0)
+    var dest = Array[UInt8, 28](fill=0)
     dest[0] = UInt8(AF_INET6)
     dest[2] = port_hi
     dest[3] = port_lo
     dest[8 + 15] = UInt8(1)  # ::1
     var connect_res = external_call["connect", Int32](
         client_fd,
-        UnsafePointer(to=dest).bitcast[c_void](),
+        Pointer(to=dest).unsafe_bitcast[c_void](),
         Int32(28),
     )
     assert_equal(Int(connect_res), 0)
@@ -157,8 +157,8 @@ def test_multishot_recv() raises:
     # --- 3. Accept on the listener (blocking) ---
     var server_fd = external_call["accept", Int32](
         listen_fd,
-        null_ptr[c_void, StaticConstantOrigin](),
-        null_ptr[Int32, StaticConstantOrigin](),
+        null_ptr[c_void, ImmStaticOrigin](),
+        null_ptr[Int32, ImmStaticOrigin](),
     )
     print("server_fd=", server_fd)
     assert_true(Int(server_fd) >= 0, "accept() failed")
@@ -175,12 +175,12 @@ def test_multishot_recv() raises:
 
     # Wire provide_buffers completion.
     var pb_slot = SimpleResult()
-    var pb_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=pb_slot))
+    var pb_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=pb_slot))
     )
     var pb_cmp = Completion(invoke=SimpleResult.on_complete, context=pb_ctx)
-    var pb_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=pb_cmp))
+    var pb_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=pb_cmp))
     )
     driver.provide_buffers(
         pool.as_unsafe_any_origin(),
@@ -193,14 +193,14 @@ def test_multishot_recv() raises:
 
     # Wire recv multishot completion.
     var tracker = Tracker()
-    var tracker_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var tracker_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var recv_cmp = Completion(
         invoke=Tracker.on_complete, context=tracker_ctx
     )
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
     driver.submit_recv_multishot(
         fd=server_fd, buf_group=UInt16(7), c=recv_cmp_ptr
@@ -218,7 +218,7 @@ def test_multishot_recv() raises:
     )
 
     # --- 6. Send a payload from the client side ---
-    var msg = InlineArray[UInt8, 5](fill=0)
+    var msg = Array[UInt8, 5](fill=0)
     msg[0] = UInt8(ord("h"))
     msg[1] = UInt8(ord("e"))
     msg[2] = UInt8(ord("l"))
@@ -226,7 +226,7 @@ def test_multishot_recv() raises:
     msg[4] = UInt8(ord("o"))
     var send_res = external_call["send", Int64](
         client_fd,
-        UnsafePointer(to=msg).bitcast[c_void](),
+        Pointer(to=msg).unsafe_bitcast[c_void](),
         UInt64(5),
         Int32(0),
     )
@@ -261,7 +261,7 @@ def test_multishot_recv() raises:
     assert_true(buf_id < BUF_COUNT, "buf_id out of range: " + String(buf_id))
 
     # Payload at offset 0 of the chosen buffer (no recvmsg_out header)
-    var buf_start = pool + buf_id * BUF_SIZE
+    var buf_start = pool.unsafe_offset(buf_id * BUF_SIZE)
     var p0 = buf_start[0]
     var p1 = buf_start[1]
     var p2 = buf_start[2]
@@ -285,7 +285,7 @@ def test_multishot_recv() raises:
     _ = external_call["close", Int32](client_fd)
     _ = external_call["close", Int32](server_fd)
     _ = external_call["close", Int32](listen_fd)
-    pool.free()
+    pool.unsafe_free()
     _ = pb_cmp
     _ = recv_cmp
     print("test_multishot_recv PASSED")

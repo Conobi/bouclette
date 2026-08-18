@@ -10,7 +10,7 @@ from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
 from boucle.socle.linux.raw import sockaddr_in
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 
@@ -27,12 +27,12 @@ struct ConnectResult:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the connect result."""
-        var self_ptr = UnsafePointer[ConnectResult, MutAnyOrigin](
+        var self_ptr = Pointer[ConnectResult, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -49,14 +49,14 @@ def test_completion_connect() raises:
     # Discover the kernel-assigned port via getsockname(2).
     var bound = sockaddr_in()
     var bound_len = Int32(16)  # sizeof(sockaddr_in); socklen_t is 32-bit
-    var bound_ptr = UnsafePointer(to=bound).bitcast[Int8]()
-    var bound_len_ptr = UnsafePointer(to=bound_len).bitcast[Int8]()
+    var bound_ptr = Pointer(to=bound).unsafe_bitcast[Int8]()
+    var bound_len_ptr = Pointer(to=bound_len).unsafe_bitcast[Int8]()
     var gs = external_call["getsockname", Int32](
         server.raw(), bound_ptr, bound_len_ptr
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutAnyOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -80,12 +80,12 @@ def test_completion_connect() raises:
 
     # Wire completion callback.
     var slot = ConnectResult()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=slot))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=slot))
     )
     var cmp = Completion(invoke=ConnectResult.on_complete, context=ctx)
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     loop.submit_connect(client.raw(), addr_ptr, addr_len, cmp_ptr)

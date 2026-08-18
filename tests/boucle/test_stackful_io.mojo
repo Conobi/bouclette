@@ -8,8 +8,8 @@ from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
 from boucle.completion import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.socle.ptr import null_ptr
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal
 
 
@@ -23,7 +23,7 @@ struct SharedState:
     pointers that remain valid for the duration of the test.
     """
 
-    var coro_ptr: UnsafePointer[CoroHandle, MutUntrackedOrigin]
+    var coro_ptr: Pointer[CoroHandle, MutUntrackedOrigin]
     var io_result: Int32
     var coro_saw_result: Int32
     var coro_completed: Bool
@@ -46,7 +46,7 @@ def coro_body(mut y: CoroYielder) raises:
     2. When resumed by the callback, read the result from shared state.
     3. Mark ourselves done.
     """
-    var state = y.user_data().bitcast[SharedState]()
+    var state = y.user_data().unsafe_bitcast[SharedState]()
 
     # Suspend -- the loop will resume us once the nop completes
     y.yield_to_caller()
@@ -60,12 +60,12 @@ def coro_body(mut y: CoroYielder) raises:
 
 
 def _on_io_complete(
-    ctx: UnsafePointer[NoneType, MutAnyOrigin],
+    ctx: Pointer[NoneType, MutAnyOrigin],
     result: Int32,
     flags: UInt32,
 ):
     """On completion: store result in shared state and resume the coroutine."""
-    var state_ptr = UnsafePointer[SharedState, MutAnyOrigin](
+    var state_ptr = Pointer[SharedState, MutAnyOrigin](
         unsafe_from_address=Int(ctx)
     )
     state_ptr[].io_result = result
@@ -87,28 +87,28 @@ def test_coro_with_completion_loop() raises:
     # it via raw pointers. The struct must outlive both.
     var state = SharedState()
 
-    var state_ptr = UnsafePointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
-    var state_for_cb = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=state))
+    var state_for_cb = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=state))
     )
 
     # Allocate CoroHandle on heap so @explicit_destroy doesn't conflict
     # with raising calls in the test body. Cleanup via take_pointee + destroy.
-    var coro_heap = alloc[CoroHandle](1).as_unsafe_any_origin()
+    var coro_heap = unsafe_alloc[CoroHandle](1).as_unsafe_any_origin()
     var h = CoroHandle(coro_body, user_data=state_ptr)
-    coro_heap.init_pointee_move(h^)
+    coro_heap.unsafe_write(h^)
 
     # Wire the completion callback to shared state
     var loop = CompletionLoop(sq_entries=8)
     var cmp = Completion(invoke=_on_io_complete, context=state_for_cb)
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     # Store coro address so the callback can call resume()
-    state.coro_ptr = UnsafePointer[CoroHandle, MutUntrackedOrigin](
+    state.coro_ptr = Pointer[CoroHandle, MutUntrackedOrigin](
         unsafe_from_address=Int(coro_heap)
     )
 
@@ -131,8 +131,8 @@ def test_coro_with_completion_loop() raises:
     )
 
     # Explicit cleanup
-    coro_heap.take_pointee().destroy()
-    coro_heap.free()
+    coro_heap.unsafe_take_pointee().destroy()
+    coro_heap.unsafe_free()
     _ = cmp
 
 

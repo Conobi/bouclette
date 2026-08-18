@@ -1,6 +1,6 @@
 """Integration test: submit NOP via IoUringDriver and verify callback fires."""
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal
 
 from boucle.proactor.completion import Completion
@@ -22,12 +22,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records result into the Tracker."""
-        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].last_result = result
@@ -39,12 +39,12 @@ def test_driver_nop() raises:
     """Submit a NOP through IoUringDriver, tick, and verify dispatch."""
     var driver = IoUringDriver(sq_entries=16)
     var tracker = Tracker()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
-    var cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=cmp))
+    var cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
     )
 
     driver.submit_nop(cmp_ptr)

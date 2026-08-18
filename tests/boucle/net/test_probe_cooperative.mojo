@@ -1,6 +1,6 @@
 """Test that ProbeBatch cooperatively services other I/O on the same loop."""
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true
 
 from boucle.net.probe import ProbeBatch, PortStatus
@@ -22,17 +22,17 @@ struct CoopTracker:
 
     def wire(mut self):
         """Wire the Completion callback to point at this tracker instance."""
-        self.cmp.context = UnsafePointer[NoneType, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=self))
+        self.cmp.context = Pointer[NoneType, MutAnyOrigin](
+            unsafe_from_address=Int(Pointer(to=self))
         )
         self.cmp.invoke = Self._on_nop
 
     @staticmethod
     def _on_nop(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin], result: Int32, flags: UInt32
+        ctx: Pointer[NoneType, MutAnyOrigin], result: Int32, flags: UInt32
     ):
         """Completion callback that sets nop_fired=True on the owning tracker."""
-        var self_ptr = UnsafePointer[CoopTracker, MutAnyOrigin](
+        var self_ptr = Pointer[CoopTracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].nop_fired = True
@@ -45,8 +45,8 @@ def test_probe_cooperative() raises:
     var tracker = CoopTracker()
     tracker.wire()
     loop.submit_nop(
-        UnsafePointer[Completion, MutAnyOrigin](
-            unsafe_from_address=Int(UnsafePointer(to=tracker.cmp))
+        Pointer[Completion, MutAnyOrigin](
+            unsafe_from_address=Int(Pointer(to=tracker.cmp))
         )
     )
 

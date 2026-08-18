@@ -25,9 +25,9 @@ def test_poll_empty_returns_no_events() raises:
 
 def test_pipe_readable() raises:
     """Registering the read end of a pipe and writing a byte yields a readable event."""
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -39,7 +39,7 @@ def test_pipe_readable() raises:
     # Write a byte to make read end readable.
     var msg = UInt8(1)
     _ = syscall[1, Scalar[DType.int64]](
-        write_fd, UnsafePointer(to=msg), UInt64(1)
+        write_fd, Pointer(to=msg), UInt64(1)
     )
 
     var events = driver.poll(timeout_ms=100)
@@ -55,9 +55,9 @@ def test_pipe_readable() raises:
 
 def test_pipe_writable() raises:
     """Registering the write end of a pipe yields a writable event."""
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -78,9 +78,9 @@ def test_pipe_writable() raises:
 
 def test_modify_interest() raises:
     """Modifying interest from READABLE to WRITABLE changes reported events."""
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -109,9 +109,9 @@ def test_modify_interest() raises:
 
 def test_deregister_stops_events() raises:
     """Deregistering a fd stops subsequent poll() from returning events for it."""
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -135,13 +135,13 @@ def test_deregister_stops_events() raises:
 
 def test_multiple_fds() raises:
     """Multiple registered fds can return events in a single poll."""
-    var pipe1 = InlineArray[Int32, 2](fill=0)
-    var pipe2 = InlineArray[Int32, 2](fill=0)
+    var pipe1 = Array[Int32, 2](fill=0)
+    var pipe2 = Array[Int32, 2](fill=0)
     var r1 = external_call["pipe", Int32](
-        UnsafePointer(to=pipe1).bitcast[Int32]()
+        Pointer(to=pipe1).unsafe_bitcast[Int32]()
     )
     var r2 = external_call["pipe", Int32](
-        UnsafePointer(to=pipe2).bitcast[Int32]()
+        Pointer(to=pipe2).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(r1), 0)
     assert_equal(Int(r2), 0)

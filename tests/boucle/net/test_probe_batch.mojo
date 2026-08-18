@@ -1,7 +1,7 @@
 """Test ProbeBatch: concurrency control, FD leak detection, complete coverage."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.net.probe import PortStatus, ProbeResult, ProbeBatch

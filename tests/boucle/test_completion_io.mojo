@@ -8,7 +8,7 @@ from boucle.completion import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 
@@ -25,12 +25,12 @@ struct IOResult:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the I/O result."""
-        var self_ptr = UnsafePointer[IOResult, MutAnyOrigin](
+        var self_ptr = Pointer[IOResult, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -39,12 +39,12 @@ struct IOResult:
 
 def test_completion_io() raises:
     # Create a connected AF_UNIX socketpair (supports send/recv).
-    var sv = InlineArray[Int32, 2](fill=0)
+    var sv = Array[Int32, 2](fill=0)
     var res = external_call["socketpair", Int32](
         Int32(1),  # AF_UNIX
         Int32(1),  # SOCK_STREAM
         Int32(0),
-        UnsafePointer(to=sv).bitcast[Int32](),
+        Pointer(to=sv).unsafe_bitcast[Int32](),
     )
     assert_equal(Int(res), 0)
     var fd_a: RawHandle = sv[0]
@@ -55,16 +55,16 @@ def test_completion_io() raises:
     # ── Send "hello" through CompletionLoop ──────────────────────────────
 
     var send_slot = IOResult()
-    var send_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_slot))
+    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_slot))
     )
     var send_cmp = Completion(invoke=IOResult.on_complete, context=send_ctx)
-    var send_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_cmp))
+    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     var msg = String("hello")
-    var msg_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var msg_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
     loop.submit_send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
@@ -76,16 +76,16 @@ def test_completion_io() raises:
     # ── Recv through CompletionLoop ──────────────────────────────────────
 
     var recv_slot = IOResult()
-    var recv_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_slot))
+    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_slot))
     )
     var recv_cmp = Completion(invoke=IOResult.on_complete, context=recv_ctx)
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
     var buf = List[UInt8](length=16, fill=0)
-    var buf_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var buf_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
     loop.submit_recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)

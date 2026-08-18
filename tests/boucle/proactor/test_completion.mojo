@@ -1,6 +1,6 @@
 """Test Completion struct dispatch."""
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal
 from boucle.proactor.completion import Completion
 
@@ -20,12 +20,12 @@ struct Tracker:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records result into the Tracker."""
-        var self_ptr = UnsafePointer[Tracker, MutAnyOrigin](
+        var self_ptr = Pointer[Tracker, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].last_result = result
@@ -36,8 +36,8 @@ struct Tracker:
 def test_completion() raises:
     """Exercise Completion fire dispatch."""
     var tracker = Tracker()
-    var ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=tracker))
+    var ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
     )
     var cmp = Completion(invoke=Tracker.on_complete, context=ctx)
 
