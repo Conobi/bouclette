@@ -37,7 +37,8 @@ struct OwnedHandle(Movable):
 
     @always_inline("nodebug")
     def __deinit__(deinit self):
-        close_unchecked(unsafe_fd=self._raw)
+        if self._raw >= 0:
+            close_unchecked(unsafe_fd=self._raw)
 
     @always_inline("nodebug")
     def raw(self) raises -> RawHandle:

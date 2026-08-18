@@ -198,15 +198,34 @@ struct Backlog(TrivialRegisterPassable):
         self.value = value
 
 
-struct Shutdown(TrivialRegisterPassable):
-    """`SHUT_*` constants for use with `shutdown`."""
+struct Shutdown(TrivialRegisterPassable, Equatable):
+    """Direction for shutting down part or all of a connection.
+
+    Maps to `SHUT_RD`, `SHUT_WR`, and `SHUT_RDWR` constants.
+    """
 
     comptime RD = Self(0)     # SHUT_RD
     comptime WR = Self(1)     # SHUT_WR
     comptime RDWR = Self(2)   # SHUT_RDWR
 
+    # Aliases matching the portable API naming convention.
+    comptime READ = Self(0)
+    comptime WRITE = Self(1)
+    comptime BOTH = Self(2)
+
     var value: Int32
 
     @always_inline("nodebug")
+    @implicit
     def __init__(out self, value: Int32):
         self.value = value
+
+    @always_inline("nodebug")
+    def __eq__(self, other: Self) -> Bool:
+        """Returns True if both values represent the same shutdown direction."""
+        return self.value == other.value
+
+    @always_inline("nodebug")
+    def __ne__(self, other: Self) -> Bool:
+        """Returns True if the values represent different shutdown directions."""
+        return self.value != other.value

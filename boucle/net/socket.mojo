@@ -14,6 +14,7 @@ from std.memory import Pointer
 from std.sys.info import size_of
 
 from boucle.handle import RawHandle, OwnedHandle
+from boucle.socle.linux.fd import close as _fd_close
 from boucle.net.addr import SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6
 from boucle.net.ip import IpAddrV6
 from boucle.net.options import (
@@ -330,6 +331,12 @@ struct Socket(Movable):
         CompletionLoop or ReadinessLoop.
         """
         return Self._connect_new(addr, AddrFamily.INET6, SocketType.DGRAM, Protocol.UDP)
+
+    def close(mut self) raises:
+        """Explicitly close the socket. Idempotent -- safe to call before destructor."""
+        if self._handle._raw >= 0:
+            _fd_close(unsafe_fd=self._handle._raw)
+            self._handle._raw = -1
 
     @always_inline
     def raw(self) raises -> RawHandle:
