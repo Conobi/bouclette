@@ -100,3 +100,7 @@ comptime sigset_t = c_ulong
 # File descriptor flags
 comptime O_NONBLOCK = 2048
 comptime O_CLOEXEC = 524288
+
+# fcntl constants
+comptime F_GETFL = 3
+comptime F_SETFL = 4
