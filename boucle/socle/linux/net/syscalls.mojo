@@ -12,7 +12,7 @@ bridge lives in ``boucle.net.socket``.
 from std.ffi import external_call
 from std.memory import Pointer
 
-from boucle.socle.linux.raw import MSG_NOSIGNAL
+from boucle.socle.linux.raw import MSG_NOSIGNAL, F_GETFL, F_SETFL
 
 
 @always_inline
@@ -224,17 +224,17 @@ def _setsockopt_timeval(
         fd: Socket file descriptor.
         level: Protocol level (e.g. SOL_SOCKET).
         optname: Option name (e.g. SO_RCVTIMEO).
-        ms: Timeout in milliseconds.
+        ms: Timeout in milliseconds. 0 disables the timeout.
 
     Raises:
         On syscall failure.
     """
-    var tv_sec = Int64(ms // 1000)
-    var tv_usec = Int64((ms % 1000) * 1000)
-    # Pass pointer to the start of the timeval struct (tv_sec field).
-    var sec_p = Pointer(to=tv_sec)
+    var tv = InlineArray[Int64, 2](fill=Int64(0))
+    tv[0] = Int64(ms // 1000)
+    tv[1] = Int64((ms % 1000) * 1000)
+    var tv_p = Pointer(to=tv)
     var res = external_call["setsockopt", Int32](
-        fd, level, optname, sec_p, UInt32(16),
+        fd, level, optname, tv_p, UInt32(16),
     )
     if res < 0:
         raise String(Int(res))
@@ -253,7 +253,7 @@ def _fcntl_getfl(fd: Int32) raises -> Int32:
     Raises:
         On syscall failure.
     """
-    var res = external_call["fcntl", Int32](fd, Int32(3), Int32(0))
+    var res = external_call["fcntl", Int32](fd, Int32(F_GETFL), Int32(0))
     if res < 0:
         raise String(Int(res))
     return res
@@ -270,6 +270,6 @@ def _fcntl_setfl(fd: Int32, flags: Int32) raises:
     Raises:
         On syscall failure.
     """
-    var res = external_call["fcntl", Int32](fd, Int32(4), flags)
+    var res = external_call["fcntl", Int32](fd, Int32(F_SETFL), flags)
     if res < 0:
         raise String(Int(res))
