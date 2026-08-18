@@ -461,6 +461,46 @@ struct Socket(Movable):
         result.addr = src[]
         return result
 
+    def peer_addr_v4(self) raises -> SocketAddrStorV4:
+        """Return the peer IPv4 address of a connected socket.
+
+        Uses InlineArray as raw buffer to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+        """
+        var buf = InlineArray[UInt8, 16](fill=0)  # sizeof(sockaddr_in)
+        var addrlen = socklen_t(16)
+        var buf_p = Pointer(to=buf)
+        var len_p = Pointer(to=addrlen)
+        var res = external_call["getpeername", Int32](
+            self._handle._raw, buf_p, len_p,
+        )
+        if res < 0:
+            raise String(Int(-get_errno()))
+        var result = SocketAddrStorV4()
+        var src = buf_p.unsafe_bitcast[sockaddr_in]()
+        result.addr = src[]
+        return result
+
+    def peer_addr_v6(self) raises -> SocketAddrStorV6:
+        """Return the peer IPv6 address of a connected socket.
+
+        Uses InlineArray as raw buffer to work around the TRP pointer
+        corruption issue in Mojo 1.0.0.
+        """
+        var buf = InlineArray[UInt8, 28](fill=0)  # sizeof(sockaddr_in6)
+        var addrlen = socklen_t(28)
+        var buf_p = Pointer(to=buf)
+        var len_p = Pointer(to=addrlen)
+        var res = external_call["getpeername", Int32](
+            self._handle._raw, buf_p, len_p,
+        )
+        if res < 0:
+            raise String(Int(-get_errno()))
+        var result = SocketAddrStorV6()
+        var src = buf_p.unsafe_bitcast[sockaddr_in6]()
+        result.addr = src[]
+        return result
+
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
         if self._handle._raw >= 0:
