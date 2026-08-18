@@ -5,13 +5,13 @@ is stored as the SQE user_data. On CQE arrival, the event loop recovers
 the Completion pointer and invokes its callback with the result.
 """
 
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from boucle.socle.ptr import null_ptr
 
 
 # Function-pointer type for completion callbacks.
 # Signature: (context_ptr, cqe_result, cqe_flags) -> None
-comptime CompletionFn = def (UnsafePointer[NoneType, MutAnyOrigin], Int32, UInt32) thin -> None
+comptime CompletionFn = def (Pointer[NoneType, MutUntrackedOrigin], Int32, UInt32) thin -> None
 
 
 struct Completion(Movable):
@@ -23,17 +23,17 @@ struct Completion(Movable):
     """
 
     var invoke: CompletionFn
-    var context: UnsafePointer[NoneType, MutAnyOrigin]
+    var context: Pointer[NoneType, MutUntrackedOrigin]
 
     def __init__(out self):
         """Construct an uninitialized Completion. Wire before submitting."""
         self.invoke = Self._noop
-        self.context = null_ptr[NoneType, MutAnyOrigin]()
+        self.context = null_ptr[NoneType, MutUntrackedOrigin]()
 
     def __init__(
         out self,
         invoke: CompletionFn,
-        context: UnsafePointer[NoneType, MutAnyOrigin],
+        context: Pointer[NoneType, MutUntrackedOrigin],
     ):
         """Construct a wired Completion ready for submission.
 
@@ -44,10 +44,10 @@ struct Completion(Movable):
         self.invoke = invoke
         self.context = context
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self.invoke = take.invoke
-        self.context = take.context
+        self.invoke = move.invoke
+        self.context = move.context
 
     def fire(self, result: Int32, flags: UInt32):
         """Dispatch this completion's callback.
@@ -60,7 +60,7 @@ struct Completion(Movable):
 
     @staticmethod
     def _noop(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
         result: Int32,
         flags: UInt32,
     ):

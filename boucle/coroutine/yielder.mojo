@@ -2,11 +2,11 @@
 
 Contains the tightly-coupled types that cannot be split across modules:
 _CoroInner references CoroutineBody (which names Yielder in its signature),
-and Yielder references _CoroInner via UnsafePointer.
+and Yielder references _CoroInner via Pointer.
 """
 
 from std.os import abort
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from boucle.socle.linux.ucontext import (
     alloc_ucontext,
     uc_swapcontext_unchecked,
@@ -35,9 +35,9 @@ struct Yielder:
     use after the body returns.
     """
 
-    var _inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]
+    var _inner: Pointer[_CoroInner, MutUntrackedOrigin]
 
-    def __init__(out self, inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]):
+    def __init__(out self, inner: Pointer[_CoroInner, MutUntrackedOrigin]):
         """Initialize with a pointer to the shared coroutine state."""
         self._inner = inner
 
@@ -57,7 +57,7 @@ struct Yielder:
         # When we return here, the caller called resume() again
         self._inner[].phase = CORO_RUNNING
 
-    def user_data(self) -> UnsafePointer[NoneType, MutUntrackedOrigin]:
+    def user_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Access the user data pointer passed at Coroutine creation."""
         return self._inner[].user_data
 
@@ -72,21 +72,21 @@ struct _CoroInner(Movable):
     """
 
     var magic: UInt64
-    var caller_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
-    var coro_ctx: UnsafePointer[UInt8, MutUntrackedOrigin]
-    var stack_base: UnsafePointer[c_void, StaticConstantOrigin]
+    var caller_ctx: Pointer[UInt8, MutUntrackedOrigin]
+    var coro_ctx: Pointer[UInt8, MutUntrackedOrigin]
+    var stack_base: Pointer[c_void, ImmStaticOrigin]
     var stack_total: UInt
     var phase: UInt8
     var body: CoroutineBody
-    var user_data: UnsafePointer[NoneType, MutUntrackedOrigin]
+    var user_data: Pointer[NoneType, MutUntrackedOrigin]
     var has_error: Bool
     var error_msg: String
 
     def __init__(
         out self,
         body: CoroutineBody,
-        user_data: UnsafePointer[NoneType, MutUntrackedOrigin],
-        stack_base: UnsafePointer[c_void, StaticConstantOrigin],
+        user_data: Pointer[NoneType, MutUntrackedOrigin],
+        stack_base: Pointer[c_void, ImmStaticOrigin],
         stack_total: UInt,
     ):
         """Initialize shared coroutine state with allocated ucontext buffers."""
@@ -101,18 +101,18 @@ struct _CoroInner(Movable):
         self.has_error = False
         self.error_msg = String()
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor for _CoroInner."""
-        self.magic = take.magic
-        self.caller_ctx = take.caller_ctx
-        self.coro_ctx = take.coro_ctx
-        self.stack_base = take.stack_base
-        self.stack_total = take.stack_total
-        self.phase = take.phase
-        self.body = take.body
-        self.user_data = take.user_data
-        self.has_error = take.has_error
-        self.error_msg = take.error_msg^
+        self.magic = move.magic
+        self.caller_ctx = move.caller_ctx
+        self.coro_ctx = move.coro_ctx
+        self.stack_base = move.stack_base
+        self.stack_total = move.stack_total
+        self.phase = move.phase
+        self.body = move.body
+        self.user_data = move.user_data
+        self.has_error = move.has_error
+        self.error_msg = move.error_msg^
 
 
 # ── Trampoline ──────────────────────────────────────────────────────────
@@ -125,7 +125,7 @@ def _coro_trampoline(inner_addr: Int64):
     Calls the user's body function, catches errors, marks DONE, swaps back.
     MUST never return normally -- always swaps back to caller.
     """
-    var inner = UnsafePointer[_CoroInner, MutUntrackedOrigin](
+    var inner = Pointer[_CoroInner, MutUntrackedOrigin](
         unsafe_from_address=Int(inner_addr)
     )
     # Always-on canary: a corrupt pointer here means unrecoverable state.

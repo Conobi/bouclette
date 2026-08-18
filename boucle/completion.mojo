@@ -15,7 +15,7 @@ from boucle.handle import RawHandle
 from boucle.proactor.completion import Completion, CompletionFn
 from boucle.proactor.loop import EventLoop
 from boucle.drivers import _CompletionDriver
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
 # ── Opaque CompletionLoop ─────────────────────────────────────────────────────
@@ -42,13 +42,13 @@ struct CompletionLoop(Movable):
             _CompletionDriver(sq_entries=sq_entries)
         )
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self._inner = take._inner^
+        self._inner = move._inner^
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroy the event loop and its underlying driver."""
-        self._inner^.__del__()
+        self._inner^.__deinit__()
 
     # ── IoDriver delegation ───────────────────────────────────────────────
 
@@ -63,7 +63,7 @@ struct CompletionLoop(Movable):
         self._inner.driver.tick(wait)
 
     def submit_nop(
-        mut self, c: UnsafePointer[Completion, MutAnyOrigin]
+        mut self, c: Pointer[Completion, MutAnyOrigin]
     ) raises:
         """Queue a no-op operation.
 
@@ -75,9 +75,9 @@ struct CompletionLoop(Movable):
     def submit_connect(
         mut self,
         fd: RawHandle,
-        addr: UnsafePointer[UInt8, StaticConstantOrigin],
+        addr: Pointer[UInt8, ImmStaticOrigin],
         addr_len: UInt64,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a connect on socket `fd` to the given address.
 
@@ -91,8 +91,8 @@ struct CompletionLoop(Movable):
 
     def submit_timeout(
         mut self,
-        ts: UnsafePointer[NoneType, StaticConstantOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        ts: Pointer[NoneType, ImmStaticOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
@@ -104,8 +104,8 @@ struct CompletionLoop(Movable):
 
     def submit_cancel(
         mut self,
-        target: UnsafePointer[Completion, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        target: Pointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Cancel a previously submitted operation.
 
@@ -118,7 +118,7 @@ struct CompletionLoop(Movable):
     def submit_accept(
         mut self,
         fd: RawHandle,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue an accept on listening socket `fd`.
 
@@ -131,9 +131,9 @@ struct CompletionLoop(Movable):
     def submit_recv(
         mut self,
         fd: RawHandle,
-        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutAnyOrigin],
         len: UInt32,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a recv from socket `fd` into `buf`.
 
@@ -148,9 +148,9 @@ struct CompletionLoop(Movable):
     def submit_send(
         mut self,
         fd: RawHandle,
-        buf: UnsafePointer[UInt8, MutAnyOrigin],
+        buf: Pointer[UInt8, MutAnyOrigin],
         len: UInt32,
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a send on socket `fd` from `buf`.
 
@@ -165,8 +165,8 @@ struct CompletionLoop(Movable):
     def submit_recvmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[NoneType, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -180,8 +180,8 @@ struct CompletionLoop(Movable):
     def submit_sendmsg(
         mut self,
         fd: RawHandle,
-        msg: UnsafePointer[NoneType, MutAnyOrigin],
-        c: UnsafePointer[Completion, MutAnyOrigin],
+        msg: Pointer[NoneType, MutAnyOrigin],
+        c: Pointer[Completion, MutAnyOrigin],
     ) raises:
         """Queue a sendmsg on socket `fd`.
 

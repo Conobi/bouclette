@@ -16,10 +16,10 @@ from boucle.handle import RawHandle
 from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
-from std.memory import UnsafePointer
+from std.memory import Pointer
 
 
-trait ReadinessHandler(Movable, ImplicitlyDestructible):
+trait ReadinessHandler(Movable, Deinitable):
     """Callback interface for readiness events.
 
     The handler receives an unsafe pointer to the owning loop so it
@@ -33,7 +33,7 @@ trait ReadinessHandler(Movable, ImplicitlyDestructible):
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
+        loop: Pointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
@@ -67,10 +67,10 @@ struct ReadinessLoop[Handler: ReadinessHandler](Movable):
         self._driver = _ReadinessDriver(max_events=max_events)
         self._handler = handler^
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self._driver = take._driver^
-        self._handler = take._handler^
+        self._driver = move._driver^
+        self._handler = move._handler^
 
     def register(mut self, fd: RawHandle, interest: Interest, token: Token) raises:
         """Add a file descriptor to the interest set.
@@ -116,8 +116,8 @@ struct ReadinessLoop[Handler: ReadinessHandler](Movable):
             # doesn't alias with the `mut self._handler` borrow below.
             # Safety: the pointer is valid only for the duration of the
             # on_ready call; the loop outlives the handler invocation.
-            var loop_ptr = UnsafePointer[Self, MutUntrackedOrigin](
-                unsafe_from_address=Int(UnsafePointer(to=self))
+            var loop_ptr = Pointer[Self, MutUntrackedOrigin](
+                unsafe_from_address=Int(Pointer(to=self))
             )
             self._handler.on_ready(
                 loop_ptr,

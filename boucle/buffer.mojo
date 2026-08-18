@@ -7,12 +7,12 @@ struct IOBuffer:
     Does not own the memory — caller keeps backing storage alive.
     """
 
-    var unsafe_ptr: UnsafePointer[Int8, StaticConstantOrigin]
+    var unsafe_ptr: Pointer[Int8, ImmStaticOrigin]
     var len: UInt
 
     @always_inline("nodebug")
     def __init__(out self, ref data: List[UInt8]):
-        self.unsafe_ptr = UnsafePointer[Int8, StaticConstantOrigin](
+        self.unsafe_ptr = Pointer[Int8, ImmStaticOrigin](
             unsafe_from_address=Int(data.unsafe_ptr())
         )
         self.len = UInt(len(data))
@@ -21,7 +21,7 @@ struct IOBuffer:
     def __init__(
         out self,
         *,
-        unsafe_ptr: UnsafePointer[Int8, StaticConstantOrigin],
+        unsafe_ptr: Pointer[Int8, ImmStaticOrigin],
         len: UInt,
     ):
         self.unsafe_ptr = unsafe_ptr

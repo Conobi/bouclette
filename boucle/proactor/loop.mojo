@@ -22,14 +22,14 @@ struct EventLoop[D: IoDriver](Movable):
         self.driver = driver^
         self.running = False
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self.driver = take.driver^
-        self.running = take.running
+        self.driver = move.driver^
+        self.running = move.running
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroy the event loop and its underlying driver."""
-        self.driver^.__del__()
+        self.driver^.__deinit__()
 
     def run_once(mut self) raises:
         """Block until at least one completion fires, then dispatch all ready."""

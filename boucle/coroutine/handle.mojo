@@ -1,7 +1,7 @@
 """Coroutine — caller-side stackful coroutine handle."""
 
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from boucle.socle.linux.ucontext import (
     free_ucontext,
     uc_getcontext,
@@ -32,7 +32,7 @@ from .yielder import _CoroInner, CoroutineBody, _coro_trampoline
 
 
 @explicit_destroy("must call destroy() to release coroutine resources")
-struct Coroutine(Movable):
+struct Coroutine(Movable, Deinitable where False):
     """Stackful coroutine. Caller-side handle.
 
     Lifecycle: CREATED -> RUNNING <-> SUSPENDED -> DONE
@@ -44,12 +44,12 @@ struct Coroutine(Movable):
     Linear type: callers must explicitly call destroy() when done.
     """
 
-    var _inner: UnsafePointer[_CoroInner, MutUntrackedOrigin]
+    var _inner: Pointer[_CoroInner, MutUntrackedOrigin]
 
     def __init__(
         out self,
         body: CoroutineBody,
-        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
+        user_data: Pointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
         stack_size: UInt = DEFAULT_STACK_SIZE,
     ) raises:
         """Allocate a coroutine with a guard-page-protected stack.
@@ -83,13 +83,13 @@ struct Coroutine(Movable):
             raise e^
 
         # Allocate and initialize inner state on heap
-        self._inner = alloc[_CoroInner](1)
-        self._inner.init_pointee_move(
+        self._inner = unsafe_alloc[_CoroInner](1)
+        self._inner.unsafe_write(
             _CoroInner(body, user_data, stack_base, total)
         )
 
         # Set up the coroutine context
-        var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
+        var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(stack_base) + Int(page_size)
         )
         try:
@@ -98,7 +98,7 @@ struct Coroutine(Movable):
             # Get trampoline function address
             var trampoline_fn = _coro_trampoline
             var fn_addr = Int(
-                UnsafePointer(to=trampoline_fn).bitcast[Int]()[]
+                Pointer(to=trampoline_fn).unsafe_bitcast[Int]()[]
             )
 
             setup_context(
@@ -113,9 +113,9 @@ struct Coroutine(Movable):
             self^.destroy()
             raise e^
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor for Coroutine."""
-        self._inner = take._inner
+        self._inner = move._inner
 
     def destroy(deinit self):
         """Explicitly release all coroutine resources.
@@ -137,8 +137,8 @@ struct Coroutine(Movable):
             self._inner[].stack_total,
         )
         # Destroy inner (runs String destructor for error_msg)
-        self._inner.destroy_pointee()
-        self._inner.free()
+        self._inner.unsafe_deinit_pointee()
+        self._inner.unsafe_free()
 
     def resume(mut self) raises:
         """Resume (or start) the coroutine.
@@ -173,7 +173,7 @@ struct Coroutine(Movable):
     def reset(
         mut self,
         body: CoroutineBody,
-        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
+        user_data: Pointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
     ) raises:
         """Recycle this coroutine for a new body, reusing its stack and
         ucontext storage. Caller must ensure the coro is CREATED or DONE
@@ -198,13 +198,13 @@ struct Coroutine(Movable):
         var stack_total = self._inner[].stack_total
         debug_assert(stack_total >= page_size, "corrupted stack_total")
         var stack_size = stack_total - page_size
-        var usable_stack = UnsafePointer[UInt8, MutUntrackedOrigin](
+        var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(self._inner[].stack_base) + Int(page_size)
         )
         uc_getcontext(self._inner[].coro_ctx)
         var trampoline_fn = _coro_trampoline
         var fn_addr = Int(
-            UnsafePointer(to=trampoline_fn).bitcast[Int]()[]
+            Pointer(to=trampoline_fn).unsafe_bitcast[Int]()[]
         )
         setup_context(
             self._inner[].coro_ctx,

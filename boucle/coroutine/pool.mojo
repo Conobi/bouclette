@@ -1,7 +1,7 @@
 """CoroutinePool — free-list pool reusing coroutine stacks."""
 
-from std.memory import UnsafePointer
-from std.memory.unsafe_pointer import alloc
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from boucle.socle.ptr import null_ptr
 from ._state import DEFAULT_STACK_SIZE
 from .handle import Coroutine
@@ -26,7 +26,7 @@ struct CoroutinePool(Movable):
     own pool.
     """
 
-    var _free: List[UnsafePointer[Coroutine, MutAnyOrigin]]
+    var _free: List[Pointer[Coroutine, MutUntrackedOrigin]]
     var _stack_size: UInt
     var _capacity: Int
 
@@ -37,28 +37,28 @@ struct CoroutinePool(Movable):
         stack_size: UInt = DEFAULT_STACK_SIZE,
     ):
         """Initialize the pool with a maximum idle capacity and stack size."""
-        self._free = List[UnsafePointer[Coroutine, MutAnyOrigin]]()
+        self._free = List[Pointer[Coroutine, MutUntrackedOrigin]]()
         self._stack_size = stack_size
         self._capacity = capacity
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor for CoroutinePool."""
-        self._free = take._free^
-        self._stack_size = take._stack_size
-        self._capacity = take._capacity
+        self._free = move._free^
+        self._stack_size = move._stack_size
+        self._capacity = move._capacity
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroy all idle coroutines in the pool."""
         for i in range(len(self._free)):
             var ptr = self._free[i]
-            ptr.take_pointee().destroy()
-            ptr.free()
+            ptr.unsafe_take_pointee().destroy()
+            ptr.unsafe_free()
 
     def acquire(
         mut self,
         body: CoroutineBody,
-        user_data: UnsafePointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
-    ) raises -> UnsafePointer[Coroutine, MutAnyOrigin]:
+        user_data: Pointer[NoneType, MutUntrackedOrigin] = null_ptr[NoneType, MutUntrackedOrigin](),
+    ) raises -> Pointer[Coroutine, MutUntrackedOrigin]:
         """Return a `Coroutine` ready to run `body`. Either pops from
         the free list (fast path, just `reset`) or allocates fresh
         (slow path, full `__init__`).
@@ -67,18 +67,18 @@ struct CoroutinePool(Movable):
             var ptr = self._free.pop()
             ptr[].reset(body, user_data)
             return ptr
-        var ptr = alloc[Coroutine](1).as_unsafe_any_origin()
+        var ptr = unsafe_alloc[Coroutine](1)
         var h = Coroutine(body, user_data, self._stack_size)
-        ptr.init_pointee_move(h^)
+        ptr.unsafe_write(h^)
         return ptr
 
-    def release(mut self, ptr: UnsafePointer[Coroutine, MutAnyOrigin]):
+    def release(mut self, ptr: Pointer[Coroutine, MutUntrackedOrigin]):
         """Return a (DONE) `Coroutine` to the pool. Beyond `capacity`
         idle handles, the surplus is destroyed instead of cached.
         """
         if len(self._free) >= self._capacity:
-            ptr.take_pointee().destroy()
-            ptr.free()
+            ptr.unsafe_take_pointee().destroy()
+            ptr.unsafe_free()
             return
         self._free.append(ptr)
 

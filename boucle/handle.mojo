@@ -32,11 +32,11 @@ struct OwnedHandle(Movable):
         self._raw = raw
 
     @always_inline("nodebug")
-    def __init__(out self, *, deinit take: Self):
-        self._raw = take._raw
+    def __init__(out self, *, deinit move: Self):
+        self._raw = move._raw
 
     @always_inline("nodebug")
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         close_unchecked(unsafe_fd=self._raw)
 
     @always_inline("nodebug")
