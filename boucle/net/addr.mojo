@@ -102,7 +102,7 @@ struct SocketAddrStorAnyMut[Addr: SocketAddr](SocketAddrMut):
 # ===----------------------------------------------------------------------=== #
 
 
-struct SocketAddrStorV4(TrivialRegisterPassable, SocketAddr):
+struct SocketAddrStorV4(ImplicitlyCopyable, Movable, SocketAddr):
     comptime ADDR_LEN: socklen_t = socklen_t(size_of[sockaddr_in]())
 
     var addr: sockaddr_in
@@ -179,7 +179,7 @@ struct SocketAddrV4(TrivialRegisterPassable, SocketAddrStor, SocketAddrStorMut):
 # ===----------------------------------------------------------------------=== #
 
 
-struct SocketAddrStorV6(TrivialRegisterPassable, SocketAddr):
+struct SocketAddrStorV6(ImplicitlyCopyable, Movable, SocketAddr):
     comptime ADDR_LEN: socklen_t = socklen_t(size_of[sockaddr_in6]())
 
     var addr: sockaddr_in6
