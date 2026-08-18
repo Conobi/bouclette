@@ -30,7 +30,11 @@ from boucle.socle.linux.net.syscalls import (
     _listen,
     _setsockopt,
     _connect,
+    _recv,
+    _send,
 )
+from boucle.socle.linux.errno import get_errno, Errno
+from boucle.error import IOError
 from boucle.socle.linux.raw import (
     sockaddr_in6,
     socklen_t,
@@ -331,6 +335,67 @@ struct Socket(Movable):
         CompletionLoop or ReadinessLoop.
         """
         return Self._connect_new(addr, AddrFamily.INET6, SocketType.DGRAM, Protocol.UDP)
+
+    def recv[origin: MutOrigin](self, buf: Span[UInt8, origin]) raises -> Int:
+        """Receive into buf. Returns bytes read (0 = peer closed).
+
+        On a blocking socket the call blocks until data arrives or the
+        peer closes the connection.  On a non-blocking socket it returns
+        immediately; if no data is available the raised ``IOError`` wraps
+        ``EAGAIN`` / ``EWOULDBLOCK``.
+
+        Args:
+            buf: Mutable byte span to receive into.
+
+        Returns:
+            Number of bytes read, or 0 when the peer has closed.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        var n = _recv(
+            self.raw(),
+            Pointer[UInt8, MutUntrackedOrigin](
+                unsafe_from_address=Int(buf.unsafe_ptr())
+            ),
+            len(buf),
+        )
+        if n >= 0:
+            return n
+        var errno = get_errno()
+        raise String(IOError(Errno(errno=UInt16(errno))))
+
+    def send[origin: Origin](self, buf: Span[UInt8, origin]) raises -> Int:
+        """Send from buf. Returns bytes written (may be partial).
+
+        ``MSG_NOSIGNAL`` is applied internally to suppress ``SIGPIPE`` on
+        Linux so callers never need to install a signal handler.
+
+        On a blocking socket the call blocks until the kernel accepts at
+        least some bytes.  On a non-blocking socket it returns
+        immediately; if the send buffer is full the raised ``IOError``
+        wraps ``EAGAIN`` / ``EWOULDBLOCK``.
+
+        Args:
+            buf: Byte span to send.
+
+        Returns:
+            Number of bytes actually written (may be less than ``len(buf)``).
+
+        Raises:
+            IOError on syscall failure.
+        """
+        var n = _send(
+            self.raw(),
+            Pointer[UInt8, ImmStaticOrigin](
+                unsafe_from_address=Int(buf.unsafe_ptr())
+            ),
+            len(buf),
+        )
+        if n >= 0:
+            return n
+        var errno = get_errno()
+        raise String(IOError(Errno(errno=UInt16(errno))))
 
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
