@@ -23,7 +23,8 @@ comptime EPOLLONESHOT = 0x40000000
 comptime EPOLLET = 0x80000000
 
 
-struct epoll_event(TrivialRegisterPassable):
+@fieldwise_init
+struct epoll_event(ImplicitlyCopyable, Movable):
     """Linux epoll_event struct, packed to 12 bytes on aarch64.
 
     Kernel UAPI marks this struct __packed__ on all arches. aarch64's

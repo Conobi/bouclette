@@ -94,7 +94,7 @@ comptime MADV_SOFT_OFFLINE = 101
 
 # Kernel timespec (arch-stable on Linux LP64)
 @fieldwise_init
-struct __kernel_timespec(TrivialRegisterPassable):
+struct __kernel_timespec:
     var tv_sec: c_longlong
     var tv_nsec: c_longlong
 

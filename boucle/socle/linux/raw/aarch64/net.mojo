@@ -144,7 +144,7 @@ comptime socklen_t = c_uint
 comptime __kernel_sa_family_t = c_ushort
 
 
-struct in_addr(TrivialRegisterPassable):
+struct in_addr:
     var s_addr: __be32
 
     @always_inline
@@ -153,10 +153,9 @@ struct in_addr(TrivialRegisterPassable):
 
 
 # sockaddr_in is 16 bytes on aarch64 (same as x86_64).
-# Fields flattened (sin_addr inlined as __be32) to work around a Mojo
-# 0.26.2 compiler crash when deserializing nested TrivialRegisterPassable
-# structs from mojopkg files.
-struct sockaddr_in(TrivialRegisterPassable):
+# Fields flattened (sin_addr inlined as __be32).
+@fieldwise_init
+struct sockaddr_in:
     var sin_family: __kernel_sa_family_t
     var sin_port: __be16
     var sin_addr_s_addr: __be32  # in_addr.s_addr inlined
@@ -172,9 +171,9 @@ struct sockaddr_in(TrivialRegisterPassable):
         self._pad1 = 0
 
 
-# in6_addr is 16 bytes. Four UInt32 fields give 4-byte alignment and
-# avoid the nested-struct mojopkg crash.
-struct in6_addr(TrivialRegisterPassable):
+# in6_addr is 16 bytes. Four UInt32 fields give 4-byte alignment.
+@fieldwise_init
+struct in6_addr:
     var a: UInt32
     var b: UInt32
     var c: UInt32
@@ -189,8 +188,9 @@ struct in6_addr(TrivialRegisterPassable):
 
 
 # sockaddr_in6 is 28 bytes on aarch64 (same as x86_64).
-# sin6_addr fields inlined to avoid the nested-struct mojopkg crash.
-struct sockaddr_in6(TrivialRegisterPassable):
+# sin6_addr fields inlined.
+@fieldwise_init
+struct sockaddr_in6:
     var sin6_family: c_ushort
     var sin6_port: __be16
     var sin6_flowinfo: __be32
@@ -212,8 +212,9 @@ struct sockaddr_in6(TrivialRegisterPassable):
         self.sin6_scope_id = 0
 
 
-struct iovec(TrivialRegisterPassable):
-    var iov_base: UInt64  # void* stored as UInt64 for TrivialRegisterPassable
+@fieldwise_init
+struct iovec:
+    var iov_base: UInt64  # void*
     var iov_len: UInt64   # size_t
 
     @always_inline
@@ -225,7 +226,8 @@ struct iovec(TrivialRegisterPassable):
 # msghdr is 56 bytes on aarch64 (same LP64 layout as x86_64)
 # offsets: msg_name=0, msg_namelen=8, [pad=12], msg_iov=16, msg_iovlen=24,
 #          msg_control=32, msg_controllen=40, msg_flags=48, [pad=52]
-struct msghdr(TrivialRegisterPassable):
+@fieldwise_init
+struct msghdr:
     var msg_name: UInt64        # void* -- sockaddr pointer
     var msg_namelen: UInt32     # socklen_t
     var _pad0: UInt32           # alignment padding (offsets 12-15)
@@ -250,7 +252,8 @@ struct msghdr(TrivialRegisterPassable):
 
 
 # cmsghdr is 16 bytes -- cmsg_len is size_t (8 bytes on LP64)
-struct cmsghdr(TrivialRegisterPassable):
+@fieldwise_init
+struct cmsghdr:
     var cmsg_len: UInt64   # size_t -- total length including header and data
     var cmsg_level: Int32  # int -- originating protocol
     var cmsg_type: Int32   # int -- protocol-specific type
@@ -262,9 +265,10 @@ struct cmsghdr(TrivialRegisterPassable):
         self.cmsg_type = 0
 
 
-# in_pktinfo is 12 bytes (flattened: in_addr fields inlined)
+# in_pktinfo is 12 bytes (in_addr fields inlined)
 # offsets: ipi_ifindex=0, ipi_spec_dst=4, ipi_addr=8
-struct in_pktinfo(TrivialRegisterPassable):
+@fieldwise_init
+struct in_pktinfo:
     var ipi_ifindex: Int32     # int -- interface index
     var ipi_spec_dst: __be32   # in_addr.s_addr -- local address (source)
     var ipi_addr: __be32       # in_addr.s_addr -- destination address
@@ -276,9 +280,10 @@ struct in_pktinfo(TrivialRegisterPassable):
         self.ipi_addr = 0
 
 
-# in6_pktinfo is 20 bytes (flattened: in6_addr fields inlined)
+# in6_pktinfo is 20 bytes (in6_addr fields inlined)
 # offsets: ipi6_addr=0, ipi6_ifindex=16
-struct in6_pktinfo(TrivialRegisterPassable):
+@fieldwise_init
+struct in6_pktinfo:
     var ipi6_addr_a: UInt32    # in6_addr bytes 0-3
     var ipi6_addr_b: UInt32    # in6_addr bytes 4-7
     var ipi6_addr_c: UInt32    # in6_addr bytes 8-11
