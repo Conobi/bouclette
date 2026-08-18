@@ -154,7 +154,90 @@ def test_peer_addr_v4() raises:
     print("PASS: peer_addr_v4()")
 
 
+def test_peer_addr_v6() raises:
+    """Connect TCP/IPv6 to a local listener, verify peer_addr_v6()."""
+    # Create listener
+    var listener = Socket.tcp_v6()
+    # Set IPV6_V6ONLY before bind
+    var v6only_val = Int32(1)
+    var v6only_p = Pointer(to=v6only_val)
+    _ = external_call["setsockopt", Int32](
+        listener._handle._raw, Int32(41), Int32(26), v6only_p, UInt32(4),
+    )  # SOL_IPV6=41, IPV6_V6ONLY=26
+    _raw_bind_v6(listener._handle._raw)
+
+    # Raw listen
+    var listen_res = external_call["listen", Int32](listener._handle._raw, Int32(1))
+    if listen_res < 0:
+        raise String("listen failed")
+
+    # Get the assigned port
+    var local = listener.local_addr_v6()
+    var port = local.addr.sin6_port  # network byte order
+
+    # Connect a client to the listener
+    var client_fd = external_call["socket", Int32](
+        Int32(10), Int32(1), Int32(6),  # AF_INET6, SOCK_STREAM, IPPROTO_TCP
+    )
+    if client_fd < 0:
+        raise String("socket failed")
+    # Set IPV6_V6ONLY on client
+    var v6only_client = Int32(1)
+    var v6only_client_p = Pointer(to=v6only_client)
+    _ = external_call["setsockopt", Int32](
+        client_fd, Int32(41), Int32(26), v6only_client_p, UInt32(4),
+    )
+    # sockaddr_in6 for [::1]:port
+    var sa = InlineArray[UInt8, 28](fill=0)
+    sa[0] = 10  # AF_INET6
+    # Port in network byte order (copy directly)
+    var port_p = Pointer(to=port).unsafe_bitcast[UInt8]()
+    sa[2] = port_p[unsafe_offset=0]
+    sa[3] = port_p[unsafe_offset=1]
+    # addr = ::1 at offset 8+15=23
+    sa[23] = 1
+    var sa_p = Pointer(to=sa)
+    var conn_res = external_call["connect", Int32](client_fd, sa_p, Int32(28))
+    if conn_res < 0:
+        _ = external_call["close", Int32](client_fd)
+        raise String("connect failed")
+
+    # Accept on listener (non-blocking, but connection is already pending)
+    var acc_buf = InlineArray[UInt8, 28](fill=0)
+    var acc_len = Int32(28)
+    var acc_buf_p = Pointer(to=acc_buf)
+    var acc_len_p = Pointer(to=acc_len)
+    var accept_fd = external_call["accept", Int32](
+        listener._handle._raw, acc_buf_p, acc_len_p,
+    )
+    if accept_fd < 0:
+        _ = external_call["close", Int32](client_fd)
+        raise String("accept failed")
+
+    # Wrap accepted socket
+    var peer = Socket(OwnedHandle(raw=accept_fd))
+    var peer_addr = peer.peer_addr_v6()
+    var peer_port = _to_be[DType.uint16, 1](peer_addr.addr.sin6_port)
+    assert_true(Int(peer_port) > 0, "peer port should be > 0")
+    assert_equal(Int(peer_addr.addr.sin6_family), AF_INET6, "family should be AF_INET6")
+
+    # Verify the peer IP is ::1
+    # sin6_addr starts at offset 8 in sockaddr_in6; last byte should be 1
+    var addr_p = Pointer(to=peer_addr.addr).unsafe_bitcast[UInt8]()
+    # Bytes 8..23 are the 16-byte IPv6 address; ::1 means bytes 8..22 = 0, byte 23 = 1
+    assert_equal(Int(addr_p[unsafe_offset=23]), 1, "peer IPv6 addr last byte should be 1")
+    # Verify leading bytes are zero (spot check first and middle)
+    assert_equal(Int(addr_p[unsafe_offset=8]), 0, "peer IPv6 addr byte 0 should be 0")
+    assert_equal(Int(addr_p[unsafe_offset=15]), 0, "peer IPv6 addr byte 7 should be 0")
+
+    _ = external_call["close", Int32](client_fd)
+    peer.close()
+    listener.close()
+    print("PASS: peer_addr_v6()")
+
+
 def main() raises:
     test_local_addr_v4()
     test_local_addr_v6()
     test_peer_addr_v4()
+    test_peer_addr_v6()

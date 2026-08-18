@@ -22,4 +22,5 @@ def main() raises:
     s.set_recv_timeout(UInt64(0))
     s.set_send_timeout(UInt64(0))
 
+    s.close()
     print("PASS: Socket.set_recv_timeout() and set_send_timeout()")

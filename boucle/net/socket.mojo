@@ -39,8 +39,6 @@ from boucle.socle.linux.net.syscalls import (
     _send,
     _shutdown,
     _setsockopt_timeval,
-    _getsockname_raw,
-    _getpeername_raw,
     _fcntl_getfl,
     _fcntl_setfl,
     _getsockopt_int,

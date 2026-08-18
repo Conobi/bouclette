@@ -88,4 +88,6 @@ def main() raises:
     var eof = peer.recv(Span(buf2))
     assert_equal(eof, 0, "recv after shutdown(WRITE) should return 0 (EOF)")
 
+    client.close()
+    peer.close()
     print("PASS: Socket.shutdown()")
