@@ -28,23 +28,23 @@ struct EchoHandler(ReadinessHandler):
     var read_fd: Int32
     var got_event: Bool
     var bytes_read: Int
-    var buf: InlineArray[UInt8, 16]
+    var buf: Array[UInt8, 16]
 
     def __init__(out self, read_fd: Int32):
         self.read_fd = read_fd
         self.got_event = False
         self.bytes_read = 0
-        self.buf = InlineArray[UInt8, 16](fill=0)
+        self.buf = Array[UInt8, 16](fill=0)
 
-    def __init__(out self, *, deinit take: Self):
-        self.read_fd = take.read_fd
-        self.got_event = take.got_event
-        self.bytes_read = take.bytes_read
-        self.buf = take.buf
+    def __init__(out self, *, deinit move: Self):
+        self.read_fd = move.read_fd
+        self.got_event = move.got_event
+        self.bytes_read = move.bytes_read
+        self.buf = move.buf
 
     def on_ready(
         mut self,
-        loop: UnsafePointer[ReadinessLoop[Self], MutUntrackedOrigin],
+        loop: Pointer[ReadinessLoop[Self], MutUntrackedOrigin],
         token: Token,
         readiness: Readiness,
     ):
@@ -52,7 +52,7 @@ struct EchoHandler(ReadinessHandler):
         if readiness.is_readable():
             var n = syscall[__NR_read, Scalar[DType.int64]](
                 self.read_fd,
-                UnsafePointer(to=self.buf).bitcast[UInt8](),
+                Pointer(to=self.buf).unsafe_bitcast[UInt8](),
                 UInt64(16),
             )
             self.bytes_read = Int(n)
@@ -60,9 +60,9 @@ struct EchoHandler(ReadinessHandler):
 
 def main() raises:
     # Create a pipe via libc pipe(2).
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var res = external_call["pipe", Int32](
-        UnsafePointer(to=pipefd).bitcast[Int32]()
+        Pointer(to=pipefd).unsafe_bitcast[Int32]()
     )
     assert_equal(Int(res), 0)
     var read_fd = pipefd[0]
@@ -71,7 +71,7 @@ def main() raises:
     var loop = ReadinessLoop(EchoHandler(read_fd), max_events=16)
     loop.register(read_fd, Interest.READABLE, Token(42))
 
-    var msg_ptr = UnsafePointer[UInt8, StaticConstantOrigin](
+    var msg_ptr = Pointer[UInt8, ImmStaticOrigin](
         unsafe_from_address=Int(_MSG.unsafe_ptr())
     )
     _ = syscall[__NR_write, Scalar[DType.int64]](write_fd, msg_ptr, UInt64(_MSG_LEN))

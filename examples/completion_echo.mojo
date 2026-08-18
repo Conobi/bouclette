@@ -24,7 +24,7 @@ from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
 from boucle.socle.linux.raw import sockaddr_in
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 
@@ -45,12 +45,12 @@ struct Slot:
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
+        ctx: Pointer[NoneType, MutAnyOrigin],
         result: Int32,
         flags: UInt32,
     ):
         """Callback that records the result."""
-        var self_ptr = UnsafePointer[Slot, MutAnyOrigin](
+        var self_ptr = Pointer[Slot, MutAnyOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -69,8 +69,8 @@ def main() raises:
     var bound_len = Int32(16)  # sizeof(sockaddr_in)
     var gs = external_call["getsockname", Int32](
         server.raw(),
-        UnsafePointer(to=bound).bitcast[Int8](),
-        UnsafePointer(to=bound_len).bitcast[Int8](),
+        Pointer(to=bound).unsafe_bitcast[Int8](),
+        Pointer(to=bound_len).unsafe_bitcast[Int8](),
     )
     if Int(gs) != 0:
         raise "getsockname failed"
@@ -92,22 +92,22 @@ def main() raises:
 
     # Wire accept completion.
     var accept_slot = Slot()
-    var accept_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_slot))
+    var accept_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_slot))
     )
     var accept_cmp = Completion(invoke=Slot.on_complete, context=accept_ctx)
-    var accept_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_cmp))
+    var accept_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_cmp))
     )
 
     # Wire connect completion.
     var connect_slot = Slot()
-    var connect_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_slot))
+    var connect_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_slot))
     )
     var connect_cmp = Completion(invoke=Slot.on_complete, context=connect_ctx)
-    var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_cmp))
+    var connect_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_cmp))
     )
 
     loop.submit_accept(server.raw(), accept_cmp_ptr)
@@ -127,29 +127,29 @@ def main() raises:
 
     # Wire send completion.
     var send_slot = Slot()
-    var send_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_slot))
+    var send_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_slot))
     )
     var send_cmp = Completion(invoke=Slot.on_complete, context=send_ctx)
-    var send_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=send_cmp))
+    var send_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=send_cmp))
     )
 
     # Wire recv completion.
     var recv_slot = Slot()
-    var recv_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_slot))
+    var recv_ctx = Pointer[NoneType, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_slot))
     )
     var recv_cmp = Completion(invoke=Slot.on_complete, context=recv_ctx)
-    var recv_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=recv_cmp))
+    var recv_cmp_ptr = Pointer[Completion, MutAnyOrigin](
+        unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
 
-    var msg_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var msg_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(_MSG.unsafe_ptr())
     )
     var recv_buf = List[UInt8](length=16, fill=0)
-    var recv_ptr = UnsafePointer[UInt8, MutAnyOrigin](
+    var recv_ptr = Pointer[UInt8, MutAnyOrigin](
         unsafe_from_address=Int(recv_buf.unsafe_ptr())
     )
 
