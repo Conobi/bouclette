@@ -3,6 +3,7 @@
 Scans ports in batches using ConnectWithTimeoutFuture. Each batch
 submits up to BATCH_SIZE connect+timeout operations in parallel,
 runs them in a single WatchLoop.run() call, then classifies results.
+A single WatchLoop (io_uring instance) is reused across all batches.
 
 Build & run:
     uv run mojox build
@@ -23,59 +24,6 @@ from std.sys import argv
 
 
 comptime BATCH_SIZE: Int = 256
-
-
-def _scan_batch(
-    ip: IpAddrV4,
-    port_start: Int,
-    port_end: Int,
-    timeout_ms: UInt64,
-    mut open_count: Int,
-    mut closed_count: Int,
-    mut filtered_count: Int,
-) raises:
-    """Scan a batch of ports and classify results."""
-    var batch_size = port_end - port_start + 1
-    var loop = WatchLoop(sq_entries=UInt32(1024))
-
-    var sockets = List[Socket]()
-    var futures = List[ConnectWithTimeoutFuture]()
-
-    var o = ip.octets
-    for p in range(port_start, port_end + 1):
-        var sock = Socket.tcp_v4()
-        var addr = SocketAddrV4(o[0], o[1], o[2], o[3], port=UInt16(p))
-        futures.append(
-            loop.connect_with_timeout(sock, addr, timeout_ms)
-        )
-        sockets.append(sock^)
-
-    loop.run()
-
-    for i in range(batch_size):
-        var port = port_start + i
-        var outcome = futures[i].result()
-        if outcome.is_connected():
-            print("  " + String(port) + "/tcp\tOPEN")
-            open_count += 1
-        elif outcome.is_refused():
-            closed_count += 1
-        elif outcome.is_timeout():
-            print("  " + String(port) + "/tcp\tFILTERED")
-            filtered_count += 1
-        elif outcome.is_network_unreachable():
-            print("  " + String(port) + "/tcp\tFILTERED (unreachable)")
-            filtered_count += 1
-        else:
-            print(
-                "  " + String(port) + "/tcp\tERROR ("
-                + String(outcome.raw_result())
-                + ")"
-            )
-            filtered_count += 1
-
-    for i in range(batch_size):
-        sockets[i].close()
 
 
 def main() raises:
@@ -121,22 +69,59 @@ def main() raises:
     var open_count = 0
     var closed_count = 0
     var filtered_count = 0
+    var o = ip.octets
 
-    # Scan in batches to stay within io_uring SQ and fd limits.
+    var loop = WatchLoop(sq_entries=UInt32(1024))
+
     var p = start_port
     while p <= end_port:
         var batch_end = p + BATCH_SIZE - 1
         if batch_end > end_port:
             batch_end = end_port
-        _scan_batch(
-            ip,
-            p,
-            batch_end,
-            timeout_ms,
-            open_count,
-            closed_count,
-            filtered_count,
-        )
+        var batch_size = batch_end - p + 1
+
+        # Submit batch.
+        var sockets = List[Socket]()
+        var futures = List[ConnectWithTimeoutFuture]()
+        for port in range(p, batch_end + 1):
+            var sock = Socket.tcp_v4()
+            var addr = SocketAddrV4(
+                o[0], o[1], o[2], o[3], port=UInt16(port)
+            )
+            futures.append(
+                loop.connect_with_timeout(sock, addr, timeout_ms)
+            )
+            sockets.append(sock^)
+
+        loop.run()
+
+        # Classify results.
+        for i in range(batch_size):
+            var port = p + i
+            var outcome = futures[i].result()
+            if outcome.is_connected():
+                print("  " + String(port) + "/tcp\tOPEN")
+                open_count += 1
+            elif outcome.is_refused():
+                closed_count += 1
+            elif outcome.is_timeout():
+                print("  " + String(port) + "/tcp\tFILTERED")
+                filtered_count += 1
+            elif outcome.is_network_unreachable():
+                print("  " + String(port) + "/tcp\tFILTERED (unreachable)")
+                filtered_count += 1
+            else:
+                print(
+                    "  " + String(port) + "/tcp\tERROR ("
+                    + String(outcome.raw_result())
+                    + ")"
+                )
+                filtered_count += 1
+
+        # Close sockets before next batch.
+        for i in range(batch_size):
+            sockets[i].close()
+
         p = batch_end + 1
 
     print()
