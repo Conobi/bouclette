@@ -4,10 +4,13 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
 from boucle.drivers.io_uring import IoUringDriver
+from boucle.handle import RawHandle
+from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.watch._callback import _FutureCallback, _trampoline
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
+from boucle.watch.connect import _ConnectFutureState, ConnectFuture
 
 
 comptime _WatchDriver = IoUringDriver
@@ -75,6 +78,52 @@ struct WatchLoop(Movable):
         self._pending += 1
 
         return AcceptFuture(state_ptr)
+
+    def connect(
+        mut self, ref socket: Socket, ref addr: SocketAddrV4
+    ) raises -> ConnectFuture:
+        """Submit an async connect on a socket to the given address.
+
+        Returns a ConnectFuture that resolves to a ConnectOutcome after
+        run() completes. The address storage is copied into the
+        heap-allocated state for pointer stability.
+
+        Args:
+            socket: The socket to connect.
+            addr: The target IPv4 address to connect to.
+
+        Returns:
+            A ConnectFuture representing the in-flight connect.
+        """
+        # 1. Heap-allocate the state with a copy of the address storage.
+        var state_ptr = unsafe_alloc[_ConnectFutureState](1)
+        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._pending))
+        )
+        var addr_stor = SocketAddrStorV4(addr)
+        state_ptr.unsafe_write(_ConnectFutureState(addr_stor, pending_ptr))
+
+        # 2. Wire completion: trampoline dispatches CQE to typed state.
+        state_ptr[].completion.invoke = _trampoline[_ConnectFutureState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        # 3. Get completion pointer for submission.
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[].completion)
+            )
+        )
+
+        # 4. Get addr pointer from the state (stable heap allocation).
+        var fd = socket.raw()
+        var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
+        var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
+        self._driver.submit_connect(fd, addr_ptr, addr_len, cmp_ptr)
+        self._pending += 1
+
+        return ConnectFuture(state_ptr)
 
     def run(mut self) raises:
         """Block until all pending operations complete.
