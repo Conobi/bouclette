@@ -11,6 +11,8 @@ from boucle.proactor.completion import Completion
 from boucle.watch._callback import _FutureCallback, _trampoline
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
+from boucle.watch.recv import _RecvFutureState, RecvFuture
+from boucle.watch.send import _SendFutureState, SendFuture
 
 
 comptime _WatchDriver = IoUringDriver
@@ -124,6 +126,108 @@ struct WatchLoop(Movable):
         self._pending += 1
 
         return ConnectFuture(state_ptr)
+
+    def recv(
+        mut self,
+        ref socket: Socket,
+        buf: Span[UInt8, MutAnyOrigin],
+    ) raises -> RecvFuture:
+        """Submit an async recv on a socket into the given buffer.
+
+        Returns a RecvFuture that resolves to the number of bytes read
+        after run() completes.
+
+        Warning: The buffer is NOT owned by the future. The caller must
+        ensure the buffer remains valid until run() completes.
+
+        Args:
+            socket: The socket to receive from.
+            buf: Mutable buffer to receive into. Must outlive run().
+
+        Returns:
+            A RecvFuture representing the in-flight recv.
+        """
+        # 1. Heap-allocate the state.
+        var state_ptr = unsafe_alloc[_RecvFutureState](1)
+        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._pending))
+        )
+        state_ptr.unsafe_write(_RecvFutureState(pending_ptr))
+
+        # 2. Wire completion.
+        state_ptr[].completion.invoke = _trampoline[_RecvFutureState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        # 3. Get completion pointer.
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[].completion)
+            )
+        )
+
+        # 4. Submit recv with buffer pointer from caller.
+        var fd = socket.raw()
+        var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(buf.unsafe_ptr())
+        )
+        self._driver.submit_recv(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        self._pending += 1
+
+        return RecvFuture(state_ptr)
+
+    def send[
+        origin: Origin
+    ](
+        mut self,
+        ref socket: Socket,
+        buf: Span[UInt8, origin],
+    ) raises -> SendFuture:
+        """Submit an async send on a socket from the given buffer.
+
+        Returns a SendFuture that resolves to the number of bytes
+        written after run() completes.
+
+        Warning: The buffer is NOT owned by the future. The caller must
+        ensure the buffer remains valid until run() completes.
+
+        Args:
+            socket: The socket to send on.
+            buf: Data to send. Must outlive run().
+
+        Returns:
+            A SendFuture representing the in-flight send.
+        """
+        # 1. Heap-allocate the state.
+        var state_ptr = unsafe_alloc[_SendFutureState](1)
+        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._pending))
+        )
+        state_ptr.unsafe_write(_SendFutureState(pending_ptr))
+
+        # 2. Wire completion.
+        state_ptr[].completion.invoke = _trampoline[_SendFutureState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        # 3. Get completion pointer.
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[].completion)
+            )
+        )
+
+        # 4. Submit send with buffer pointer from caller.
+        var fd = socket.raw()
+        var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(buf.unsafe_ptr())
+        )
+        self._driver.submit_send(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        self._pending += 1
+
+        return SendFuture(state_ptr)
 
     def run(mut self) raises:
         """Block until all pending operations complete.
