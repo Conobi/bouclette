@@ -51,7 +51,7 @@ def test_nop_single() raises:
     )
 
     loop.submit_nop(cmp_ptr)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
@@ -82,7 +82,7 @@ def test_nop_multiple() raises:
     loop.submit_nop(p1)
     loop.submit_nop(p2)
     loop.submit_nop(p3)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 3)
 

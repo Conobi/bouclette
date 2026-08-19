@@ -1,13 +1,13 @@
-"""Verify _trampoline monomorphises to a thin function pointer."""
+"""Verify _dispatch monomorphises to a thin function pointer."""
 
 from std.memory import Pointer
 from std.testing import assert_true, assert_equal
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 from boucle.proactor.completion import CompletionFn
 
 
 struct _TestCallback(_FutureCallback):
-    """Minimal _FutureCallback implementor for trampoline validation."""
+    """Minimal _FutureCallback implementor for dispatch validation."""
 
     var value: Int32
 
@@ -28,13 +28,13 @@ struct _TestCallback(_FutureCallback):
         self.value = result
 
 
-def test_trampoline() raises:
-    # Assign _trampoline[_TestCallback] to a CompletionFn alias.
+def test_dispatch() raises:
+    # Assign _dispatch[_TestCallback] to a CompletionFn alias.
     # This proves it compiles as a thin function pointer with the exact
     # signature (Pointer[NoneType, MutUntrackedOrigin], Int32, UInt32) -> None.
-    var fn_ptr: CompletionFn = _trampoline[_TestCallback]
+    var fn_ptr: CompletionFn = _dispatch[_TestCallback]
 
-    # Dispatch through the trampoline to verify runtime correctness.
+    # Dispatch to verify runtime correctness.
     # Read back through the same MutUntrackedOrigin pointer to avoid
     # the compiler caching the local value across the opaque call.
     var cb = _TestCallback()
@@ -49,7 +49,6 @@ def test_trampoline() raises:
     assert_equal(readback[].value, Int32(-111))
 
 
-
 def main() raises:
-    test_trampoline()
-    print("PASS: test_callback_trampoline.mojo")
+    test_dispatch()
+    print("PASS: test_callback_dispatch.mojo")

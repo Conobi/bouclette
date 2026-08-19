@@ -113,7 +113,7 @@ def test_driver_recv_send() raises:
     # Tick until both completions fire.
     var ticks = 0
     while not send_tracker.fired or not recv_tracker.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for recv/send completion"

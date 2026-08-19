@@ -9,7 +9,7 @@ from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
 from boucle.watch.connect_timeout import (
@@ -28,6 +28,8 @@ struct WatchLoop(Movable):
     """Opaque event loop for completion-based I/O with Future dispatch.
 
     The driver is hidden behind a comptime alias. Users never see IoUringDriver.
+    _pending tracks CQEs in flight — each SQE adds 1, each dispatched CQE
+    subtracts 1, managed entirely by run().
     """
 
     var _driver: _WatchDriver
@@ -67,27 +69,20 @@ struct WatchLoop(Movable):
         Returns:
             An AcceptFuture representing the in-flight accept.
         """
-        # 1. Heap-allocate the state.
         var state_ptr = unsafe_alloc[_AcceptFutureState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
-        state_ptr.unsafe_write(_AcceptFutureState(pending_ptr))
+        state_ptr.unsafe_write(_AcceptFutureState())
 
-        # 2. Wire completion: trampoline dispatches CQE to typed state.
-        state_ptr[].completion.invoke = _trampoline[_AcceptFutureState]
+        state_ptr[].completion.invoke = _dispatch[_AcceptFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
             NoneType
         ]()
 
-        # 3. Get completion pointer for submission.
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[].completion)
             )
         )
 
-        # 4. Pre-capture fd and submit.
         var fd = socket.raw()
         self._driver.submit_accept(fd, cmp_ptr)
         self._pending += 1
@@ -110,28 +105,21 @@ struct WatchLoop(Movable):
         Returns:
             A ConnectFuture representing the in-flight connect.
         """
-        # 1. Heap-allocate the state with a copy of the address storage.
         var state_ptr = unsafe_alloc[_ConnectFutureState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
         var addr_stor = SocketAddrStorV4(addr)
-        state_ptr.unsafe_write(_ConnectFutureState(addr_stor, pending_ptr))
+        state_ptr.unsafe_write(_ConnectFutureState(addr_stor))
 
-        # 2. Wire completion: trampoline dispatches CQE to typed state.
-        state_ptr[].completion.invoke = _trampoline[_ConnectFutureState]
+        state_ptr[].completion.invoke = _dispatch[_ConnectFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
             NoneType
         ]()
 
-        # 3. Get completion pointer for submission.
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[].completion)
             )
         )
 
-        # 4. Get addr pointer from the state (stable heap allocation).
         var fd = socket.raw()
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
@@ -148,14 +136,10 @@ struct WatchLoop(Movable):
     ) raises -> ConnectWithTimeoutFuture:
         """Submit a connect with a kernel-level timeout.
 
-        Submits both a connect SQE and a timeout SQE atomically.
-        The first to complete resolves the operation; the other is
-        cancelled. Returns a ConnectWithTimeoutFuture that resolves
-        to a ConnectOutcome (CONNECTED, REFUSED, TIMEOUT, etc.)
-        after run() completes.
-
-        The address and timeout are copied into the heap-allocated
-        state for pointer stability.
+        Submits both a connect SQE and a timeout SQE. The first to
+        complete resolves the operation; the other is cancelled.
+        Returns a ConnectWithTimeoutFuture that resolves to a
+        ConnectOutcome after run() completes.
 
         Args:
             socket: The socket to connect.
@@ -166,18 +150,13 @@ struct WatchLoop(Movable):
             A ConnectWithTimeoutFuture representing the in-flight
             composite operation.
         """
-        # 1. Heap-allocate the state.
         var state_ptr = unsafe_alloc[_ConnectWithTimeoutState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
         var addr_stor = SocketAddrStorV4(addr)
         var ts = Timeout.from_ms(Int64(timeout_ms))
         state_ptr.unsafe_write(
-            _ConnectWithTimeoutState(addr_stor, ts, pending_ptr)
+            _ConnectWithTimeoutState(addr_stor, ts)
         )
 
-        # 2. Wire 3 completions with dedicated static callbacks.
         state_ptr[]._connect_cmp.invoke = (
             _ConnectWithTimeoutState._on_connect_cb
         )
@@ -199,7 +178,6 @@ struct WatchLoop(Movable):
             NoneType
         ]()
 
-        # 3. Submit connect SQE.
         var fd = socket.raw()
         var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
@@ -210,7 +188,6 @@ struct WatchLoop(Movable):
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
         self._driver.submit_connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
 
-        # 4. Submit timeout SQE.
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[]._timeout_cmp)
@@ -221,8 +198,8 @@ struct WatchLoop(Movable):
         )
         self._driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
 
-        # 5. Track as 1 logical operation and register for flush_cancel.
-        self._pending += 1
+        # 2 SQEs submitted → 2 CQEs expected.
+        self._pending += 2
         self._active_composites.append(state_ptr)
 
         return ConnectWithTimeoutFuture(state_ptr)
@@ -247,27 +224,20 @@ struct WatchLoop(Movable):
         Returns:
             A RecvFuture representing the in-flight recv.
         """
-        # 1. Heap-allocate the state.
         var state_ptr = unsafe_alloc[_RecvFutureState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
-        state_ptr.unsafe_write(_RecvFutureState(pending_ptr))
+        state_ptr.unsafe_write(_RecvFutureState())
 
-        # 2. Wire completion.
-        state_ptr[].completion.invoke = _trampoline[_RecvFutureState]
+        state_ptr[].completion.invoke = _dispatch[_RecvFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
             NoneType
         ]()
 
-        # 3. Get completion pointer.
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[].completion)
             )
         )
 
-        # 4. Submit recv with buffer pointer from caller.
         var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf.unsafe_ptr())
@@ -299,27 +269,20 @@ struct WatchLoop(Movable):
         Returns:
             A SendFuture representing the in-flight send.
         """
-        # 1. Heap-allocate the state.
         var state_ptr = unsafe_alloc[_SendFutureState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
-        state_ptr.unsafe_write(_SendFutureState(pending_ptr))
+        state_ptr.unsafe_write(_SendFutureState())
 
-        # 2. Wire completion.
-        state_ptr[].completion.invoke = _trampoline[_SendFutureState]
+        state_ptr[].completion.invoke = _dispatch[_SendFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
             NoneType
         ]()
 
-        # 3. Get completion pointer.
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[].completion)
             )
         )
 
-        # 4. Submit send with buffer pointer from caller.
         var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf.unsafe_ptr())
@@ -341,28 +304,21 @@ struct WatchLoop(Movable):
         Returns:
             A TimerFuture representing the in-flight timeout.
         """
-        # 1. Heap-allocate the state with the timeout value.
         var state_ptr = unsafe_alloc[_TimerFutureState](1)
-        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=self._pending))
-        )
         var ts = Timeout.from_ms(Int64(ms))
-        state_ptr.unsafe_write(_TimerFutureState(ts, pending_ptr))
+        state_ptr.unsafe_write(_TimerFutureState(ts))
 
-        # 2. Wire completion.
-        state_ptr[].completion.invoke = _trampoline[_TimerFutureState]
+        state_ptr[].completion.invoke = _dispatch[_TimerFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
             NoneType
         ]()
 
-        # 3. Get completion pointer.
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
                 Pointer(to=state_ptr[].completion)
             )
         )
 
-        # 4. Get timespec pointer from the state (stable heap allocation).
         var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
@@ -372,20 +328,26 @@ struct WatchLoop(Movable):
         return TimerFuture(state_ptr)
 
     def run(mut self) raises:
-        """Block until all pending operations complete.
+        """Block until all pending CQEs have been dispatched.
+
+        _pending tracks CQEs in flight. tick() returns the number of
+        dispatched CQEs; run() decrements directly. Callbacks never
+        touch the counter — they only set result state.
 
         After each tick, flushes deferred cancel SQEs for composite
-        operations and removes completed composites.
+        operations (each cancel adds 1 to _pending for its own CQE).
 
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
         """
         while self._pending > 0:
-            self._driver.tick(wait=True)
+            var dispatched = self._driver.tick(wait=True)
+            self._pending -= dispatched
             var i = len(self._active_composites) - 1
             while i >= 0:
                 var state_ptr = self._active_composites[i]
-                state_ptr[].flush_cancel(self._driver)
+                var cancels = state_ptr[].flush_cancel(self._driver)
+                self._pending += cancels
                 if state_ptr[].done:
                     _ = self._active_composites.pop(i)
                 i -= 1

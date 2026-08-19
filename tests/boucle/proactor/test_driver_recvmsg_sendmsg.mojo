@@ -216,7 +216,7 @@ def test_driver_recvmsg_sendmsg() raises:
     # --- 9. Tick until both fire ---
     var ticks = 0
     while not send_tracker.fired or not recv_tracker.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         print(
             "tick", ticks,

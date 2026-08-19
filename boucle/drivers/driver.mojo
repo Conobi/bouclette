@@ -30,13 +30,16 @@ trait IoDriver(Movable):
         """Release all resources held by this driver."""
         ...
 
-    def tick(mut self, wait: Bool) raises:
+    def tick(mut self, wait: Bool) raises -> Int:
         """Submit pending SQEs and dispatch completed operations.
 
         Args:
             wait: If True, block until at least one completion arrives.
                   If False, return immediately after dispatching any
                   already-available completions.
+
+        Returns:
+            The number of dispatched CQEs.
         """
         ...
 

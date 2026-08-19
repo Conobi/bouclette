@@ -1,4 +1,4 @@
-"""Yielder, internal shared state, and trampoline for stackful coroutines.
+"""Yielder, internal shared state, and entry point for stackful coroutines.
 
 Contains the tightly-coupled types that cannot be split across modules:
 _CoroInner references CoroutineBody (which names Yielder in its signature),
@@ -115,10 +115,10 @@ struct _CoroInner(Movable):
         self.error_msg = move.error_msg^
 
 
-# ── Trampoline ──────────────────────────────────────────────────────────
+# ── Coroutine entry point ───────────────────────────────────────────────
 
 
-def _coro_trampoline(inner_addr: Int64):
+def _coro_entry(inner_addr: Int64):
     """Entry point for new coroutines. Runs on the coroutine stack.
 
     Receives a pointer to _CoroInner via REG_RDI.

@@ -32,7 +32,7 @@ from std.ffi import external_call
 comptime STACK_SIZE = 64 * 1024  # 64KB usable stack
 
 
-# --- Trampolines ---
+# --- Entry points ---
 #
 # These run on a separately allocated stack via swapcontext.
 # They receive arguments through REG_RDI as a raw integer address
@@ -40,7 +40,7 @@ comptime STACK_SIZE = 64 * 1024  # 64KB usable stack
 # They must swap back to the caller context when done.
 
 
-def _trampoline_write42(args_raw: Int):
+def _entry_write42(args_raw: Int):
     """Write 42 to shared memory and swap back.
 
     args_raw -> Int[2]: [caller_ctx_addr, shared_addr].
@@ -60,7 +60,7 @@ def _trampoline_write42(args_raw: Int):
     # dummy.unsafe_free() intentionally omitted — unreachable after final swap
 
 
-def _trampoline_pingpong(args_raw: Int):
+def _entry_pingpong(args_raw: Int):
     """Increment a shared counter 3 times, yielding between each.
 
     args_raw -> Int[2]: [caller_ctx_addr, counter_addr].
@@ -103,7 +103,7 @@ def test_getcontext() raises:
 
 
 def test_ucontext_round_trip() raises:
-    """Single swap to trampoline and back validates the full FFI round-trip.
+    """Single swap to entry point and back validates the full FFI round-trip.
 
     This is the critical risk gate: it proves that getcontext, swapcontext,
     gregs manipulation, function pointer extraction, and stack setup all work.
@@ -114,7 +114,7 @@ def test_ucontext_round_trip() raises:
     var caller_ctx = alloc_ucontext()
     var coro_ctx = alloc_ucontext()
 
-    # Pack trampoline args: [caller_ctx address, shared address]
+    # Pack entry args: [caller_ctx address, shared address]
     var args = unsafe_alloc[Int](2)
     args[unsafe_offset=0] = Int(caller_ctx)
     args[unsafe_offset=1] = Int(shared)
@@ -134,8 +134,8 @@ def test_ucontext_round_trip() raises:
     # Initialize coro_ctx via getcontext, then overwrite registers
     uc_getcontext(coro_ctx)
 
-    # Extract trampoline function address
-    var f = _trampoline_write42
+    # Extract entry function address
+    var f = _entry_write42
     var fn_addr = Int(Pointer(to=f).unsafe_bitcast[Int]()[])
     assert_true(fn_addr != 0, "function pointer address must be non-zero")
 
@@ -147,10 +147,10 @@ def test_ucontext_round_trip() raises:
         arg_addr=Int(args),
     )
 
-    # Swap: trampoline runs on the new stack, writes 42, swaps back
+    # Swap: entry runs on the new stack, writes 42, swaps back
     uc_swapcontext(caller_ctx, coro_ctx)
 
-    # Verify the trampoline ran
+    # Verify the entry point ran
     assert_equal(shared[], 42)
 
     # Cleanup
@@ -190,7 +190,7 @@ def test_pingpong() raises:
 
     uc_getcontext(coro_ctx)
 
-    var f = _trampoline_pingpong
+    var f = _entry_pingpong
     var fn_addr = Int(Pointer(to=f).unsafe_bitcast[Int]()[])
 
     setup_context(
@@ -201,15 +201,15 @@ def test_pingpong() raises:
         arg_addr=Int(args),
     )
 
-    # Swap 1: trampoline increments to 1, yields back
+    # Swap 1: entry increments to 1, yields back
     uc_swapcontext(caller_ctx, coro_ctx)
     assert_equal(counter[], 1)
 
-    # Swap 2: trampoline resumes, increments to 2, yields back
+    # Swap 2: entry resumes, increments to 2, yields back
     uc_swapcontext(caller_ctx, coro_ctx)
     assert_equal(counter[], 2)
 
-    # Swap 3: trampoline resumes, increments to 3, yields back
+    # Swap 3: entry resumes, increments to 3, yields back
     uc_swapcontext(caller_ctx, coro_ctx)
     assert_equal(counter[], 3)
 

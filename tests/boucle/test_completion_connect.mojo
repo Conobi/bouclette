@@ -89,7 +89,7 @@ def test_completion_connect() raises:
     )
 
     loop.submit_connect(client.raw(), addr_ptr, addr_len, cmp_ptr)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_true(slot.fired, "connect completion did not fire")
     # Success is result >= 0 for connect(2); nonblocking sockets through

@@ -13,7 +13,7 @@ from boucle.handle import OwnedHandle
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.socle.linux.fd import close_unchecked
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 
 
 # ===----------------------------------------------------------------------=== #
@@ -24,7 +24,7 @@ from boucle.watch._callback import _FutureCallback, _trampoline
 struct _AcceptFutureState(_FutureCallback):
     """Internal state for a single async accept operation.
 
-    Implements _FutureCallback so the io_uring trampoline can dispatch
+    Implements _FutureCallback so the generic _dispatch can deliver
     CQE results into this struct. Stored on the heap; the Completion's
     context pointer points back to the enclosing _AcceptFutureState.
 
@@ -34,7 +34,6 @@ struct _AcceptFutureState(_FutureCallback):
         _error_code: The errno on failure (0 = no error).
         done: True once the CQE callback has fired.
         consumed: True once result() has been called.
-        _pending_ptr: Points to WatchLoop._pending for decrement on completion.
     """
 
     var completion: Completion
@@ -42,25 +41,18 @@ struct _AcceptFutureState(_FutureCallback):
     var _error_code: Int32
     var done: Bool
     var consumed: Bool
-    var _pending_ptr: Pointer[Int, MutUntrackedOrigin]
 
-    def __init__(
-        out self, _pending_ptr: Pointer[Int, MutUntrackedOrigin]
-    ):
-        """Construct an _AcceptFutureState with a pending-counter pointer.
+    def __init__(out self):
+        """Construct an _AcceptFutureState.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context after heap allocation.
-
-        Args:
-            _pending_ptr: Pointer to the WatchLoop's pending counter.
         """
         self.completion = Completion()
         self._socket_fd = Int32(-1)
         self._error_code = Int32(0)
         self.done = False
         self.consumed = False
-        self._pending_ptr = _pending_ptr
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -73,14 +65,12 @@ struct _AcceptFutureState(_FutureCallback):
         self._error_code = move._error_code
         self.done = move.done
         self.consumed = move.consumed
-        self._pending_ptr = move._pending_ptr
 
     def set_result(mut self, result: Int32):
         """Store the CQE result from io_uring accept.
 
         On success (result >= 0), stores the accepted fd.
         On failure (result < 0), stores the negated errno.
-        Decrements the WatchLoop pending counter.
 
         Args:
             result: The io_uring CQE result (accepted fd or negative errno).
@@ -90,7 +80,6 @@ struct _AcceptFutureState(_FutureCallback):
         else:
             self._error_code = -result
         self.done = True
-        self._pending_ptr[] -= 1
 
 
 # ===----------------------------------------------------------------------=== #
@@ -135,7 +124,6 @@ struct AcceptFuture(Movable):
         If the accept succeeded but result() was never called,
         closes the accepted fd to prevent resource leaks.
         """
-        # Close unclaimed accepted fd to prevent leak.
         if not self._state[].consumed and self._state[]._socket_fd >= 0:
             close_unchecked(unsafe_fd=self._state[]._socket_fd)
         self._state.unsafe_deinit_pointee()

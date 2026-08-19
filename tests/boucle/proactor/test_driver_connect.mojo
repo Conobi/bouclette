@@ -92,7 +92,7 @@ def test_driver_connect() raises:
 
     var ticks = 0
     while not tracker.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for connect completion"
@@ -126,7 +126,7 @@ def test_driver_connect() raises:
 
     var ticks2 = 0
     while not tracker2.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks2 += 1
         if ticks2 > 100:
             raise "timed out waiting for connect-refused completion"

@@ -10,7 +10,7 @@ from std.memory.alloc import unsafe_alloc
 
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 
 
 # ===----------------------------------------------------------------------=== #
@@ -21,7 +21,7 @@ from boucle.watch._callback import _FutureCallback, _trampoline
 struct _TimerFutureState(_FutureCallback):
     """Internal state for a single async timeout operation.
 
-    Implements _FutureCallback so the io_uring trampoline can dispatch
+    Implements _FutureCallback so the generic _dispatch can deliver
     CQE results into this struct. The Timeout (layout-compatible with
     __kernel_timespec) is stored here for pointer stability — the SQE
     points to it and it must remain valid until the CQE fires.
@@ -32,7 +32,6 @@ struct _TimerFutureState(_FutureCallback):
         _expired: True if the timer expired normally (CQE result == -ETIME).
         done: True once the CQE callback has fired.
         consumed: True once result() has been called.
-        _pending_ptr: Points to WatchLoop._pending for decrement on completion.
     """
 
     var completion: Completion
@@ -40,28 +39,21 @@ struct _TimerFutureState(_FutureCallback):
     var _expired: Bool
     var done: Bool
     var consumed: Bool
-    var _pending_ptr: Pointer[Int, MutUntrackedOrigin]
 
-    def __init__(
-        out self,
-        ts: Timeout,
-        _pending_ptr: Pointer[Int, MutUntrackedOrigin],
-    ):
-        """Construct a _TimerFutureState with a timeout and pending pointer.
+    def __init__(out self, ts: Timeout):
+        """Construct a _TimerFutureState with a timeout.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context after heap allocation.
 
         Args:
             ts: The timeout duration (seconds + nanoseconds).
-            _pending_ptr: Pointer to the WatchLoop's pending counter.
         """
         self.completion = Completion()
         self._ts = ts
         self._expired = False
         self.done = False
         self.consumed = False
-        self._pending_ptr = _pending_ptr
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -74,7 +66,6 @@ struct _TimerFutureState(_FutureCallback):
         self._expired = move._expired
         self.done = move.done
         self.consumed = move.consumed
-        self._pending_ptr = move._pending_ptr
 
     def set_result(mut self, result: Int32):
         """Store the CQE result from io_uring timeout.
@@ -85,10 +76,8 @@ struct _TimerFutureState(_FutureCallback):
         Args:
             result: The io_uring CQE result (-62 = expired, 0 = cancelled).
         """
-        # ETIME = 62; CQE result is -62 on normal expiry.
         self._expired = result == Int32(-62)
         self.done = True
-        self._pending_ptr[] -= 1
 
 
 # ===----------------------------------------------------------------------=== #

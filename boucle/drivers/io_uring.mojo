@@ -44,7 +44,7 @@ struct IoUringDriver(IoDriver):
         """Move constructor."""
         self._ring = move._ring^
 
-    def tick(mut self, wait: Bool) raises:
+    def tick(mut self, wait: Bool) raises -> Int:
         """Submit pending SQEs and dispatch completed operations.
 
         Recovers the Completion pointer from each CQE's user_data field
@@ -54,9 +54,13 @@ struct IoUringDriver(IoDriver):
         Args:
             wait: If True, block until at least one completion arrives.
                   If False, dispatch only already-available completions.
+
+        Returns:
+            The number of dispatched CQEs (excludes skipped user_data==0).
         """
         var wait_nr = UInt32(1) if wait else UInt32(0)
         _ = self._ring.submit_and_wait(wait_nr=wait_nr)
+        var dispatched = 0
         var cq = self._ring.cq(wait_nr=0)
         while cq:
             var cqe = cq.__next__()
@@ -66,7 +70,9 @@ struct IoUringDriver(IoDriver):
                 unsafe_from_address=Int(cqe.user_data)
             )
             cmp[].fire(cqe.res, UInt32(cqe.flags.value))
+            dispatched += 1
         cq^.__deinit__()
+        return dispatched
 
     def submit_nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]

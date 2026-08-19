@@ -109,7 +109,7 @@ def test_driver_accept() raises:
     # Tick until both completions fire.
     var ticks = 0
     while not accept_tracker.fired or not connect_tracker.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for accept/connect completion"

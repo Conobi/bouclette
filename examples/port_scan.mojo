@@ -6,7 +6,7 @@ call, then classifies each result as OPEN/CLOSED/FILTERED.
 
 Build & run:
     uv run mojox build
-    uv run -- mojo build -O0 -I .mojox/build/pkg examples/port_scan.mojo -o port_scan
+    uv run -- mojo build -I .mojox/build/pkg examples/port_scan.mojo -o port_scan
     ./port_scan <ip> <start>-<end> [timeout_ms]
 
 Examples:

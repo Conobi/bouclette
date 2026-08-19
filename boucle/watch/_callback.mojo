@@ -1,10 +1,10 @@
-"""Internal callback trait and thin trampoline for Future dispatch.
+"""Internal callback trait and generic dispatch for Future completion.
 
 The _FutureCallback trait bridges the gap between io_uring's type-erased
 completion callbacks (function pointer + void* context) and typed Future
 state machines. Each Future implementation conforms to _FutureCallback,
-and a single monomorphised _trampoline function casts the context pointer
-back to the concrete type and dispatches the result.
+and a single monomorphised _dispatch function casts the context pointer
+back to the concrete type and delivers the result.
 
 Not part of the public API.
 """
@@ -29,10 +29,10 @@ trait _FutureCallback(Movable):
         ...
 
 
-def _trampoline[F: _FutureCallback](
+def _dispatch[F: _FutureCallback](
     ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int32, flags: UInt32
 ):
-    """Thin trampoline dispatching a CQE result to a typed _FutureCallback.
+    """Generic CQE dispatch to a typed _FutureCallback.
 
     After monomorphisation this is a plain function pointer compatible with
     CompletionFn — no closure capture, no heap allocation.

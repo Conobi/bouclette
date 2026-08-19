@@ -2,7 +2,7 @@
 
 _ConnectWithTimeoutState manages 3 Completions (connect, timeout, cancel)
 with dedicated static callbacks. Unlike simple Futures, this does NOT use
-the generic _trampoline because each CQE has different semantics.
+the generic _dispatch because each CQE has different semantics.
 
 The state machine resolves the operation once the first non-ECANCELED
 result arrives on either connect or timeout, then cancels the other and
@@ -49,7 +49,6 @@ struct _ConnectWithTimeoutState(Movable):
         _total_cqes: Number of CQEs received so far (done when 3).
         done: True when all 3 CQEs have been received.
         consumed: True after result() has been called.
-        _pending_ptr: Points to WatchLoop._pending for decrement.
     """
 
     var _connect_cmp: Completion
@@ -65,15 +64,13 @@ struct _ConnectWithTimeoutState(Movable):
     var _total_cqes: Int
     var done: Bool
     var consumed: Bool
-    var _pending_ptr: Pointer[Int, MutUntrackedOrigin]
 
     def __init__(
         out self,
         addr_stor: SocketAddrStorV4,
         ts: Timeout,
-        pending_ptr: Pointer[Int, MutUntrackedOrigin],
     ):
-        """Construct state with address storage, timeout, and pending pointer.
+        """Construct state with address storage and timeout.
 
         All completions start as no-ops; the caller must wire invoke
         and context after heap allocation.
@@ -81,7 +78,6 @@ struct _ConnectWithTimeoutState(Movable):
         Args:
             addr_stor: Copy of the target sockaddr for pointer stability.
             ts: Timeout duration for the kernel timer.
-            pending_ptr: Pointer to the WatchLoop's pending counter.
         """
         self._connect_cmp = Completion()
         self._timeout_cmp = Completion()
@@ -96,7 +92,6 @@ struct _ConnectWithTimeoutState(Movable):
         self._total_cqes = 0
         self.done = False
         self.consumed = False
-        self._pending_ptr = pending_ptr
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -117,21 +112,14 @@ struct _ConnectWithTimeoutState(Movable):
         self._total_cqes = move._total_cqes
         self.done = move.done
         self.consumed = move.consumed
-        self._pending_ptr = move._pending_ptr
 
     def _check_done(mut self):
-        """Mark operation as done when all 3 CQEs have arrived.
-
-        Decrements the WatchLoop pending counter only when truly
-        complete (all 3 CQEs accounted for), ensuring the run()
-        loop doesn't exit early.
-        """
+        """Mark operation as done when all 3 CQEs have arrived."""
         if self._total_cqes >= 3:
             debug_assert(self._total_cqes == 3, "CQE count exceeded 3")
             self.done = True
-            self._pending_ptr[] -= 1
 
-    def flush_cancel(mut self, mut driver: IoUringDriver) raises:
+    def flush_cancel(mut self, mut driver: IoUringDriver) raises -> Int:
         """Submit the deferred cancel SQE if a callback requested one.
 
         Must be called after each tick() to ensure cancel operations
@@ -139,9 +127,12 @@ struct _ConnectWithTimeoutState(Movable):
 
         Args:
             driver: The IoUringDriver to submit the cancel SQE on.
+
+        Returns:
+            Number of cancel SQEs submitted (0 or 1).
         """
         if self._cancel_target == UInt8(0):
-            return
+            return 0
 
         if self._cancel_target == UInt8(1):
             var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
@@ -169,6 +160,7 @@ struct _ConnectWithTimeoutState(Movable):
             driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
 
         self._cancel_target = UInt8(0)
+        return 1
 
     @staticmethod
     def _on_connect_cb(

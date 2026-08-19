@@ -13,7 +13,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
 from boucle.proactor.completion import Completion
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 
 
 # ===----------------------------------------------------------------------=== #
@@ -24,7 +24,7 @@ from boucle.watch._callback import _FutureCallback, _trampoline
 struct _SendFutureState(_FutureCallback):
     """Internal state for a single async send operation.
 
-    Implements _FutureCallback so the io_uring trampoline can dispatch
+    Implements _FutureCallback so the generic _dispatch can deliver
     CQE results into this struct.
 
     Fields:
@@ -32,31 +32,23 @@ struct _SendFutureState(_FutureCallback):
         _cqe_result: Raw CQE result (bytes written >= 0, or negative errno).
         done: True once the CQE callback has fired.
         consumed: True once result() has been called.
-        _pending_ptr: Points to WatchLoop._pending for decrement on completion.
     """
 
     var completion: Completion
     var _cqe_result: Int32
     var done: Bool
     var consumed: Bool
-    var _pending_ptr: Pointer[Int, MutUntrackedOrigin]
 
-    def __init__(
-        out self, _pending_ptr: Pointer[Int, MutUntrackedOrigin]
-    ):
-        """Construct a _SendFutureState with a pending-counter pointer.
+    def __init__(out self):
+        """Construct a _SendFutureState.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context after heap allocation.
-
-        Args:
-            _pending_ptr: Pointer to the WatchLoop's pending counter.
         """
         self.completion = Completion()
         self._cqe_result = Int32(0)
         self.done = False
         self.consumed = False
-        self._pending_ptr = _pending_ptr
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -68,7 +60,6 @@ struct _SendFutureState(_FutureCallback):
         self._cqe_result = move._cqe_result
         self.done = move.done
         self.consumed = move.consumed
-        self._pending_ptr = move._pending_ptr
 
     def set_result(mut self, result: Int32):
         """Store the raw CQE result from io_uring send.
@@ -79,7 +70,6 @@ struct _SendFutureState(_FutureCallback):
         """
         self._cqe_result = result
         self.done = True
-        self._pending_ptr[] -= 1
 
 
 # ===----------------------------------------------------------------------=== #

@@ -73,7 +73,7 @@ def test_provide_buffers() raises:
         base_buf_id=UInt16(0),
         c=cmp_ptr,
     )
-    driver.tick(wait=True)
+    _ = driver.tick(wait=True)
 
     assert_true(tracker.called, "on_complete was not called")
     assert_true(

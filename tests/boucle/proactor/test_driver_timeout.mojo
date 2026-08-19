@@ -93,7 +93,7 @@ def test_driver_timeout() raises:
     # Poll until both completions have fired.
     var ticks = 0
     while not (tracker.timeout_fired and tracker.cancel_fired):
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for completions"

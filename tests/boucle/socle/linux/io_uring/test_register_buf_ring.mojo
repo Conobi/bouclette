@@ -175,7 +175,7 @@ def test_register_buf_ring() raises:
 
     # --- 7. Tick for the recv CQE ---
     while tracker.call_count < 1:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
 
     var recv_result = tracker.results[0]
     var recv_flags = tracker.flags_arr[0]
@@ -221,7 +221,7 @@ def test_register_buf_ring() raises:
     assert_equal(Int(sent2), 3)
 
     while tracker.call_count < 2:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
 
     var recv2_flags = tracker.flags_arr[1]
     var recv2_result = tracker.results[1]

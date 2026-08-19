@@ -48,7 +48,7 @@ def test_driver_nop() raises:
     )
 
     driver.submit_nop(cmp_ptr)
-    driver.tick(wait=True)
+    _ = driver.tick(wait=True)
 
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)

@@ -25,7 +25,7 @@ from ._state import (
     CORO_DONE,
     DEFAULT_STACK_SIZE,
 )
-from .yielder import _CoroInner, CoroutineBody, _coro_trampoline
+from .yielder import _CoroInner, CoroutineBody, _coro_entry
 
 
 # ── Coroutine ───────────────────────────────────────────────────────────
@@ -95,10 +95,10 @@ struct Coroutine(Movable, Deinitable where False):
         try:
             uc_getcontext(self._inner[].coro_ctx)
 
-            # Get trampoline function address
-            var trampoline_fn = _coro_trampoline
+            # Get coroutine entry function address
+            var entry_fn = _coro_entry
             var fn_addr = Int(
-                Pointer(to=trampoline_fn).unsafe_bitcast[Int]()[]
+                Pointer(to=entry_fn).unsafe_bitcast[Int]()[]
             )
 
             setup_context(
@@ -202,9 +202,9 @@ struct Coroutine(Movable, Deinitable where False):
             unsafe_from_address=Int(self._inner[].stack_base) + Int(page_size)
         )
         uc_getcontext(self._inner[].coro_ctx)
-        var trampoline_fn = _coro_trampoline
+        var entry_fn = _coro_entry
         var fn_addr = Int(
-            Pointer(to=trampoline_fn).unsafe_bitcast[Int]()[]
+            Pointer(to=entry_fn).unsafe_bitcast[Int]()[]
         )
         setup_context(
             self._inner[].coro_ctx,

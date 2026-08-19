@@ -33,11 +33,11 @@ struct EventLoop[D: IoDriver](Movable):
 
     def run_once(mut self) raises:
         """Block until at least one completion fires, then dispatch all ready."""
-        self.driver.tick(wait=True)
+        _ = self.driver.tick(wait=True)
 
     def try_poll(mut self) raises:
         """Non-blocking: dispatch any ready completions, return immediately."""
-        self.driver.tick(wait=False)
+        _ = self.driver.tick(wait=False)
 
     def run(mut self) raises:
         """Run until stop() is called."""

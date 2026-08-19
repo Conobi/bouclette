@@ -68,7 +68,7 @@ def test_completion_io() raises:
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
     loop.submit_send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_true(send_slot.fired, "send completion did not fire")
     assert_equal(send_slot.result, Int32(5))  # 5 bytes sent
@@ -89,7 +89,7 @@ def test_completion_io() raises:
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
     loop.submit_recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_true(recv_slot.fired, "recv completion did not fire")
     assert_equal(recv_slot.result, Int32(5))  # 5 bytes received

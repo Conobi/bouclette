@@ -25,7 +25,7 @@ def test_driver_sq_space() raises:
     assert_true(space_after < space_before)
 
     # Tick to drain, verify space recovers.
-    driver.tick(wait=True)
+    _ = driver.tick(wait=True)
     var space_final = driver.sq_space()
     assert_true(space_final >= space_before)
 

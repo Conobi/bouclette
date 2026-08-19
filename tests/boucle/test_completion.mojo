@@ -84,7 +84,7 @@ def test_nop_single() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
     loop.submit_nop(cmp_ptr)
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
@@ -104,7 +104,7 @@ def test_nop_multiple() raises:
 
     for i in range(5):
         loop.submit_nop(cmps.unsafe_offset(i))
-    loop.tick(wait=True)
+    _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 5)
 
@@ -127,12 +127,12 @@ def test_nop_batched() raises:
 
     for i in range(12):
         if i > 0 and i % 4 == 0:
-            loop.tick(wait=True)
+            _ = loop.tick(wait=True)
         loop.submit_nop(cmps.unsafe_offset(i))
 
     # Drain remaining completions.
     while tracker.count < 12:
-        loop.tick(wait=True)
+        _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 12)
 
@@ -193,7 +193,7 @@ def test_submit_cancel_cancels_pending_recv() raises:
     # Drain until both CQEs arrive.
     var ticks = 0
     while not recv_slot.fired or not cancel_slot.fired:
-        loop.tick(wait=True)
+        _ = loop.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for cancel completion"
@@ -318,7 +318,7 @@ def test_accept_multishot_produces_more_flag() raises:
         )
         assert_equal(Int(cr), 0)
 
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         _ = external_call["close", Int32](client_fd)
 
     # We received at least three multishot CQEs. Each carried F_MORE since

@@ -194,7 +194,7 @@ def test_multishot_recvmsg() raises:
     )
 
     # --- 7. Tick to submit both SQEs and get provide_buffers CQE ---
-    driver.tick(wait=True)
+    _ = driver.tick(wait=True)
     print("after first tick: pb_fired=", pb_slot.fired)
     assert_true(pb_slot.fired, "expected provide_buffers CQE")
     assert_true(
@@ -229,7 +229,7 @@ def test_multishot_recvmsg() raises:
 
     # --- 9. Tick for the recvmsg CQE ---
     while tracker.call_count < 1:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
     print("after second tick: call_count=", tracker.call_count)
 
     var recv_result = tracker.results[0]

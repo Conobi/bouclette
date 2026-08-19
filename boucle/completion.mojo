@@ -70,15 +70,18 @@ struct CompletionLoop(Movable):
 
     # ── IoDriver delegation ───────────────────────────────────────────────
 
-    def tick(mut self, wait: Bool) raises:
+    def tick(mut self, wait: Bool) raises -> Int:
         """Submit pending SQEs and dispatch completed operations.
 
         Args:
             wait: If True, block until at least one completion arrives.
                   If False, return immediately after dispatching any
                   already-available completions.
+
+        Returns:
+            The number of dispatched CQEs.
         """
-        self._inner.driver.tick(wait)
+        return self._inner.driver.tick(wait)
 
     def submit_nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]

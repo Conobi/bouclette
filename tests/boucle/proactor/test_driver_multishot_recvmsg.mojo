@@ -182,7 +182,7 @@ def test_driver_multishot_recvmsg() raises:
     print("submitted multishot recvmsg")
 
     # --- 8. Flush SQE to kernel (non-blocking tick) ---
-    driver.tick(wait=False)
+    _ = driver.tick(wait=False)
 
     # --- 9. Send 3 datagrams to the recv socket ---
     # Build destination sockaddr_in (16 bytes, heap-allocated)
@@ -223,7 +223,7 @@ def test_driver_multishot_recvmsg() raises:
     # --- 10. Tick until all 3 completions fire ---
     var ticks = 0
     while tracker.count < NUM_DATAGRAMS:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         print("tick", ticks, "count=", tracker.count)
         if ticks > 50:

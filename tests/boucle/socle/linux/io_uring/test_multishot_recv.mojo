@@ -207,7 +207,7 @@ def test_multishot_recv() raises:
     )
 
     # First tick: provide_buffers CQE (recv multishot is still armed)
-    driver.tick(wait=True)
+    _ = driver.tick(wait=True)
     assert_true(
         pb_slot.fired,
         "expected provide_buffers CQE",
@@ -234,7 +234,7 @@ def test_multishot_recv() raises:
 
     # --- 7. Tick for the recv CQE ---
     while tracker.call_count < 1:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
     print("after recv tick: call_count=", tracker.call_count)
 
     var recv_result = tracker.tokens[0]

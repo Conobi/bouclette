@@ -11,7 +11,7 @@ from std.memory.alloc import unsafe_alloc
 
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
-from boucle.watch._callback import _FutureCallback, _trampoline
+from boucle.watch._callback import _FutureCallback, _dispatch
 from boucle.watch.outcome import ConnectOutcome
 
 
@@ -23,7 +23,7 @@ from boucle.watch.outcome import ConnectOutcome
 struct _ConnectFutureState(_FutureCallback):
     """Internal state for a single async connect operation.
 
-    Implements _FutureCallback so the io_uring trampoline can dispatch
+    Implements _FutureCallback so the generic _dispatch can deliver
     CQE results into this struct. Stored on the heap; the Completion's
     context pointer points back to the enclosing _ConnectFutureState.
 
@@ -37,7 +37,6 @@ struct _ConnectFutureState(_FutureCallback):
         _cqe_result: Raw CQE result (0 on success, negative errno on failure).
         done: True once the CQE callback has fired.
         consumed: True once result() has been called.
-        _pending_ptr: Points to WatchLoop._pending for decrement on completion.
     """
 
     var completion: Completion
@@ -45,28 +44,21 @@ struct _ConnectFutureState(_FutureCallback):
     var _cqe_result: Int32
     var done: Bool
     var consumed: Bool
-    var _pending_ptr: Pointer[Int, MutUntrackedOrigin]
 
-    def __init__(
-        out self,
-        addr_stor: SocketAddrStorV4,
-        _pending_ptr: Pointer[Int, MutUntrackedOrigin],
-    ):
-        """Construct a _ConnectFutureState with address storage and pending pointer.
+    def __init__(out self, addr_stor: SocketAddrStorV4):
+        """Construct a _ConnectFutureState with address storage.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context after heap allocation.
 
         Args:
             addr_stor: Copy of the target sockaddr_in for pointer stability.
-            _pending_ptr: Pointer to the WatchLoop's pending counter.
         """
         self.completion = Completion()
         self._addr_stor = addr_stor
         self._cqe_result = Int32(0)
         self.done = False
         self.consumed = False
-        self._pending_ptr = _pending_ptr
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -79,14 +71,12 @@ struct _ConnectFutureState(_FutureCallback):
         self._cqe_result = move._cqe_result
         self.done = move.done
         self.consumed = move.consumed
-        self._pending_ptr = move._pending_ptr
 
     def set_result(mut self, result: Int32):
         """Store the raw CQE result from io_uring connect.
 
         Does not decode the result — ConnectFuture.result() handles that
-        via ConnectOutcome.from_cqe_result(). Decrements the WatchLoop
-        pending counter.
+        via ConnectOutcome.from_cqe_result().
 
         Args:
             result: The io_uring CQE result (0 on success, negative errno
@@ -94,7 +84,6 @@ struct _ConnectFutureState(_FutureCallback):
         """
         self._cqe_result = result
         self.done = True
-        self._pending_ptr[] -= 1
 
 
 # ===----------------------------------------------------------------------=== #
