@@ -5,7 +5,7 @@ from boucle.watch.outcome import ConnectOutcome
 from boucle.net.probe import PortStatus
 
 
-def main() raises:
+def test_connect_outcome() raises:
     # 1. Success -> CONNECTED
     var ok = ConnectOutcome.from_cqe_result(Int32(0))
     assert_true(ok.is_connected(), "0 should be CONNECTED")
@@ -61,4 +61,8 @@ def main() raises:
     print(net_unreach)
     print(err)
 
-    print("PASS: ConnectOutcome decodes all CQE result codes correctly")
+
+
+def main() raises:
+    test_connect_outcome()
+    print("PASS: test_connect_outcome.mojo")

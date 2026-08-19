@@ -28,7 +28,7 @@ struct _TestCallback(_FutureCallback):
         self.value = result
 
 
-def main() raises:
+def test_trampoline() raises:
     # Assign _trampoline[_TestCallback] to a CompletionFn alias.
     # This proves it compiles as a thin function pointer with the exact
     # signature (Pointer[NoneType, MutUntrackedOrigin], Int32, UInt32) -> None.
@@ -48,4 +48,8 @@ def main() raises:
     fn_ptr(ctx, Int32(-111), UInt32(0))
     assert_equal(readback[].value, Int32(-111))
 
-    print("PASS: _trampoline compiles as thin fn pointer and dispatches correctly")
+
+
+def main() raises:
+    test_trampoline()
+    print("PASS: test_callback_trampoline.mojo")
