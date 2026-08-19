@@ -6,3 +6,4 @@ from .loop import WatchLoop
 from .outcome import ConnectOutcome
 from .recv import RecvFuture
 from .send import SendFuture
+from .timer import TimerFuture

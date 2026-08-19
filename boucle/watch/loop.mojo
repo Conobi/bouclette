@@ -8,11 +8,13 @@ from boucle.handle import RawHandle
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
+from boucle.timeout import Timeout
 from boucle.watch._callback import _FutureCallback, _trampoline
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
 from boucle.watch.recv import _RecvFutureState, RecvFuture
 from boucle.watch.send import _SendFutureState, SendFuture
+from boucle.watch.timer import _TimerFutureState, TimerFuture
 
 
 comptime _WatchDriver = IoUringDriver
@@ -228,6 +230,48 @@ struct WatchLoop(Movable):
         self._pending += 1
 
         return SendFuture(state_ptr)
+
+    def timeout(mut self, ms: UInt64) raises -> TimerFuture:
+        """Submit an async timeout (kernel timer).
+
+        Returns a TimerFuture that resolves to True (expired) or False
+        (cancelled) after run() completes.
+
+        Args:
+            ms: Timeout in milliseconds.
+
+        Returns:
+            A TimerFuture representing the in-flight timeout.
+        """
+        # 1. Heap-allocate the state with the timeout value.
+        var state_ptr = unsafe_alloc[_TimerFutureState](1)
+        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._pending))
+        )
+        var ts = Timeout.from_ms(Int64(ms))
+        state_ptr.unsafe_write(_TimerFutureState(ts, pending_ptr))
+
+        # 2. Wire completion.
+        state_ptr[].completion.invoke = _trampoline[_TimerFutureState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        # 3. Get completion pointer.
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[].completion)
+            )
+        )
+
+        # 4. Get timespec pointer from the state (stable heap allocation).
+        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
+        )
+        self._driver.submit_timeout(ts_ptr, cmp_ptr)
+        self._pending += 1
+
+        return TimerFuture(state_ptr)
 
     def run(mut self) raises:
         """Block until all pending operations complete.
