@@ -12,6 +12,10 @@ from boucle.timeout import Timeout
 from boucle.watch._callback import _FutureCallback, _trampoline
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
+from boucle.watch.connect_timeout import (
+    _ConnectWithTimeoutState,
+    ConnectWithTimeoutFuture,
+)
 from boucle.watch.recv import _RecvFutureState, RecvFuture
 from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.timer import _TimerFutureState, TimerFuture
@@ -28,6 +32,9 @@ struct WatchLoop(Movable):
 
     var _driver: _WatchDriver
     var _pending: Int
+    var _active_composites: List[
+        Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
+    ]
 
     def __init__(out self, sq_entries: UInt32 = 64) raises:
         """Create a WatchLoop with the given submission queue capacity.
@@ -37,11 +44,15 @@ struct WatchLoop(Movable):
         """
         self._driver = _WatchDriver(sq_entries=sq_entries)
         self._pending = 0
+        self._active_composites = List[
+            Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
+        ]()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self._driver = move._driver^
         self._pending = move._pending
+        self._active_composites = move._active_composites^
 
     def accept(mut self, ref socket: Socket) raises -> AcceptFuture:
         """Submit an async accept on a listening socket.
@@ -128,6 +139,93 @@ struct WatchLoop(Movable):
         self._pending += 1
 
         return ConnectFuture(state_ptr)
+
+    def connect_with_timeout(
+        mut self,
+        ref socket: Socket,
+        ref addr: SocketAddrV4,
+        timeout_ms: UInt64,
+    ) raises -> ConnectWithTimeoutFuture:
+        """Submit a connect with a kernel-level timeout.
+
+        Submits both a connect SQE and a timeout SQE atomically.
+        The first to complete resolves the operation; the other is
+        cancelled. Returns a ConnectWithTimeoutFuture that resolves
+        to a ConnectOutcome (CONNECTED, REFUSED, TIMEOUT, etc.)
+        after run() completes.
+
+        The address and timeout are copied into the heap-allocated
+        state for pointer stability.
+
+        Args:
+            socket: The socket to connect.
+            addr: The target IPv4 address.
+            timeout_ms: Timeout in milliseconds.
+
+        Returns:
+            A ConnectWithTimeoutFuture representing the in-flight
+            composite operation.
+        """
+        # 1. Heap-allocate the state.
+        var state_ptr = unsafe_alloc[_ConnectWithTimeoutState](1)
+        var pending_ptr = Pointer[Int, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._pending))
+        )
+        var addr_stor = SocketAddrStorV4(addr)
+        var ts = Timeout.from_ms(Int64(timeout_ms))
+        state_ptr.unsafe_write(
+            _ConnectWithTimeoutState(addr_stor, ts, pending_ptr)
+        )
+
+        # 2. Wire 3 completions with dedicated static callbacks.
+        state_ptr[]._connect_cmp.invoke = (
+            _ConnectWithTimeoutState._on_connect_cb
+        )
+        state_ptr[]._connect_cmp.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        state_ptr[]._timeout_cmp.invoke = (
+            _ConnectWithTimeoutState._on_timeout_cb
+        )
+        state_ptr[]._timeout_cmp.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        state_ptr[]._cancel_cmp.invoke = (
+            _ConnectWithTimeoutState._on_cancel_cb
+        )
+        state_ptr[]._cancel_cmp.context = state_ptr.unsafe_bitcast[
+            NoneType
+        ]()
+
+        # 3. Submit connect SQE.
+        var fd = socket.raw()
+        var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[]._connect_cmp)
+            )
+        )
+        var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
+        var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
+        self._driver.submit_connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
+
+        # 4. Submit timeout SQE.
+        var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(
+                Pointer(to=state_ptr[]._timeout_cmp)
+            )
+        )
+        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
+        )
+        self._driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
+
+        # 5. Track as 1 logical operation and register for flush_cancel.
+        self._pending += 1
+        self._active_composites.append(state_ptr)
+
+        return ConnectWithTimeoutFuture(state_ptr)
 
     def recv(
         mut self,
@@ -276,8 +374,18 @@ struct WatchLoop(Movable):
     def run(mut self) raises:
         """Block until all pending operations complete.
 
+        After each tick, flushes deferred cancel SQEs for composite
+        operations and removes completed composites.
+
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
         """
         while self._pending > 0:
             self._driver.tick(wait=True)
+            var i = len(self._active_composites) - 1
+            while i >= 0:
+                var state_ptr = self._active_composites[i]
+                state_ptr[].flush_cancel(self._driver)
+                if state_ptr[].done:
+                    _ = self._active_composites.pop(i)
+                i -= 1

@@ -2,6 +2,7 @@
 
 from .accept import AcceptFuture
 from .connect import ConnectFuture
+from .connect_timeout import ConnectWithTimeoutFuture
 from .loop import WatchLoop
 from .outcome import ConnectOutcome
 from .recv import RecvFuture

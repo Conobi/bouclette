@@ -16,7 +16,7 @@ from boucle.socle.linux.raw import (
 from boucle.net.probe import PortStatus
 
 
-struct ConnectOutcome(Writable):
+struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
     """Decodes a connect(2) CQE result into a portable outcome.
 
     Discriminates five states via a UInt8 tag:
