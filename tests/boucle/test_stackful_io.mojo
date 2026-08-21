@@ -7,7 +7,6 @@ and be resumed by the callback once the kernel signals done.
 from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
 from boucle.completion import CompletionLoop
 from boucle.proactor.completion import Completion
-from boucle.socle.ptr import null_ptr
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true, assert_equal
@@ -16,44 +15,47 @@ from std.testing import assert_true, assert_equal
 # ── Shared state ─────────────────────────────────────────────────────────────
 
 
-struct SharedState:
+struct IoState(Movable, Deinitable):
     """Data shared between the coroutine body and the completion callback.
 
-    Lives on the stack of the test function -- both sides hold raw
-    pointers that remain valid for the duration of the test.
+    Owned by the coroutine -- both the body (via Yielder.state()) and
+    the callback (via Coroutine.state()) access the same fields through
+    typed pointers that remain valid for the duration of the test.
     """
 
-    var coro_ptr: Pointer[CoroHandle, MutUntrackedOrigin]
     var io_result: Int32
     var coro_saw_result: Int32
     var coro_completed: Bool
 
     def __init__(out self):
-        """Construct zeroed shared state."""
-        self.coro_ptr = null_ptr[CoroHandle, MutUntrackedOrigin]()
+        """Construct zeroed I/O state."""
         self.io_result = Int32(-999)
         self.coro_saw_result = Int32(-999)
         self.coro_completed = False
+
+    def __init__(out self, *, deinit move: Self):
+        """Move constructor."""
+        self.io_result = move.io_result
+        self.coro_saw_result = move.coro_saw_result
+        self.coro_completed = move.coro_completed
 
 
 # ── Coroutine body ────────────────────────────────────────────────────────────
 
 
-def coro_body(mut y: CoroYielder) raises:
+def coro_body(mut y: CoroYielder[IoState]) raises:
     """Simulate waiting for an I/O completion.
 
-    1. Yield to the caller (pretending to wait for kernel I/O).
-    2. When resumed by the callback, read the result from shared state.
+    1. Suspend to the caller (pretending to wait for kernel I/O).
+    2. When resumed by the callback, read the result from typed state.
     3. Mark ourselves done.
     """
-    var state = y.user_data().unsafe_bitcast[SharedState]()
-
     # Suspend -- the loop will resume us once the nop completes
-    y.yield_to_caller()
+    y.suspend()
 
     # Back here after callback calls resume()
-    state[].coro_saw_result = state[].io_result
-    state[].coro_completed = True
+    y.state()[].coro_saw_result = y.state()[].io_result
+    y.state()[].coro_completed = True
 
 
 # ── Completion callback ──────────────────────────────────────────────────────
@@ -64,14 +66,20 @@ def _on_io_complete(
     result: Int32,
     flags: UInt32,
 ):
-    """On completion: store result in shared state and resume the coroutine."""
-    var state_ptr = Pointer[SharedState, MutUntrackedOrigin](
+    """On completion: store result in the coroutine's state and resume it.
+
+    Args:
+        ctx: Pointer to the heap-allocated Coroutine[IoState].
+        result: The I/O completion result code.
+        flags: Completion flags (unused).
+    """
+    var coro_ptr = Pointer[CoroHandle[IoState], MutUntrackedOrigin](
         unsafe_from_address=Int(ctx)
     )
-    state_ptr[].io_result = result
+    coro_ptr[].state()[].io_result = result
     # Resume the coroutine -- it will read io_result and set coro_completed
     try:
-        state_ptr[].coro_ptr[].resume()
+        coro_ptr[].resume()
     except:
         # Propagation is not supported in the callback;
         # coro_completed remains False so the assertion below will catch it.
@@ -83,38 +91,28 @@ def _on_io_complete(
 
 def test_coro_with_completion_loop() raises:
     """Submit a nop, resume a coroutine from the completion callback."""
-    # Shared state lives on the stack -- both coroutine and callback share
-    # it via raw pointers. The struct must outlive both.
-    var state = SharedState()
-
-    var state_ptr = Pointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=state))
-    )
-    var state_for_cb = Pointer[NoneType, MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=state))
-    )
-
     # Allocate CoroHandle on heap so @explicit_destroy doesn't conflict
-    # with raising calls in the test body. Cleanup via take_pointee + destroy.
-    var coro_heap = unsafe_alloc[CoroHandle](1).as_unsafe_any_origin()
-    var h = CoroHandle(coro_body, user_data=state_ptr)
-    coro_heap.unsafe_write(h^)
+    # with raising calls in the test body. Cleanup via take_pointee + close.
+    var coro_heap = unsafe_alloc[CoroHandle[IoState]](1).as_unsafe_any_origin()
+    coro_heap.unsafe_write(CoroHandle[IoState](coro_body, IoState()))
 
-    # Wire the completion callback to shared state
+    # Callback context = pointer to the coroutine on the heap
+    var cb_ctx = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(coro_heap)
+    )
+
     var loop = CompletionLoop(sq_entries=8)
-    var cmp = Completion(invoke=_on_io_complete, context=state_for_cb)
+    var cmp = Completion(invoke=_on_io_complete, context=cb_ctx)
     var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    # Store coro address so the callback can call resume()
-    state.coro_ptr = Pointer[CoroHandle, MutUntrackedOrigin](
-        unsafe_from_address=Int(coro_heap)
-    )
-
-    # First resume: coroutine runs until yield_to_caller()
+    # First resume: coroutine runs until suspend()
     coro_heap[].resume()
-    assert_true(coro_heap[].can_resume(), "coro should be SUSPENDED after first resume")
+    assert_true(
+        coro_heap[].can_resume(),
+        "coro should be SUSPENDED after first resume",
+    )
     assert_true(not coro_heap[].is_done(), "coro must not be done yet")
 
     # Submit nop; completion callback will resume the coroutine
@@ -123,15 +121,16 @@ def test_coro_with_completion_loop() raises:
 
     # After tick() the callback has fired and resumed the coro to completion
     assert_true(coro_heap[].is_done(), "coro must be DONE after tick()")
-    assert_equal(state.io_result, Int32(0))
-    assert_equal(state.coro_saw_result, Int32(0))
+    var s = coro_heap[].state()
+    assert_equal(s[].io_result, Int32(0))
+    assert_equal(s[].coro_saw_result, Int32(0))
     assert_true(
-        state.coro_completed,
+        s[].coro_completed,
         "coroutine body must have set coro_completed",
     )
 
     # Explicit cleanup
-    coro_heap.unsafe_take_pointee().destroy()
+    coro_heap.unsafe_take_pointee().close()
     coro_heap.unsafe_free()
     _ = cmp
 

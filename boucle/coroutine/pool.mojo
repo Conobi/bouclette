@@ -151,3 +151,30 @@ struct StackPool(Movable):
             # Over capacity — destroy the stack
             _ = ptr.unsafe_take_pointee()
             ptr.unsafe_free()
+
+
+# ── Pool release helper ───────────────────────────────────────────────
+
+
+def _release_to_pool(
+    pool_ref: Pointer[NoneType, MutUntrackedOrigin],
+    stack_ptr: Pointer[_CoroStack, MutUntrackedOrigin],
+):
+    """Release a stack back to a pool identified by its _PoolInner back-reference.
+
+    Casts pool_ref to _PoolInner and either caches the stack (if under
+    capacity) or destroys it. Called from Coroutine.close() when the
+    stack has a pool back-reference set.
+
+    Args:
+        pool_ref: Opaque pointer to the pool's _PoolInner (from stack's pool_ref()).
+        stack_ptr: The _CoroStack to release.
+    """
+    var pool_inner = Pointer[_PoolInner, MutUntrackedOrigin](
+        unsafe_from_address=Int(pool_ref)
+    )
+    if len(pool_inner[].free) < pool_inner[].capacity:
+        pool_inner[].free.append(stack_ptr)
+    else:
+        _ = stack_ptr.unsafe_take_pointee()
+        stack_ptr.unsafe_free()
