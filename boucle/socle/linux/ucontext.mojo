@@ -65,7 +65,7 @@ def uc_swapcontext_unchecked(
 ):
     """Save current context and switch to another (non-raising).
 
-    Used in yield_to_caller where raising is not allowed.
+    Used in suspend where raising is not allowed.
     """
     var res = external_call["swapcontext", Int32](save_ctx, load_ctx)
     debug_assert(res == 0, "swapcontext failed")

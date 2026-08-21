@@ -371,6 +371,23 @@ def test_custom_stack_size() raises:
     assert_true(coro.is_done())
 
 
+def _read_seeded_body(mut y: CoroYielder[_RunToCompletionState]) raises:
+    """Body that reads state seeded by the caller before first resume."""
+    debug_assert(y.state()[].value == 99, "caller-seeded value not visible")
+    y.state()[].value += 1
+
+
+def test_caller_state_before_resume() raises:
+    """Caller writes to state() before the first resume(); body observes it."""
+    var coro = TestCoro[_RunToCompletionState](
+        _read_seeded_body, _RunToCompletionState(0)
+    )
+    coro.state()[].value = 99
+    coro.resume()
+    assert_equal(coro.state()[].value, 100)
+    assert_true(coro.is_done())
+
+
 def main() raises:
     test_create_destroy()
     test_single_yield()
@@ -382,4 +399,5 @@ def main() raises:
     test_move_handle()
     test_multiple_live_coros()
     test_custom_stack_size()
+    test_caller_state_before_resume()
     print("All stackful tests passed.")

@@ -231,7 +231,7 @@ struct _UcontextStack(Movable):
     initial configuration and swap_to_coro/swap_to_caller for context switching.
 
     All platform-specific unsafe operations are encapsulated here. Higher-level
-    coroutine types (Coroutine, CoroutinePool) delegate to this struct for
+    coroutine types (Coroutine, StackPool) delegate to this struct for
     stack and context management.
 
     RAII: all three owned resources (_region, _caller_ctx, _coro_ctx) are

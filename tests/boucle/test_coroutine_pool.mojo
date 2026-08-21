@@ -106,8 +106,37 @@ def test_pool_capacity_cap() raises:
     assert_equal(pool.idle_count(), 2, "cap should not have been exceeded")
 
 
+def test_pool_survives_move() raises:
+    """Moving a StackPool preserves back-pointers — close() still returns stacks."""
+    var pool = StackPool(capacity=4)
+    var ptr = unsafe_alloc[CoroHandle[Counter]](1)
+    ptr.unsafe_write(CoroHandle[Counter](_body, Counter(), pool))
+    ptr[].resume()
+    ptr[].resume()
+    assert_true(ptr[].is_done())
+
+    # Move the pool — heap-boxed _PoolInner means the back-pointer stays valid
+    var moved_pool = pool^
+
+    # close() should return the stack to the moved pool
+    ptr.unsafe_take_pointee().close()
+    ptr.unsafe_free()
+    assert_equal(moved_pool.idle_count(), 1, "stack not returned to moved pool")
+
+    # A second coroutine from the moved pool should reuse the cached stack
+    var ptr2 = unsafe_alloc[CoroHandle[Counter]](1)
+    ptr2.unsafe_write(CoroHandle[Counter](_body, Counter(), moved_pool))
+    assert_equal(moved_pool.idle_count(), 0, "stack should have been reused")
+    ptr2[].resume()
+    ptr2[].resume()
+    ptr2.unsafe_take_pointee().close()
+    ptr2.unsafe_free()
+    assert_equal(moved_pool.idle_count(), 1)
+
+
 def main() raises:
     test_pool_acquire_runs_body()
     test_pool_recycles_stack()
     test_pool_capacity_cap()
+    test_pool_survives_move()
     print("test_coroutine_pool PASSED")
