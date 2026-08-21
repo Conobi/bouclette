@@ -150,7 +150,7 @@ def _coro_entry[State: Movable & Deinitable](inner_addr: Int64):
     var inner = Pointer[_CoroInner[State], MutUntrackedOrigin](
         unsafe_from_address=Int(inner_addr)
     )
-    # Always-on canary: a corrupt pointer here means unrecoverable state.
+    # Debug-only canary: validates pointer reconstruction at the ucontext boundary.
     debug_assert(inner[].magic == CORO_MAGIC, "corrupted _CoroInner")
     var yielder = Yielder[State](inner)
     try:

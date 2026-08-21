@@ -1,4 +1,4 @@
-"""Tests for typed Coroutine[State] — resume, yield, error, move, cancel."""
+"""Tests for typed Coroutine[State] — resume, yield, error, move."""
 
 from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder, CoroutineBody
 from std.memory import Pointer
