@@ -7,7 +7,6 @@ valid across moves.
 
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
-from boucle.socle.ptr import null_ptr
 from ._state import DEFAULT_STACK_SIZE
 from ._stack import _CoroStack
 
@@ -122,7 +121,11 @@ struct StackPool(Movable):
             ptr = self._inner[].free.pop()
         else:
             ptr = unsafe_alloc[_CoroStack](1)
-            ptr.unsafe_write(_CoroStack(self._inner[].stack_size))
+            try:
+                ptr.unsafe_write(_CoroStack(self._inner[].stack_size))
+            except e:
+                ptr.unsafe_free()
+                raise e^
         # Set pool back-reference so the stack can find its way home
         ptr[].set_pool_ref(
             Pointer[NoneType, MutUntrackedOrigin](
