@@ -8,4 +8,4 @@ from .completion import CompletionLoop, Completion, CompletionFn
 from .readiness import ReadinessLoop, ReadinessHandler
 from .interest import Interest
 from .readiness_state import Readiness
-from .coroutine import Coroutine, Yielder, CoroutinePool, CoroutineBody
+from .coroutine import Coroutine, Yielder, StackPool, CoroutineBody

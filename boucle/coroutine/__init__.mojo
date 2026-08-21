@@ -1,3 +1,3 @@
 from .handle import Coroutine
 from .yielder import Yielder, CoroutineBody
-from .pool import CoroutinePool
+from .pool import StackPool
