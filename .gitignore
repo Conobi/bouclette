@@ -28,6 +28,10 @@ credentials.*
 # Parallel worktrees (managed by atelier:using-git-worktrees skill)
 .worktrees/
 
+# Local caches
+.cache/
+.local/
+
 # mojox cache
 .mojox/
 
