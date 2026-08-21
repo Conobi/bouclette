@@ -12,13 +12,7 @@ from boucle.socle.linux.ucontext import (
     uc_swapcontext_unchecked,
 )
 from boucle.socle.linux.raw.ctypes import c_void
-from ._state import (
-    CORO_MAGIC,
-    CORO_CREATED,
-    CORO_RUNNING,
-    CORO_SUSPENDED,
-    CORO_DONE,
-)
+from ._state import CORO_MAGIC, Phase
 
 
 # Body function type: receives a mutable Yielder, may raise
@@ -46,7 +40,7 @@ struct Yielder:
 
         Execution resumes from here when the caller calls resume().
         """
-        self._inner[].phase = CORO_SUSPENDED
+        self._inner[].phase = Phase.SUSPENDED
         # Unchecked: yield can't raise (no way to propagate from here),
         # and swapcontext only fails with invalid pointers — which would
         # mean _CoroInner is already corrupt. Checking would add overhead
@@ -55,7 +49,7 @@ struct Yielder:
             self._inner[].coro_ctx, self._inner[].caller_ctx
         )
         # When we return here, the caller called resume() again
-        self._inner[].phase = CORO_RUNNING
+        self._inner[].phase = Phase.RUNNING
 
     def user_data(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Access the user data pointer passed at Coroutine creation."""
@@ -76,7 +70,7 @@ struct _CoroInner(Movable):
     var coro_ctx: Pointer[UInt8, MutUntrackedOrigin]
     var stack_base: Pointer[c_void, ImmStaticOrigin]
     var stack_total: UInt
-    var phase: UInt8
+    var phase: Phase
     var body: CoroutineBody
     var user_data: Pointer[NoneType, MutUntrackedOrigin]
     var has_error: Bool
@@ -95,7 +89,7 @@ struct _CoroInner(Movable):
         self.coro_ctx = alloc_ucontext()
         self.stack_base = stack_base
         self.stack_total = stack_total
-        self.phase = CORO_CREATED
+        self.phase = Phase.CREATED
         self.body = body
         self.user_data = user_data
         self.has_error = False
@@ -137,7 +131,7 @@ def _coro_entry(inner_addr: Int64):
     except e:
         inner[].has_error = True
         inner[].error_msg = String(e)
-    inner[].phase = CORO_DONE
+    inner[].phase = Phase.DONE
     uc_swapcontext_unchecked(inner[].coro_ctx, inner[].caller_ctx)
     # Unreachable -- if we get here, the coroutine stack is corrupt.
     # The process will likely crash on the next instruction.

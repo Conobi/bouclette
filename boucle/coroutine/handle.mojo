@@ -18,13 +18,7 @@ from boucle.socle.linux.mm import (
 from boucle.socle.linux.raw import syscall
 from boucle.socle.linux.raw import __NR_munmap
 from boucle.socle.ptr import null_ptr
-from ._state import (
-    CORO_CREATED,
-    CORO_RUNNING,
-    CORO_SUSPENDED,
-    CORO_DONE,
-    DEFAULT_STACK_SIZE,
-)
+from ._state import Phase, DEFAULT_STACK_SIZE
 from .yielder import _CoroInner, CoroutineBody, _coro_entry
 
 
@@ -124,8 +118,8 @@ struct Coroutine(Movable, Deinitable where False):
         via @explicit_destroy.
         """
         debug_assert(
-            self._inner[].phase == CORO_CREATED
-            or self._inner[].phase == CORO_DONE,
+            self._inner[].phase == Phase.CREATED
+            or self._inner[].phase == Phase.DONE,
             "destroying a coroutine that hasn't finished",
         )
         # Free ucontext buffers
@@ -150,7 +144,7 @@ struct Coroutine(Movable, Deinitable where False):
             self.can_resume(),
             "resume() called on non-resumable coroutine",
         )
-        self._inner[].phase = CORO_RUNNING
+        self._inner[].phase = Phase.RUNNING
         uc_swapcontext(
             self._inner[].caller_ctx, self._inner[].coro_ctx
         )
@@ -161,13 +155,13 @@ struct Coroutine(Movable, Deinitable where False):
 
     def is_done(self) -> Bool:
         """True if the coroutine body has returned or raised."""
-        return self._inner[].phase == CORO_DONE
+        return self._inner[].phase == Phase.DONE
 
     def can_resume(self) -> Bool:
         """True if the coroutine can be resumed (CREATED or SUSPENDED)."""
         return (
-            self._inner[].phase == CORO_CREATED
-            or self._inner[].phase == CORO_SUSPENDED
+            self._inner[].phase == Phase.CREATED
+            or self._inner[].phase == Phase.SUSPENDED
         )
 
     def reset(
@@ -184,15 +178,15 @@ struct Coroutine(Movable, Deinitable where False):
         + setup_context cost across many request lifetimes.
         """
         debug_assert(
-            self._inner[].phase == CORO_CREATED
-            or self._inner[].phase == CORO_DONE,
+            self._inner[].phase == Phase.CREATED
+            or self._inner[].phase == Phase.DONE,
             "reset() called on a running or suspended coroutine",
         )
         self._inner[].body = body
         self._inner[].user_data = user_data
         self._inner[].has_error = False
         self._inner[].error_msg = String()
-        self._inner[].phase = CORO_CREATED
+        self._inner[].phase = Phase.CREATED
 
         var page_size = get_page_size()
         var stack_total = self._inner[].stack_total
