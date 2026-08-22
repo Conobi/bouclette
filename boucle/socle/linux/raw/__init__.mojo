@@ -1,33 +1,12 @@
-"""Arch-dispatched raw Linux syscall and struct facade.
+"""Unified raw Linux syscall and struct facade.
 
 Consumers under `boucle/socle/linux/` import from `boucle.socle.linux.raw`
-rather than reaching into `boucle.socle.linux.raw.x86_64.*` directly. This
-keeps the architecture choice in one place and lets aarch64 (and any
-future arches) slot in by switching the imports below.
-
-Why not `comptime if is_x86_64: <imports> elif is_aarch64: <imports>`?
-On Mojo 1.0.0b1, module-level `comptime if` (and the deprecated
-`@parameter if`) cannot guard `from ... import ...` statements: imports
-inside such branches do not become module-scope names, so downstream
-`from boucle.socle.linux.raw import X` fails with "use of unknown
-declaration". The facade therefore performs unconditional re-exports
-from the active arch's submodule. Today x86_64 is the only Linux arch
-Mojo emits code for, so unconditional `x86_64.*` re-exports are correct.
-
-aarch64 deferred: when the aarch64 raw stubs land (plan task P4), the
-imports below switch to the aarch64 submodule on aarch64 hosts. Because
-the build only ever compiles one arch at a time, the simplest tactic is
-to edit this file's import paths at that point (or split it via a
-separate `arch_x86_64.mojo` / `arch_aarch64.mojo` shim selected by build
-configuration). The arch predicates `is_x86_64` / `is_aarch64` from
-`boucle.socle` remain available for any consumer that needs a comptime
-branch inside a function body, where `comptime if` is supported.
+rather than reaching into per-arch submodules. Architecture dispatch is
+handled at comptime inside each source file using `CompilationTarget`.
 """
+from boucle.socle.linux.raw.syscall import syscall
 
-# ARCH_SLOT_START — DO NOT EDIT. scripts/build.sh substitutes the arch name on the import lines below.
-from boucle.socle.linux.raw.x86_64.syscall import syscall
-
-from boucle.socle.linux.raw.x86_64.general import (
+from boucle.socle.linux.raw.general import (
     __NR_read,
     __NR_write,
     __NR_close,
@@ -118,7 +97,7 @@ from boucle.socle.linux.raw.x86_64.general import (
     F_SETFL,
 )
 
-from boucle.socle.linux.raw.x86_64.epoll import (
+from boucle.socle.linux.raw.epoll import (
     EPOLL_CTL_ADD,
     EPOLL_CTL_DEL,
     EPOLL_CTL_MOD,
@@ -140,7 +119,7 @@ from boucle.socle.linux.raw.x86_64.epoll import (
     epoll_event,
 )
 
-from boucle.socle.linux.raw.x86_64.errno import (
+from boucle.socle.linux.raw.errno import (
     EPERM,
     ENOENT,
     ESRCH,
@@ -276,7 +255,7 @@ from boucle.socle.linux.raw.x86_64.errno import (
     EHWPOISON,
 )
 
-from boucle.socle.linux.raw.x86_64.io_uring import (
+from boucle.socle.linux.raw.io_uring import (
     IORING_SETUP_IOPOLL,
     IORING_SETUP_SQPOLL,
     IORING_SETUP_SQ_AFF,
@@ -438,7 +417,7 @@ from boucle.socle.linux.raw.x86_64.io_uring import (
     io_uring_buf,
 )
 
-from boucle.socle.linux.raw.x86_64.net import (
+from boucle.socle.linux.raw.net import (
     SOCK_STREAM,
     SOCK_DGRAM,
     SOCK_RAW,
@@ -579,7 +558,7 @@ from boucle.socle.linux.raw.x86_64.net import (
     in6_pktinfo,
 )
 
-from boucle.socle.linux.raw.x86_64.ucontext import (
+from boucle.socle.linux.raw.ucontext import (
     UCONTEXT_SIZE,
     UC_STACK_SP_OFFSET,
     UC_STACK_FLAGS_OFFSET,
@@ -605,4 +584,3 @@ from boucle.socle.linux.raw.x86_64.ucontext import (
     REG_EFL,
     PAGE_SIZE,
 )
-# ARCH_SLOT_END

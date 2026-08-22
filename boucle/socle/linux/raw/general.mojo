@@ -1,27 +1,39 @@
 from boucle.socle.linux.raw.ctypes import c_int, c_long, c_ulong, c_longlong
+from std.sys.info import CompilationTarget
 
-# Syscall numbers (x86_64)
-comptime __NR_read = 0
-comptime __NR_write = 1
-comptime __NR_close = 3
-comptime __NR_mmap = 9
-comptime __NR_mprotect = 10
-comptime __NR_munmap = 11
-comptime __NR_madvise = 28
-comptime __NR_dup = 32
-comptime __NR_socket = 41
-comptime __NR_bind = 49
-comptime __NR_listen = 50
-comptime __NR_setsockopt = 54
-comptime __NR_socketpair = 53
-comptime __NR_epoll_wait = 232
-comptime __NR_epoll_ctl = 233
-comptime __NR_epoll_create1 = 291
-comptime __NR_io_uring_setup = 425
-comptime __NR_io_uring_enter = 426
-comptime __NR_io_uring_register = 427
 
-# mmap constants
+@always_inline("nodebug")
+def _pick[x86: UInt64, arm: UInt64]() -> UInt64:
+    """Select a value based on the target architecture."""
+    comptime if CompilationTarget.is_x86():
+        return x86
+    else:
+        return arm
+
+
+# Syscall numbers
+comptime __NR_read = _pick[0, 63]()
+comptime __NR_write = _pick[1, 64]()
+comptime __NR_close = _pick[3, 57]()
+comptime __NR_mmap = _pick[9, 222]()
+comptime __NR_mprotect = _pick[10, 226]()
+comptime __NR_munmap = _pick[11, 215]()
+comptime __NR_madvise = _pick[28, 233]()
+comptime __NR_dup = _pick[32, 23]()
+comptime __NR_socket = _pick[41, 198]()
+comptime __NR_bind = _pick[49, 200]()
+comptime __NR_listen = _pick[50, 201]()
+comptime __NR_setsockopt = _pick[54, 208]()
+comptime __NR_socketpair = _pick[53, 199]()
+# aarch64 has only epoll_pwait (no legacy epoll_wait)
+comptime __NR_epoll_wait = _pick[232, 22]()
+comptime __NR_epoll_ctl = _pick[233, 21]()
+comptime __NR_epoll_create1 = _pick[291, 20]()
+comptime __NR_io_uring_setup = _pick[425, 425]()
+comptime __NR_io_uring_enter = _pick[426, 426]()
+comptime __NR_io_uring_register = _pick[427, 427]()
+
+# mmap constants (arch-stable)
 comptime MAP_FILE = 0
 comptime MAP_SHARED = 1
 comptime MAP_PRIVATE = 2
@@ -94,7 +106,7 @@ struct __kernel_timespec(ImplicitlyCopyable, Movable):
     var tv_sec: c_longlong
     var tv_nsec: c_longlong
 
-# Signal set (simple alias on x86_64 Linux)
+# Signal set (simple alias on LP64 Linux)
 comptime sigset_t = c_ulong
 
 # File descriptor flags

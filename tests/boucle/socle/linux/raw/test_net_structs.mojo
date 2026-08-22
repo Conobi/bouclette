@@ -1,14 +1,12 @@
-# Intentional direct import of raw.x86_64.*: this test asserts x86_64-specific
-# struct sizes/layouts. Do not migrate to the raw facade.
-from boucle.socle.linux.raw.x86_64.net import (
+from boucle.socle.linux.raw.net import (
     sockaddr_in, sockaddr_in6, in_addr, in6_addr,
     iovec, msghdr,
     cmsghdr, in_pktinfo, in6_pktinfo,
     AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM,
     IPPROTO_TCP, IPPROTO_UDP,
 )
-from boucle.socle.linux.raw.x86_64.epoll import epoll_event
-from boucle.socle.linux.raw.x86_64.io_uring import (
+from boucle.socle.linux.raw.epoll import epoll_event
+from boucle.socle.linux.raw.io_uring import (
     io_uring_buf, io_sqring_offsets, io_cqring_offsets,
 )
 from std.testing import assert_equal

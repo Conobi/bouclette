@@ -1,11 +1,6 @@
-from std.sys.info import is_nvidia_gpu, is_triple, is_64bit as _is_64bit
+from std.sys.info import is_64bit as _is_64bit, CompilationTarget
 from std.bit import byte_swap
 from std.memory import Pointer
-
-
-@always_inline("nodebug")
-def is_x86_64() -> Bool:
-    return not is_nvidia_gpu() and is_triple["x86_64-unknown-linux-gnu"]()
 
 
 @always_inline("nodebug")

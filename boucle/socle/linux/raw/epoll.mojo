@@ -25,12 +25,13 @@ comptime EPOLLET = 0x80000000
 
 @fieldwise_init
 struct epoll_event(ImplicitlyCopyable, Movable):
-    """Linux epoll_event struct, packed to 12 bytes on x86_64.
+    """Linux epoll_event struct, packed to 12 bytes on LP64 Linux.
 
-    The kernel UAPI marks this struct __packed__ (no tail padding between
-    `events` and `data`). Splitting the 64-bit `data` field into two 32-bit
-    halves yields the correct 12-byte stride; otherwise Mojo's default
-    alignment pads to 16 and every event past the first is mis-decoded.
+    The kernel UAPI marks this struct __packed__ on all architectures (no
+    tail padding between `events` and `data`). Splitting the 64-bit `data`
+    field into two 32-bit halves yields the correct 12-byte stride;
+    otherwise Mojo's default alignment pads to 16 and every event past
+    the first is mis-decoded.
     """
 
     var events: UInt32
