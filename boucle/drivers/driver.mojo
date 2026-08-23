@@ -15,6 +15,7 @@ from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from boucle.interest import Interest
 from boucle.token import Token
+from boucle.drivers.backend import Backend
 from boucle.drivers.readiness_event import ReadinessEvent
 
 
@@ -207,6 +208,10 @@ trait IoDriver(Movable):
         """
         ...
 
+    def backend(self) -> Backend:
+        """Return which kernel I/O mechanism this driver uses."""
+        ...
+
 
 trait ReadinessDriver(Movable):
     """Platform readiness-notification backend abstraction.
@@ -268,4 +273,8 @@ trait ReadinessDriver(Movable):
         Returns:
             List of readiness events from this poll cycle.
         """
+        ...
+
+    def backend(self) -> Backend:
+        """Return which kernel I/O mechanism this driver uses."""
         ...

@@ -19,6 +19,7 @@ from boucle.handle import RawHandle
 from boucle.socle.ptr import null_ptr
 from boucle.proactor.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
+from boucle.drivers.backend import Backend
 from boucle.drivers.driver import IoDriver
 
 
@@ -396,6 +397,10 @@ struct IoUringDriver(IoDriver):
             The number of SQ entries currently available for submission.
         """
         return len(self._ring.sq())
+
+    def backend(self) -> Backend:
+        """Return Backend.IO_URING."""
+        return Backend.IO_URING
 
     def register_buf_ring(
         mut self,

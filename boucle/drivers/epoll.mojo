@@ -21,6 +21,7 @@ from boucle.handle import RawHandle
 from boucle.interest import Interest
 from boucle.token import Token
 from boucle.readiness_state import Readiness
+from boucle.drivers.backend import Backend
 from boucle.drivers.driver import ReadinessDriver
 from boucle.drivers.readiness_event import ReadinessEvent
 
@@ -135,3 +136,7 @@ struct EpollDriver(ReadinessDriver):
                 ReadinessEvent(Token(ev.data()), Readiness(ev.events))
             )
         return result^
+
+    def backend(self) -> Backend:
+        """Return Backend.EPOLL."""
+        return Backend.EPOLL

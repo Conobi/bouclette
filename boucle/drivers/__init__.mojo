@@ -7,9 +7,12 @@ of the underlying kernel mechanism.
 
 from .driver import IoDriver, ReadinessDriver
 from .readiness_event import ReadinessEvent
+from .backend import Backend
 from .io_uring import IoUringDriver
 from .epoll import EpollDriver
+from .epoll_completion import EpollCompletionDriver
+from .probe import ProbeCompletionDriver
 
-# Comptime aliases — the singular dispatch point for platform selection
-comptime _CompletionDriver = IoUringDriver
+comptime _CompletionDriver = ProbeCompletionDriver
+comptime _WatchDriver = ProbeCompletionDriver
 comptime _ReadinessDriver = EpollDriver

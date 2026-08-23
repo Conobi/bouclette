@@ -3,7 +3,8 @@
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers import _WatchDriver
+from boucle.drivers.backend import Backend
 from boucle.handle import RawHandle
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
@@ -21,9 +22,6 @@ from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.timer import _TimerFutureState, TimerFuture
 
 
-comptime _WatchDriver = IoUringDriver
-
-
 struct WatchLoop(Movable):
     """Opaque event loop for completion-based I/O with Future dispatch.
 
@@ -38,13 +36,15 @@ struct WatchLoop(Movable):
         Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
     ]
 
-    def __init__(out self, sq_entries: UInt32 = 64) raises:
+    def __init__(out self, sq_entries: UInt32 = 64, *, backend: Backend = Backend.AUTO) raises:
         """Create a WatchLoop with the given submission queue capacity.
 
         Args:
             sq_entries: Number of submission queue entries (default 64).
+            backend: I/O backend — AUTO probes for io_uring then falls
+                     back to epoll.
         """
-        self._driver = _WatchDriver(sq_entries=sq_entries)
+        self._driver = _WatchDriver(sq_entries=sq_entries, backend=backend)
         self._pending = 0
         self._active_composites = List[
             Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
@@ -55,6 +55,10 @@ struct WatchLoop(Movable):
         self._driver = move._driver^
         self._pending = move._pending
         self._active_composites = move._active_composites^
+
+    def backend(self) -> Backend:
+        """Return which kernel I/O mechanism is active."""
+        return self._driver.backend()
 
     def accept(mut self, ref socket: Socket) raises -> AcceptFuture:
         """Submit an async accept on a listening socket.

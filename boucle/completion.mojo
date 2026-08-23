@@ -15,6 +15,7 @@ from boucle.handle import RawHandle
 from boucle.proactor.completion import Completion, CompletionFn
 from boucle.proactor.loop import EventLoop
 from boucle.drivers import _CompletionDriver
+from boucle.drivers.backend import Backend
 from boucle.socle.linux.raw import (
     IORING_CQE_F_BUFFER as _IORING_CQE_F_BUFFER,
     IORING_CQE_F_MORE as _IORING_CQE_F_MORE,
@@ -50,14 +51,17 @@ struct CompletionLoop(Movable):
 
     var _inner: EventLoop[_CompletionDriver]
 
-    def __init__(out self, sq_entries: UInt32 = 64) raises:
+    def __init__(out self, sq_entries: UInt32 = 64, *, backend: Backend = Backend.AUTO) raises:
         """Construct a CompletionLoop with the given SQ capacity.
 
         Args:
             sq_entries: Number of submission queue entries (default 64).
+            backend: I/O backend — AUTO probes for io_uring then falls
+                     back to epoll. IO_URING requires io_uring. EPOLL
+                     forces epoll even when io_uring is available.
         """
         self._inner = EventLoop[_CompletionDriver](
-            _CompletionDriver(sq_entries=sq_entries)
+            _CompletionDriver(sq_entries=sq_entries, backend=backend)
         )
 
     def __init__(out self, *, deinit move: Self):
@@ -220,6 +224,10 @@ struct CompletionLoop(Movable):
             The number of SQ entries currently available for submission.
         """
         return self._inner.driver.sq_space()
+
+    def backend(self) -> Backend:
+        """Return which kernel I/O mechanism is active."""
+        return self._inner.driver.backend()
 
     # ── EventLoop convenience methods ─────────────────────────────────────
 

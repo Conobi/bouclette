@@ -15,7 +15,7 @@ calls flush_cancel() after each tick.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.probe import ProbeCompletionDriver
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
@@ -119,14 +119,14 @@ struct _ConnectWithTimeoutState(Movable):
             debug_assert(self._total_cqes == 3, "CQE count exceeded 3")
             self.done = True
 
-    def flush_cancel(mut self, mut driver: IoUringDriver) raises -> Int:
+    def flush_cancel(mut self, mut driver: ProbeCompletionDriver) raises -> Int:
         """Submit the deferred cancel SQE if a callback requested one.
 
         Must be called after each tick() to ensure cancel operations
         are submitted outside of CQE processing.
 
         Args:
-            driver: The IoUringDriver to submit the cancel SQE on.
+            driver: The completion driver to submit the cancel SQE on.
 
         Returns:
             Number of cancel SQEs submitted (0 or 1).
