@@ -3,7 +3,7 @@
 Scans ports in batches using ConnectWithTimeoutFuture. Each batch
 submits up to BATCH_SIZE connect+timeout operations in parallel,
 runs them in a single WatchLoop.run() call, then classifies results.
-A single WatchLoop (io_uring instance) is reused across all batches.
+A single WatchLoop is reused across all batches.
 
 Build & run:
     uv run mojox build

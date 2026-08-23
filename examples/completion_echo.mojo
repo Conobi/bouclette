@@ -6,7 +6,8 @@ Demonstrates the WatchLoop API end-to-end:
   3. Submit async send + recv, run() again.
   4. Verify byte counts match.
 
-WatchLoop wraps io_uring behind asyncio-style Futures.
+WatchLoop wraps the platform completion backend (io_uring when
+available, epoll otherwise) behind asyncio-style Futures.
 Submit operations, call run(), extract results.
 
 Run:
