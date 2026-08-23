@@ -56,9 +56,9 @@ def _socket(domain: Int32, type_flags: Int32, protocol: Int32) raises -> Int32:
 
 
 @always_inline
-def _bind(
+def _bind[origin: Origin](
     fd: Int32,
-    addr_ptr: Pointer[UInt8, ImmStaticOrigin],
+    addr_ptr: Pointer[UInt8, origin],
     addr_len: Int32,
 ) raises:
     """Bind a socket to an address via bind(2).
@@ -121,9 +121,9 @@ def _setsockopt(
 
 
 @always_inline
-def _connect(
+def _connect[origin: Origin](
     fd: Int32,
-    addr_ptr: Pointer[UInt8, ImmStaticOrigin],
+    addr_ptr: Pointer[UInt8, origin],
     addr_len: Int32,
 ) raises:
     """Connect a socket to an address via connect(2).
@@ -168,9 +168,9 @@ def _recv(
 
 
 @always_inline
-def _send(
+def _send[origin: Origin](
     fd: Int32,
-    buf: Pointer[UInt8, ImmStaticOrigin],
+    buf: Pointer[UInt8, origin],
     length: Int,
     flags: Int32 = Int32(MSG_NOSIGNAL),
 ) -> Int:

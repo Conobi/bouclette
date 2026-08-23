@@ -426,10 +426,13 @@ struct EpollCompletionDriver(IoDriver):
         self._ready.clear()
 
         # 2. Compute epoll timeout from timer heap.
+        # If we already dispatched from the ready queue, don't block —
+        # the caller has work to process.
+        var effective_wait = wait and dispatched == 0
         var now_ns = _monotonic_ns()
         var next_deadline = self._timers.peek_deadline()
         var timeout_ms: Int32
-        if not wait and next_deadline == Int64.MAX:
+        if not effective_wait and next_deadline == Int64.MAX:
             timeout_ms = 0
         elif next_deadline == Int64.MAX:
             timeout_ms = -1
@@ -438,11 +441,11 @@ struct EpollCompletionDriver(IoDriver):
             var remaining_ms = remaining_ns // 1_000_000
             if remaining_ms <= 0:
                 remaining_ms = 0
-            if not wait and remaining_ms > 0:
+            if not effective_wait and remaining_ms > 0:
                 remaining_ms = 0
             # Sub-millisecond remainder: round up to 1ms to avoid
             # busy-spinning when the deadline is < 1ms away.
-            if wait and remaining_ms == 0 and remaining_ns > 0:
+            if effective_wait and remaining_ms == 0 and remaining_ns > 0:
                 remaining_ms = 1
             timeout_ms = Int32(remaining_ms)
 
@@ -660,15 +663,13 @@ struct EpollCompletionDriver(IoDriver):
         var res = syscall[__NR_connect, Scalar[DType.int64]](
             op[].fd, addr, addr_len
         )
-        if res == 0:
-            # Immediate success.
-            self._ready.append(_ReadyEntry(c, Int32(0), UInt32(0)))
-            self._pool.free(op[].pool_index)
-        elif res == -Scalar[DType.int64](EINPROGRESS):
+        if res == -Scalar[DType.int64](EINPROGRESS):
             self._register_op(op, UInt32(EPOLLOUT))
         else:
+            # Immediate result (success or error like -ECONNREFUSED).
+            # Deliver as a completion callback, matching io_uring CQE semantics.
+            self._ready.append(_ReadyEntry(c, Int32(res), UInt32(0)))
             self._pool.free(op[].pool_index)
-            _check_for_errors(res)
 
     def submit_timeout(
         mut self,

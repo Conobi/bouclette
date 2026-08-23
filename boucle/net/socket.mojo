@@ -88,10 +88,7 @@ def _sys_socket(
 def _sys_bind[Addr: SocketAddrStor](ref handle: OwnedHandle, ref addr: Addr) raises:
     """Bind a socket to a SocketAddrStor address."""
     var stor = addr.addr_stor()
-    # Pre-capture pointer and fd in named locals — passing
-    # Pointer(to=x) inline can clobber x's stack slot during
-    # syscall arg marshaling.
-    var ptr = stor.addr_unsafe_ptr()
+    var ptr = Pointer(to=stor).unsafe_bitcast[UInt8]()
     var fd = handle.raw()
     _bind(fd, ptr, Int32(Addr.AddrStorType.ADDR_LEN))
 
@@ -104,12 +101,8 @@ def _sys_listen(ref handle: OwnedHandle, backlog: Backlog) raises:
 
 @always_inline
 def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) raises:
-    """Connect a socket to a SocketAddr (storage variant).
-
-    Pre-captures pointer and fd in named locals to prevent
-    syscall arg marshaling from clobbering the stack slot.
-    """
-    var ptr = addr.addr_unsafe_ptr()
+    """Connect a socket to a SocketAddr (storage variant)."""
+    var ptr = Pointer(to=addr).unsafe_bitcast[UInt8]()
     var fd = handle.raw()
     _connect(fd, ptr, Int32(Addr.ADDR_LEN))
 
@@ -438,7 +431,7 @@ struct Socket(Movable):
         """
         var n = _send(
             self.raw(),
-            Pointer[UInt8, ImmStaticOrigin](
+            Pointer[UInt8, origin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
             len(buf),
@@ -469,11 +462,12 @@ struct Socket(Movable):
         var stor = addr.addr_stor()
         var stor_p = Pointer(to=stor.addr)
         var fd = self._handle._raw
+        var buf_ptr = Pointer[UInt8, origin](
+            unsafe_from_address=Int(buf.unsafe_ptr())
+        )
         var n = _raw_sendto(
             fd,
-            Pointer[UInt8, ImmStaticOrigin](
-                unsafe_from_address=Int(buf.unsafe_ptr())
-            ),
+            buf_ptr,
             len(buf),
             Int32(MSG_NOSIGNAL),
             stor_p.unsafe_bitcast[UInt8](),
