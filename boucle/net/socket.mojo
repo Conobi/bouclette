@@ -9,7 +9,6 @@ non-blocking manually if you need to thread the result into a
 CompletionLoop or ReadinessLoop.
 """
 
-from std.ffi import external_call
 from std.memory import Pointer
 from std.sys.info import size_of
 
@@ -37,13 +36,17 @@ from boucle.socle.linux.net.syscalls import (
     _connect,
     _recv,
     _send,
+    _sendto as _raw_sendto,
+    _recvfrom as _raw_recvfrom,
     _shutdown,
     _setsockopt_timeval,
     _fcntl_getfl,
     _fcntl_setfl,
     _getsockopt_int,
+    _getsockname as _raw_getsockname,
+    _getpeername as _raw_getpeername,
 )
-from boucle.socle.linux.errno import get_errno, Errno
+from boucle.socle.linux.errno import _check_for_errors, Errno
 from boucle.socle.linux.raw import (
     sockaddr_in,
     sockaddr_in6,
@@ -87,7 +90,7 @@ def _sys_bind[Addr: SocketAddrStor](ref handle: OwnedHandle, ref addr: Addr) rai
     var stor = addr.addr_stor()
     # Pre-capture pointer and fd in named locals — passing
     # Pointer(to=x) inline can clobber x's stack slot during
-    # external_call arg marshaling.
+    # syscall arg marshaling.
     var ptr = stor.addr_unsafe_ptr()
     var fd = handle.raw()
     _bind(fd, ptr, Int32(Addr.AddrStorType.ADDR_LEN))
@@ -104,7 +107,7 @@ def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) rais
     """Connect a socket to a SocketAddr (storage variant).
 
     Pre-captures pointer and fd in named locals to prevent
-    external_call arg marshaling from clobbering the stack slot.
+    syscall arg marshaling from clobbering the stack slot.
     """
     var ptr = addr.addr_unsafe_ptr()
     var fd = handle.raw()
@@ -125,16 +128,15 @@ def _getpeername(fd: RawHandle) raises -> String:
 
     Raises on syscall failure (e.g. ENOTCONN for an unconnected socket).
     """
-    # sockaddr_in6 (28 bytes) is large enough for both IPv4 (16) and IPv6.
     var stor = sockaddr_in6()
     var addrlen = socklen_t(size_of[sockaddr_in6]())
-    # Pre-capture pointers — passing Pointer(to=x) inline can
-    # clobber x's stack slot during external_call arg marshaling.
     var stor_p = Pointer(to=stor)
     var len_p = Pointer(to=addrlen)
-    var res = external_call["getpeername", Int32](fd, stor_p, len_p)
-    if res < 0:
-        raise String(Int(res))
+    _raw_getpeername(
+        fd,
+        stor_p.unsafe_bitcast[UInt8](),
+        len_p.unsafe_bitcast[UInt8](),
+    )
     var family = Int(stor.sin6_family)
     if family == AF_INET:
         # IPv4: address bytes sit at offset 4 in sockaddr_in
@@ -412,8 +414,7 @@ struct Socket(Movable):
         )
         if n >= 0:
             return n
-        var errno = get_errno()
-        raise String(Int(-errno))
+        raise String(n)
 
     def send[origin: Origin](self, buf: Span[UInt8, origin]) raises -> Int:
         """Send from buf. Returns bytes written (may be partial).
@@ -444,8 +445,7 @@ struct Socket(Movable):
         )
         if n >= 0:
             return n
-        var errno = get_errno()
-        raise String(Int(-errno))
+        raise String(n)
 
     def send_to[
         origin: Origin,
@@ -467,24 +467,21 @@ struct Socket(Movable):
             On syscall failure.
         """
         var stor = addr.addr_stor()
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var stor_p = Pointer(to=stor.addr)
         var fd = self._handle._raw
-        var n = external_call["sendto", Int](
+        var n = _raw_sendto(
             fd,
             Pointer[UInt8, ImmStaticOrigin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
             len(buf),
             Int32(MSG_NOSIGNAL),
-            stor_p,
-            socklen_t(size_of[sockaddr_in]()),
+            stor_p.unsafe_bitcast[UInt8](),
+            UInt(size_of[sockaddr_in]()),
         )
         if n >= 0:
             return n
-        var errno = get_errno()
-        raise String(Int(-errno))
+        raise String(n)
 
     def recv_from[
         origin: MutOrigin,
@@ -506,24 +503,21 @@ struct Socket(Movable):
         """
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
         var fd = self._handle._raw
-        var n = external_call["recvfrom", Int](
+        var n = _raw_recvfrom(
             fd,
             Pointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
             len(buf),
             Int32(0),
-            addr_p,
-            len_p,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
         )
         if n < 0:
-            var errno = get_errno()
-            raise String(Int(-errno))
+            raise String(n)
         var result = SocketAddrStorV4()
         result.addr = addr
         return (n, result)
@@ -536,14 +530,13 @@ struct Socket(Movable):
         """Return the local IPv4 address bound to this socket."""
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var fd = self._handle._raw
-        var res = external_call["getsockname", Int32](fd, addr_p, len_p)
-        if res < 0:
-            raise String(Int(-get_errno()))
+        _raw_getsockname(
+            self._handle._raw,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
         var result = SocketAddrStorV4()
         result.addr = addr
         return result
@@ -552,14 +545,13 @@ struct Socket(Movable):
         """Return the local IPv6 address bound to this socket."""
         var addr = sockaddr_in6()
         var addrlen = socklen_t(size_of[sockaddr_in6]())
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var fd = self._handle._raw
-        var res = external_call["getsockname", Int32](fd, addr_p, len_p)
-        if res < 0:
-            raise String(Int(-get_errno()))
+        _raw_getsockname(
+            self._handle._raw,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
         var result = SocketAddrStorV6()
         result.addr = addr
         return result
@@ -568,14 +560,13 @@ struct Socket(Movable):
         """Return the peer IPv4 address of a connected socket."""
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var fd = self._handle._raw
-        var res = external_call["getpeername", Int32](fd, addr_p, len_p)
-        if res < 0:
-            raise String(Int(-get_errno()))
+        _raw_getpeername(
+            self._handle._raw,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
         var result = SocketAddrStorV4()
         result.addr = addr
         return result
@@ -584,14 +575,13 @@ struct Socket(Movable):
         """Return the peer IPv6 address of a connected socket."""
         var addr = sockaddr_in6()
         var addrlen = socklen_t(size_of[sockaddr_in6]())
-        # Pre-capture pointers — passing Pointer(to=x) inline can
-        # clobber x's stack slot during external_call arg marshaling.
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        var fd = self._handle._raw
-        var res = external_call["getpeername", Int32](fd, addr_p, len_p)
-        if res < 0:
-            raise String(Int(-get_errno()))
+        _raw_getpeername(
+            self._handle._raw,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
         var result = SocketAddrStorV6()
         result.addr = addr
         return result

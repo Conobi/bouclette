@@ -1,18 +1,39 @@
-"""Low-level socket syscall wrappers using libc external_call.
+"""Low-level socket syscall wrappers using raw Linux syscalls.
 
-Uses external_call instead of raw syscall wrappers to work around
-a Mojo 0.26.2 mojopkg deserialization crash when calling through
-multiple internal subpackage layers.
+Uses inline-assembly syscall wrappers instead of libc external_call.
+Error handling follows the raw-syscall pattern: the kernel returns the
+negated errno directly in the return register, decoded via
+``_check_for_errors`` / ``unsafe_decode_result``.
 
 All functions accept raw integer / pointer arguments only — no types
 from ``boucle.*`` (outside ``boucle.socle``).  The typed-option
 bridge lives in ``boucle.net.socket``.
 """
 
-from std.ffi import external_call
 from std.memory import Pointer
 
-from boucle.socle.linux.raw import MSG_NOSIGNAL, F_GETFL, F_SETFL, socklen_t
+from boucle.socle.linux.raw import (
+    syscall,
+    MSG_NOSIGNAL,
+    F_GETFL,
+    F_SETFL,
+    socklen_t,
+    __NR_socket,
+    __NR_bind,
+    __NR_listen,
+    __NR_setsockopt,
+    __NR_connect,
+    __NR_recvfrom,
+    __NR_sendto,
+    __NR_shutdown,
+    __NR_getsockopt,
+    __NR_getsockname,
+    __NR_getpeername,
+    __NR_fcntl,
+)
+from boucle.socle.linux.errno import _check_for_errors, unsafe_decode_result
+from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.ptr import null_ptr
 
 
 @always_inline
@@ -28,12 +49,10 @@ def _socket(domain: Int32, type_flags: Int32, protocol: Int32) raises -> Int32:
         The raw file descriptor on success.
 
     Raises:
-        On syscall failure (negative return).
+        On syscall failure.
     """
-    var res = external_call["socket", Int32](domain, type_flags, protocol)
-    if res < 0:
-        raise String(Int(res))
-    return res
+    var res = syscall[__NR_socket, Scalar[DType.int64]](domain, type_flags, protocol)
+    return unsafe_decode_result[DType.int32](res)
 
 
 @always_inline
@@ -52,9 +71,8 @@ def _bind(
     Raises:
         On syscall failure.
     """
-    var res = external_call["bind", Int32](fd, addr_ptr, addr_len)
-    if res < 0:
-        raise String(Int(res))
+    var res = syscall[__NR_bind, Scalar[DType.int64]](fd, addr_ptr, addr_len)
+    _check_for_errors(res)
 
 
 @always_inline
@@ -68,9 +86,8 @@ def _listen(fd: Int32, backlog: Int32) raises:
     Raises:
         On syscall failure.
     """
-    var res = external_call["listen", Int32](fd, backlog)
-    if res < 0:
-        raise String(Int(res))
+    var res = syscall[__NR_listen, Scalar[DType.int64]](fd, backlog)
+    _check_for_errors(res)
 
 
 @always_inline
@@ -92,19 +109,15 @@ def _setsockopt(
         On syscall failure.
     """
     var val = value
-    # Pre-capture the pointer in a named local — passing
-    # Pointer(to=val) inline can clobber val's stack slot
-    # during external_call arg marshaling.
     var val_p = Pointer(to=val)
-    var res = external_call["setsockopt", Int32](
+    var res = syscall[__NR_setsockopt, Scalar[DType.int64]](
         fd,
         level,
         optname,
         val_p,
-        UInt32(4),
+        UInt(4),
     )
-    if res < 0:
-        raise String(Int(res))
+    _check_for_errors(res)
 
 
 @always_inline
@@ -123,9 +136,8 @@ def _connect(
     Raises:
         On syscall failure.
     """
-    var res = external_call["connect", Int32](fd, addr_ptr, addr_len)
-    if res < 0:
-        raise String(Int(res))
+    var res = syscall[__NR_connect, Scalar[DType.int64]](fd, addr_ptr, addr_len)
+    _check_for_errors(res)
 
 
 @always_inline
@@ -135,7 +147,7 @@ def _recv(
     length: Int,
     flags: Int32 = Int32(0),
 ) -> Int:
-    """Receive data from a socket via recv(2).
+    """Receive data from a socket via recvfrom(2) with NULL src_addr.
 
     Args:
         fd: Socket file descriptor.
@@ -144,9 +156,15 @@ def _recv(
         flags: recv flags (default 0).
 
     Returns:
-        Bytes read, 0 on EOF, or negative on error (check errno).
+        Bytes read, 0 on EOF, or negated errno on error.
     """
-    return external_call["recv", Int](fd, buf, length, flags)
+    var null_addr = null_ptr[c_void, ImmStaticOrigin]()
+    var null_len = null_ptr[c_void, ImmStaticOrigin]()
+    return Int(
+        syscall[__NR_recvfrom, Scalar[DType.int64]](
+            fd, buf, UInt(length), UInt(flags), null_addr, null_len
+        )
+    )
 
 
 @always_inline
@@ -156,7 +174,9 @@ def _send(
     length: Int,
     flags: Int32 = Int32(MSG_NOSIGNAL),
 ) -> Int:
-    """Send data on a socket via send(2) with MSG_NOSIGNAL by default.
+    """Send data on a socket via sendto(2) with NULL dest_addr.
+
+    MSG_NOSIGNAL is applied by default.
 
     Args:
         fd: Socket file descriptor.
@@ -165,9 +185,79 @@ def _send(
         flags: send flags (default MSG_NOSIGNAL).
 
     Returns:
-        Bytes sent or negative on error (check errno).
+        Bytes sent or negated errno on error.
     """
-    return external_call["send", Int](fd, buf, length, flags)
+    var null_addr = null_ptr[c_void, ImmStaticOrigin]()
+    return Int(
+        syscall[__NR_sendto, Scalar[DType.int64]](
+            fd, buf, UInt(length), UInt(flags), null_addr, UInt(0)
+        )
+    )
+
+
+@always_inline
+def _sendto[
+    buf_origin: Origin,
+    addr_origin: Origin,
+](
+    fd: Int32,
+    buf: Pointer[UInt8, buf_origin],
+    length: Int,
+    flags: Int32,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    addr_len: UInt,
+) -> Int:
+    """Send data to a specific address via sendto(2).
+
+    Args:
+        fd: Socket file descriptor.
+        buf: Pointer to the data to send.
+        length: Number of bytes to send.
+        flags: send flags.
+        addr_ptr: Pointer to the destination sockaddr.
+        addr_len: Length of the destination sockaddr.
+
+    Returns:
+        Bytes sent or negated errno on error.
+    """
+    return Int(
+        syscall[__NR_sendto, Scalar[DType.int64]](
+            fd, buf, UInt(length), UInt(flags), addr_ptr, addr_len
+        )
+    )
+
+
+@always_inline
+def _recvfrom[
+    buf_origin: MutOrigin,
+    addr_origin: MutOrigin,
+    len_origin: MutOrigin,
+](
+    fd: Int32,
+    buf: Pointer[UInt8, buf_origin],
+    length: Int,
+    flags: Int32,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    addr_len_ptr: Pointer[UInt8, len_origin],
+) -> Int:
+    """Receive data and source address via recvfrom(2).
+
+    Args:
+        fd: Socket file descriptor.
+        buf: Pointer to the receive buffer.
+        length: Maximum number of bytes to receive.
+        flags: recv flags.
+        addr_ptr: Pointer to a sockaddr to fill with the source address.
+        addr_len_ptr: Pointer to the sockaddr length (in/out).
+
+    Returns:
+        Bytes read, 0 on EOF, or negated errno on error.
+    """
+    return Int(
+        syscall[__NR_recvfrom, Scalar[DType.int64]](
+            fd, buf, UInt(length), UInt(flags), addr_ptr, addr_len_ptr
+        )
+    )
 
 
 @always_inline
@@ -181,9 +271,8 @@ def _shutdown(fd: Int32, how: Int32) raises:
     Raises:
         On syscall failure.
     """
-    var res = external_call["shutdown", Int32](fd, how)
-    if res < 0:
-        raise String(Int(res))
+    var res = syscall[__NR_shutdown, Scalar[DType.int64]](fd, how)
+    _check_for_errors(res)
 
 
 @always_inline
@@ -202,12 +291,13 @@ def _getsockopt_int(fd: Int32, level: Int32, optname: Int32) raises -> Int32:
         On syscall failure.
     """
     var val = Int32(0)
-    var optlen = UInt32(4)
+    var optlen = UInt(4)
     var val_p = Pointer(to=val)
     var len_p = Pointer(to=optlen)
-    var res = external_call["getsockopt", Int32](fd, level, optname, val_p, len_p)
-    if res < 0:
-        raise String(Int(res))
+    var res = syscall[__NR_getsockopt, Scalar[DType.int64]](
+        fd, level, optname, val_p, len_p
+    )
+    _check_for_errors(res)
     return val
 
 
@@ -233,11 +323,60 @@ def _setsockopt_timeval(
     tv[0] = Int64(ms // 1000)
     tv[1] = Int64((ms % 1000) * 1000)
     var tv_p = Pointer(to=tv)
-    var res = external_call["setsockopt", Int32](
-        fd, level, optname, tv_p, UInt32(16),
+    var res = syscall[__NR_setsockopt, Scalar[DType.int64]](
+        fd, level, optname, tv_p, UInt(16),
     )
-    if res < 0:
-        raise String(Int(res))
+    _check_for_errors(res)
+
+
+@always_inline
+def _getsockname[
+    addr_origin: MutOrigin,
+    len_origin: MutOrigin,
+](
+    fd: Int32,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    addr_len_ptr: Pointer[UInt8, len_origin],
+) raises:
+    """Get the local address of a socket via getsockname(2).
+
+    Args:
+        fd: Socket file descriptor.
+        addr_ptr: Pointer to a sockaddr to fill.
+        addr_len_ptr: Pointer to the sockaddr length (in/out).
+
+    Raises:
+        On syscall failure.
+    """
+    var res = syscall[__NR_getsockname, Scalar[DType.int64]](
+        fd, addr_ptr, addr_len_ptr
+    )
+    _check_for_errors(res)
+
+
+@always_inline
+def _getpeername[
+    addr_origin: MutOrigin,
+    len_origin: MutOrigin,
+](
+    fd: Int32,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    addr_len_ptr: Pointer[UInt8, len_origin],
+) raises:
+    """Get the peer address of a socket via getpeername(2).
+
+    Args:
+        fd: Socket file descriptor.
+        addr_ptr: Pointer to a sockaddr to fill.
+        addr_len_ptr: Pointer to the sockaddr length (in/out).
+
+    Raises:
+        On syscall failure.
+    """
+    var res = syscall[__NR_getpeername, Scalar[DType.int64]](
+        fd, addr_ptr, addr_len_ptr
+    )
+    _check_for_errors(res)
 
 
 @always_inline
@@ -253,10 +392,8 @@ def _fcntl_getfl(fd: Int32) raises -> Int32:
     Raises:
         On syscall failure.
     """
-    var res = external_call["fcntl", Int32](fd, Int32(F_GETFL), Int32(0))
-    if res < 0:
-        raise String(Int(res))
-    return res
+    var res = syscall[__NR_fcntl, Scalar[DType.int64]](fd, Int32(F_GETFL), Int32(0))
+    return unsafe_decode_result[DType.int32](res)
 
 
 @always_inline
@@ -270,8 +407,5 @@ def _fcntl_setfl(fd: Int32, flags: Int32) raises:
     Raises:
         On syscall failure.
     """
-    var res = external_call["fcntl", Int32](fd, Int32(F_SETFL), flags)
-    if res < 0:
-        raise String(Int(res))
-
-
+    var res = syscall[__NR_fcntl, Scalar[DType.int64]](fd, Int32(F_SETFL), flags)
+    _check_for_errors(res)
