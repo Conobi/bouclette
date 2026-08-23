@@ -1,4 +1,4 @@
-"""Integration test: submit_recv and submit_send via IoUringDriver."""
+"""Integration test: submit_recv and submit_send via completion driver."""
 
 from std.ffi import external_call
 from std.memory import Pointer
@@ -6,7 +6,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.probe import ProbeCompletionDriver
 from boucle.handle import RawHandle
 
 
@@ -59,7 +59,7 @@ def test_driver_recv_send() raises:
     fds.unsafe_free()
 
     # Set up driver.
-    var driver = IoUringDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16)
 
     # Prepare send buffer: "hello" (5 bytes).
     var send_buf = unsafe_alloc[UInt8](5)

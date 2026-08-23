@@ -28,6 +28,16 @@ from boucle.proactor.bufring import BufRing
 from boucle.drivers.io_uring import IoUringDriver
 
 comptime AF_INET = 2
+
+
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var d = IoUringDriver(sq_entries=4)
+        _ = d^
+        return True
+    except:
+        return False
 comptime SOCK_DGRAM = 2
 comptime NUM_BUFS = 16
 comptime BUF_SIZE = 1500
@@ -75,6 +85,10 @@ struct MultishotTracker:
 
 def test_driver_multishot_recvmsg() raises:
     """Run multishot recvmsg integration test with provided buffer ring."""
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
+
     # --- 1. Create two UDP sockets ---
     var fd_recv = external_call["socket", Int32](
         Int32(AF_INET), Int32(SOCK_DGRAM), Int32(0)

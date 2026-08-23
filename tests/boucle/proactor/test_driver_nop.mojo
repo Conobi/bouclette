@@ -1,10 +1,10 @@
-"""Integration test: submit NOP via IoUringDriver and verify callback fires."""
+"""Integration test: submit NOP via completion driver and verify callback fires."""
 
 from std.memory import Pointer
 from std.testing import assert_equal
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.probe import ProbeCompletionDriver
 
 
 struct Tracker:
@@ -36,8 +36,8 @@ struct Tracker:
 
 
 def test_driver_nop() raises:
-    """Submit a NOP through IoUringDriver, tick, and verify dispatch."""
-    var driver = IoUringDriver(sq_entries=16)
+    """Submit a NOP through the completion driver, tick, and verify dispatch."""
+    var driver = ProbeCompletionDriver(sq_entries=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

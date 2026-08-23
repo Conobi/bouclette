@@ -1,4 +1,5 @@
 from boucle.socle.linux.io_uring import (
+    IoUring,
     io_uring_setup,
     io_uring_enter,
     IoUringParams,
@@ -8,6 +9,16 @@ from boucle.socle.linux.io_uring import (
     NO_ENTER_ARG,
 )
 from std.testing import assert_true, assert_equal
+
+
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var ring = IoUring[](sq_entries=4)
+        ring^.__deinit__()
+        return True
+    except:
+        return False
 
 
 def test_setup() raises:
@@ -55,5 +66,8 @@ def test_setup() raises:
 
 
 def main() raises:
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
     test_setup()
     print("PASS: test_setup.mojo")

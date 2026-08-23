@@ -1,7 +1,7 @@
-"""Tests for the opaque CompletionLoop and IoUringDriver.
+"""Tests for the opaque CompletionLoop and io_uring-specific operations.
 
 Covers basic nop operations (single, multiple, batched), async cancel,
-and multishot accept (io_uring-specific).
+and multishot accept (io_uring-specific, skipped when unavailable).
 """
 
 from boucle.completion import CompletionLoop
@@ -217,6 +217,16 @@ def test_submit_cancel_cancels_pending_recv() raises:
     _ = cancel_cmp
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var d = IoUringDriver(sq_entries=4)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 # ── Multishot accept (io_uring-specific, IoUringDriver) ──────────────────────
 
 
@@ -254,6 +264,10 @@ def test_accept_multishot_produces_more_flag() raises:
     """Multishot accept produces CQEs with IORING_CQE_F_MORE flag set
     for each accepted connection while the op remains armed.
     """
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
+
     comptime AF_INET6 = 10
     comptime SOCK_STREAM = 1
 

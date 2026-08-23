@@ -19,6 +19,16 @@ from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
 comptime AF_INET6 = 10
+
+
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var d = IoUringDriver(sq_entries=4)
+        _ = d^
+        return True
+    except:
+        return False
 comptime SOCK_STREAM = 1
 comptime IPPROTO_IPV6 = 41
 comptime IPV6_V6ONLY = 26
@@ -257,4 +267,7 @@ def test_register_buf_ring() raises:
 
 
 def main() raises:
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
     test_register_buf_ring()

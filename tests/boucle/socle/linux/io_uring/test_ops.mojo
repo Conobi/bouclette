@@ -4,6 +4,16 @@ from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var ring = IoUring[](sq_entries=4)
+        ring^.__deinit__()
+        return True
+    except:
+        return False
+
+
 def test_ops() raises:
     # Create a pipe
     var pipefd = Array[Int32, 2](fill=0)
@@ -54,5 +64,8 @@ def test_ops() raises:
 
 
 def main() raises:
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
     test_ops()
     print("PASS: test_ops.mojo")

@@ -3,6 +3,16 @@ from boucle.socle.linux.io_uring.op import Nop
 from std.testing import assert_equal
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var ring = IoUring[](sq_entries=4)
+        ring^.__deinit__()
+        return True
+    except:
+        return False
+
+
 def test_nop() raises:
     var ring = IoUring[](sq_entries=16)
 
@@ -29,5 +39,8 @@ def test_nop() raises:
 
 
 def main() raises:
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
     test_nop()
     print("PASS: test_nop.mojo")

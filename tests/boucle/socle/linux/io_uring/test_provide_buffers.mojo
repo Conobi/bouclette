@@ -11,6 +11,16 @@ from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.testing import assert_equal, assert_true
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring syscalls are available on this kernel."""
+    try:
+        var d = IoUringDriver(sq_entries=4)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 struct Tracker:
     """Records a single provide_buffers completion."""
 
@@ -87,4 +97,7 @@ def test_provide_buffers() raises:
 
 
 def main() raises:
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
     test_provide_buffers()

@@ -1,11 +1,11 @@
-"""Integration test: submit connect via IoUringDriver (success + refused)."""
+"""Integration test: submit connect via completion driver (success + refused)."""
 
 from std.ffi import external_call
 from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.probe import ProbeCompletionDriver
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
@@ -76,7 +76,7 @@ def test_driver_connect() raises:
     var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     # Set up driver and completion.
-    var driver = IoUringDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16)
     var tracker = ConnectTracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

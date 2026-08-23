@@ -1,4 +1,4 @@
-"""Integration test: submit_recvmsg and submit_sendmsg via IoUringDriver."""
+"""Integration test: submit_recvmsg and submit_sendmsg via completion driver."""
 
 from std.ffi import external_call
 from std.memory import Pointer
@@ -8,7 +8,7 @@ from std.testing import assert_true
 from boucle.socle.linux.raw import msghdr
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.probe import ProbeCompletionDriver
 
 comptime AF_INET = 2
 comptime SOCK_DGRAM = 2
@@ -97,7 +97,7 @@ def test_driver_recvmsg_sendmsg() raises:
     assert_true(port > 0, "ephemeral port is 0")
 
     # --- 4. Set up driver ---
-    var driver = IoUringDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16)
 
     # --- 5. Prepare sendmsg (all heap-allocated for io_uring safety) ---
     # msghdr layout on x86_64 (56 bytes):
