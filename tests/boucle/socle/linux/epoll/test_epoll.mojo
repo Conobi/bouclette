@@ -45,7 +45,7 @@ def test_epoll() raises:
     )
     assert_equal(n, Int32(1))
     assert_equal(events[0].data(), UInt64(42))
-    assert_true(Int(events[0].events) & EPOLLIN != 0)
+    assert_true(Int(events[0].events()) & EPOLLIN != 0)
 
     # Cleanup
     close(unsafe_fd=read_fd)

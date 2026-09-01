@@ -133,7 +133,7 @@ struct EpollDriver(ReadinessDriver):
         for i in range(Int(n)):
             var ev = self._events[unsafe_offset=i]
             result.append(
-                ReadinessEvent(Token(ev.data()), Readiness(ev.events))
+                ReadinessEvent(Token(ev.data()), Readiness(ev.events()))
             )
         return result^
 

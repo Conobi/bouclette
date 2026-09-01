@@ -9,6 +9,7 @@ from boucle.socle.linux.raw.epoll import epoll_event
 from boucle.socle.linux.raw.io_uring import (
     io_uring_buf, io_sqring_offsets, io_cqring_offsets,
 )
+from boucle.socle.linux.raw.utils import _pick_int
 from std.testing import assert_equal
 from std.sys.info import size_of
 
@@ -22,8 +23,8 @@ def test_net_structs() raises:
     assert_equal(size_of[msghdr](), 56)
 
     # Golden UAPI sizes -- guard against silent struct-padding regressions.
-    # epoll_event is __packed__ in the kernel UAPI on x86_64 (12 bytes, not 16).
-    assert_equal(size_of[epoll_event](), 12)
+    # epoll_event is __packed__ on x86_64 (12 bytes); natural alignment on aarch64 (16 bytes).
+    assert_equal(size_of[epoll_event](), _pick_int[12, 16]())
     assert_equal(size_of[io_uring_buf](), 16)
     assert_equal(size_of[io_sqring_offsets](), 40)
     assert_equal(size_of[io_cqring_offsets](), 40)
