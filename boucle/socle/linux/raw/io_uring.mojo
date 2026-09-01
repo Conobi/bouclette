@@ -1,3 +1,5 @@
+from std.sys.info import size_of
+
 comptime IORING_SETUP_IOPOLL = 1
 comptime IORING_SETUP_SQPOLL = 2
 comptime IORING_SETUP_SQ_AFF = 4
@@ -176,6 +178,7 @@ struct io_sqring_offsets(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 40
         self.head = 0
         self.tail = 0
         self.ring_mask = 0
@@ -200,6 +203,7 @@ struct io_cqring_offsets(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 40
         self.head = 0
         self.tail = 0
         self.ring_mask = 0
@@ -219,6 +223,7 @@ struct io_uring_buf(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 16
         self.addr = 0
         self.len = 0
         self.bid = 0

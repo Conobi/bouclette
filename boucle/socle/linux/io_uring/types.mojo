@@ -908,6 +908,11 @@ struct IoUringParams(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        _size_eq[Self, 120]()
+        _size_eq[Sqe[SQE64], 64]()
+        _size_eq[Sqe[SQE128], 128]()
+        _size_eq[Cqe[CQE16], 16]()
+        _size_eq[Cqe[CQE32], 32]()
         self.sq_entries = 0
         self.cq_entries = 0
         self.flags = IoUringSetupFlags()
@@ -1093,6 +1098,7 @@ struct IoUringGetEventsArg(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        _size_eq[Self, 24]()
         self.sigmask = 0
         self.sigmask_sz = 0
         self.pad = 0
@@ -1149,6 +1155,7 @@ struct IoUringRsrcUpdate(TrivialRegisterPassable, AsRegisterArg, Defaultable):
 
     @always_inline
     def __init__(out self):
+        _size_eq[Self, 16]()
         self.offset = 0
         self.resv = 0
         self.data = 0

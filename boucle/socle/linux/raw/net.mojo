@@ -1,4 +1,5 @@
 from boucle.socle.linux.raw.ctypes import c_ushort, c_uint, c_uchar
+from std.sys.info import size_of
 
 # SOCK_* constants
 comptime SOCK_STREAM = 1
@@ -152,6 +153,7 @@ struct in_addr(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self, s_addr: __be32 = 0):
+        comptime assert size_of[Self]() == 4
         self.s_addr = s_addr
 
 
@@ -167,6 +169,7 @@ struct sockaddr_in(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 16
         self.sin_family = 0
         self.sin_port = 0
         self.sin_addr_s_addr = 0
@@ -184,6 +187,7 @@ struct in6_addr(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 16
         self.a = 0
         self.b = 0
         self.c = 0
@@ -205,6 +209,7 @@ struct sockaddr_in6(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 28
         self.sin6_family = 0
         self.sin6_port = 0
         self.sin6_flowinfo = 0
@@ -222,6 +227,7 @@ struct iovec(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 16
         self.iov_base = 0
         self.iov_len = 0
 
@@ -243,6 +249,7 @@ struct msghdr(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 56
         self.msg_name = 0
         self.msg_namelen = 0
         self._pad0 = 0
@@ -263,6 +270,7 @@ struct cmsghdr(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 16
         self.cmsg_len = 0
         self.cmsg_level = 0
         self.cmsg_type = 0
@@ -278,6 +286,7 @@ struct in_pktinfo(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 12
         self.ipi_ifindex = 0
         self.ipi_spec_dst = 0
         self.ipi_addr = 0
@@ -295,6 +304,7 @@ struct in6_pktinfo(ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
+        comptime assert size_of[Self]() == 20
         self.ipi6_addr_a = 0
         self.ipi6_addr_b = 0
         self.ipi6_addr_c = 0

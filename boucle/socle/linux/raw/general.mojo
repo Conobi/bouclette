@@ -1,5 +1,5 @@
 from boucle.socle.linux.raw.ctypes import c_int, c_long, c_ulong, c_longlong
-from std.sys.info import CompilationTarget
+from std.sys.info import CompilationTarget, size_of
 
 
 @always_inline("nodebug")
@@ -113,10 +113,21 @@ comptime MADV_HWPOISON = 100
 comptime MADV_SOFT_OFFLINE = 101
 
 # Kernel timespec
-@fieldwise_init
 struct __kernel_timespec(ImplicitlyCopyable, Movable):
     var tv_sec: c_longlong
     var tv_nsec: c_longlong
+
+    @always_inline
+    def __init__(out self, tv_sec: c_longlong = 0, tv_nsec: c_longlong = 0):
+        """Constructs a kernel timespec.
+
+        Args:
+            tv_sec: Seconds.
+            tv_nsec: Nanoseconds.
+        """
+        comptime assert size_of[Self]() == 16
+        self.tv_sec = tv_sec
+        self.tv_nsec = tv_nsec
 
 # Signal set (simple alias on LP64 Linux)
 comptime sigset_t = c_ulong
