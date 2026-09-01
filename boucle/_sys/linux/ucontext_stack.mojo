@@ -37,6 +37,7 @@ from boucle.socle.linux.raw import (
     REG_RIP,
 )
 from boucle.socle.linux.raw.ctypes import c_void
+from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
 from boucle.socle.ptr import null_ptr
 
 
@@ -199,7 +200,6 @@ struct _UContext(Movable):
             UC_STACK_SIZE_OFFSET
         ).unsafe_bitcast[UInt]()
 
-        from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
         var stack_top = Int(ss_sp[]) + Int(ss_size[])
         var sp = (stack_top & ~(STACK_ALIGNMENT - 1)) - STACK_ENTRY_OFFSET
 

@@ -17,6 +17,7 @@ from boucle.socle.linux.raw import (
     REG_RSP,
     REG_RIP,
 )
+from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
 
 
 @always_inline
@@ -103,7 +104,6 @@ def setup_context(
     var ss_size = ctx.unsafe_offset(UC_STACK_SIZE_OFFSET).unsafe_bitcast[UInt]()
     ss_size[] = stack_size
 
-    from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
     var stack_top = Int(stack_ptr) + Int(stack_size)
     var sp = (stack_top & ~(STACK_ALIGNMENT - 1)) - STACK_ENTRY_OFFSET
 
