@@ -3,7 +3,7 @@ from boucle.interest import Interest
 from boucle.readiness_state import Readiness
 from boucle.token import Token
 from boucle.socle.linux.fd import close
-from boucle.socle.linux.raw import syscall
+from boucle.socle.linux.raw import syscall, __NR_read, __NR_write
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
@@ -53,7 +53,7 @@ def test_pipe_readable() raises:
     # Write a byte to make read end readable (use raw syscall to avoid
     # name collision with Mojo's stdlib).
     var msg = UInt8(1)
-    _ = syscall[1, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
+    _ = syscall[__NR_write, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
 
     loop.poll(timeout_ms=100)
     assert_equal(loop._handler.count, 1)
@@ -140,7 +140,7 @@ struct SelfDeregister(ReadinessHandler):
         self.fired += 1
         # Drain the pipe so subsequent polls don't re-fire on the same data.
         var buf = Array[UInt8, 16](fill=0)
-        var n = syscall[0, Scalar[DType.int64]](
+        var n = syscall[__NR_read, Scalar[DType.int64]](
             self.read_fd,
             Pointer(to=buf).unsafe_bitcast[UInt8](),
             UInt64(16),
@@ -167,7 +167,7 @@ def test_self_deregister_in_on_ready() raises:
 
     # Write a byte so the read end becomes readable.
     var msg = UInt8(7)
-    _ = syscall[1, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
+    _ = syscall[__NR_write, Scalar[DType.int64]](write_fd, Pointer(to=msg), UInt64(1))
 
     loop.poll(timeout_ms=100)
     assert_equal(loop._handler.fired, 1)

@@ -2,15 +2,12 @@ from boucle.socle.linux.epoll.syscalls import (
     epoll_create, epoll_ctl, epoll_wait, EpollOp,
 )
 from boucle.socle.linux.raw import (
-    epoll_event, EPOLLIN,
+    epoll_event, EPOLLIN, __NR_write,
 )
 from boucle.socle.linux.raw import syscall
 from boucle.socle.linux.fd import close
 from std.ffi import external_call
 from std.testing import assert_true, assert_equal
-
-# __NR_write on x86_64
-comptime __NR_write = 1
 
 
 def test_epoll() raises:

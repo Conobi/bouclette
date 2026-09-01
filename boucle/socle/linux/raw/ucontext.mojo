@@ -15,16 +15,7 @@ References:
 - aarch64: glibc sysdeps/unix/sysv/linux/aarch64/sys/ucontext.h
 """
 
-from std.sys.info import CompilationTarget
-
-
-@always_inline("nodebug")
-def _pick_int[x86: Int, arm: Int]() -> Int:
-    """Select an Int value based on the target architecture."""
-    comptime if CompilationTarget.is_x86():
-        return x86
-    else:
-        return arm
+from boucle.socle.linux.raw.utils import _pick_int
 
 
 # Total size of ucontext_t

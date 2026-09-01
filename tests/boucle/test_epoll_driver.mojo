@@ -5,7 +5,7 @@ from boucle.drivers.readiness_event import ReadinessEvent
 from boucle.interest import Interest
 from boucle.token import Token
 from boucle.socle.linux.fd import close
-from boucle.socle.linux.raw import syscall
+from boucle.socle.linux.raw import syscall, __NR_write
 from std.ffi import external_call
 from std.testing import assert_equal, assert_true
 
@@ -38,7 +38,7 @@ def test_pipe_readable() raises:
 
     # Write a byte to make read end readable.
     var msg = UInt8(1)
-    _ = syscall[1, Scalar[DType.int64]](
+    _ = syscall[__NR_write, Scalar[DType.int64]](
         write_fd, Pointer(to=msg), UInt64(1)
     )
 

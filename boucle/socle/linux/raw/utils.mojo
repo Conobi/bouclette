@@ -153,3 +153,12 @@ struct DTypeArray[
             The size of the array.
         """
         return Self.size
+
+
+@always_inline("nodebug")
+def _pick_int[x86: Int, arm: Int]() -> Int:
+    """Select an Int value based on the target architecture."""
+    comptime if CompilationTarget.is_x86():
+        return x86
+    else:
+        return arm
