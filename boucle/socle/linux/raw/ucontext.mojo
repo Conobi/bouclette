@@ -48,6 +48,3 @@ comptime REG_RCX = _pick_int[14, 3]()
 comptime REG_RSP = _pick_int[15, 31]()
 comptime REG_RIP = _pick_int[16, 32]()
 comptime REG_EFL = _pick_int[17, 33]()
-
-# Page size for guard pages
-comptime PAGE_SIZE = 4096

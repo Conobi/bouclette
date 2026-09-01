@@ -219,10 +219,12 @@ struct BufRing(Movable):
         var slot = UInt32(current_tail) & self.mask
         var addr = UInt64(Int(self.buf_base)) + UInt64(buf_id) * UInt64(self.buf_size)
         self._write_entry(slot, addr, self.buf_size, buf_id)
-        # store-release on tail. Mojo doesn't expose acq/rel intrinsics
-        # on plain pointers; a normal store followed by a compiler
-        # barrier is sufficient on x86-64 (TSO) for store-release
-        # semantics, since stores are not reordered with each other.
+        # Plain store on tail. On x86_64 (TSO) this is a store-release
+        # because stores are not reordered with each other. NOT safe on
+        # weakly-ordered architectures (aarch64) if SQPOLL is ever
+        # enabled — a store-release fence would be required. Currently
+        # safe because SQPOLL is blocked (comptime assert at qp.mojo:68)
+        # and io_uring_enter provides a full memory barrier.
         tp[] = current_tail + UInt16(1)
 
     def populate_initial(mut self):

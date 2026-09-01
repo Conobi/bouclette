@@ -597,5 +597,4 @@ from boucle.socle.linux.raw.ucontext import (
     REG_RSP,
     REG_RIP,
     REG_EFL,
-    PAGE_SIZE,
 )

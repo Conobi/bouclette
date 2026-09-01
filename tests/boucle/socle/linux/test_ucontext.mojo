@@ -22,7 +22,8 @@ from boucle.socle.linux.mm import (
     MapFlags,
     ProtFlags,
 )
-from boucle.socle.linux.raw import PAGE_SIZE, UCONTEXT_SIZE
+from boucle.socle.linux.raw import UCONTEXT_SIZE
+from boucle.socle.linux.mm import get_page_size
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.memory import unsafe_memset
@@ -120,15 +121,16 @@ def test_ucontext_round_trip() raises:
     args[unsafe_offset=1] = Int(shared)
 
     # Allocate stack: guard page (PROT_NONE) + usable region (RW)
-    var total_size = PAGE_SIZE + STACK_SIZE
+    var page_size = Int(get_page_size())
+    var total_size = page_size + STACK_SIZE
     var stack_mem = mmap_anonymous(
         len=UInt(total_size),
         prot=ProtFlags.READ | ProtFlags.WRITE,
         flags=MapFlags.PRIVATE,
     )
-    mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
+    mprotect(unsafe_ptr=stack_mem, len=UInt(page_size), prot=ProtFlags.NONE)
     var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
-        unsafe_from_address=Int(stack_mem) + PAGE_SIZE
+        unsafe_from_address=Int(stack_mem) + page_size
     )
 
     # Initialize coro_ctx via getcontext, then overwrite registers
@@ -177,15 +179,16 @@ def test_pingpong() raises:
     args[unsafe_offset=0] = Int(caller_ctx)
     args[unsafe_offset=1] = Int(counter)
 
-    var total_size = PAGE_SIZE + STACK_SIZE
+    var page_size = Int(get_page_size())
+    var total_size = page_size + STACK_SIZE
     var stack_mem = mmap_anonymous(
         len=UInt(total_size),
         prot=ProtFlags.READ | ProtFlags.WRITE,
         flags=MapFlags.PRIVATE,
     )
-    mprotect(unsafe_ptr=stack_mem, len=UInt(PAGE_SIZE), prot=ProtFlags.NONE)
+    mprotect(unsafe_ptr=stack_mem, len=UInt(page_size), prot=ProtFlags.NONE)
     var usable_stack = Pointer[UInt8, MutUntrackedOrigin](
-        unsafe_from_address=Int(stack_mem) + PAGE_SIZE
+        unsafe_from_address=Int(stack_mem) + page_size
     )
 
     uc_getcontext(coro_ctx)
