@@ -37,13 +37,19 @@ comptime __NR_accept4 = _pick[288, 242]()
 comptime __NR_recvmsg = _pick[47, 212]()
 comptime __NR_sendmsg = _pick[46, 211]()
 comptime __NR_clock_gettime = _pick[228, 113]()
-# aarch64 has only epoll_pwait (no legacy epoll_wait)
+# WARNING: On aarch64, this maps to __NR_epoll_pwait (6 args, not 4).
+# For raw-syscall use on aarch64, use __NR_epoll_pwait with sigmask args.
+# Our libc-based epoll path (external_call["epoll_wait"]) handles this internally.
 comptime __NR_epoll_wait = _pick[232, 22]()
 comptime __NR_epoll_ctl = _pick[233, 21]()
 comptime __NR_epoll_create1 = _pick[291, 20]()
 comptime __NR_io_uring_setup = _pick[425, 425]()
 comptime __NR_io_uring_enter = _pick[426, 426]()
 comptime __NR_io_uring_register = _pick[427, 427]()
+comptime __NR_getpid = _pick[39, 172]()
+comptime __NR_pipe2 = _pick[293, 59]()
+# aarch64 has only epoll_pwait (no legacy epoll_wait); see __NR_epoll_wait note
+comptime __NR_epoll_pwait = _pick[281, 22]()
 
 # mmap constants (arch-stable)
 comptime MAP_FILE = 0
