@@ -84,8 +84,9 @@ def setup_context(
     Must call uc_getcontext(ctx) first to initialize the struct,
     then this function overwrites the stack and register fields.
 
-    The entry function receives arg_addr as its first argument (RDI).
-    RSP is set to the top of the stack, aligned per x86_64 ABI.
+    The entry function receives arg_addr as its first argument register.
+    The stack pointer is set to the top of the stack, aligned per the
+    platform ABI using arch-dispatched constants from abi.mojo.
 
     Args:
         ctx: An initialized ucontext_t buffer.
@@ -102,13 +103,12 @@ def setup_context(
     var ss_size = ctx.unsafe_offset(UC_STACK_SIZE_OFFSET).unsafe_bitcast[UInt]()
     ss_size[] = stack_size
 
-    # Compute RSP: top of stack, 16-byte aligned, minus 8 for ABI
-    # (at function entry, RSP + 8 must be 16-byte aligned)
+    from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
     var stack_top = Int(stack_ptr) + Int(stack_size)
-    var rsp = (stack_top & ~0xF) - 8
+    var sp = (stack_top & ~(STACK_ALIGNMENT - 1)) - STACK_ENTRY_OFFSET
 
     # Write gregs
     var gregs = ctx.unsafe_offset(UC_GREGS_OFFSET).unsafe_bitcast[Int64]()
     gregs[unsafe_offset=REG_RIP] = Int64(entry_addr)
-    gregs[unsafe_offset=REG_RSP] = Int64(rsp)
+    gregs[unsafe_offset=REG_RSP] = Int64(sp)
     gregs[unsafe_offset=REG_RDI] = Int64(arg_addr)

@@ -181,8 +181,9 @@ struct _UContext(Movable):
     def set_entry(mut self, fn_addr: Int, arg_addr: Int):
         """Write the gregs for entry point, stack pointer, and first argument.
 
-        Computes RSP from the previously set uc_stack fields (ss_sp + ss_size),
-        aligned per x86_64 ABI: RSP = (stack_top & ~0xF) - 8.
+        Computes the stack pointer from the previously set uc_stack fields
+        (ss_sp + ss_size), aligned per the platform ABI using arch-dispatched
+        constants from abi.mojo.
 
         Must be called after set_stack().
 
@@ -198,17 +199,16 @@ struct _UContext(Movable):
             UC_STACK_SIZE_OFFSET
         ).unsafe_bitcast[UInt]()
 
-        # Compute RSP: top of stack, 16-byte aligned, minus 8 for ABI
-        # (at function entry, RSP + 8 must be 16-byte aligned)
+        from boucle.socle.linux.abi import STACK_ENTRY_OFFSET, STACK_ALIGNMENT
         var stack_top = Int(ss_sp[]) + Int(ss_size[])
-        var rsp = (stack_top & ~0xF) - 8
+        var sp = (stack_top & ~(STACK_ALIGNMENT - 1)) - STACK_ENTRY_OFFSET
 
         # Write gregs
         var gregs = self._buf.unsafe_offset(UC_GREGS_OFFSET).unsafe_bitcast[
             Int64
         ]()
         gregs[unsafe_offset=REG_RIP] = Int64(fn_addr)
-        gregs[unsafe_offset=REG_RSP] = Int64(rsp)
+        gregs[unsafe_offset=REG_RSP] = Int64(sp)
         gregs[unsafe_offset=REG_RDI] = Int64(arg_addr)
 
     def raw_ptr(self) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -269,7 +269,7 @@ struct _UcontextStack(Movable):
 
         Calls getcontext to initialize the ucontext_t struct, then overwrites
         the stack and register fields so that swapcontext will jump to the
-        entry function with arg_addr as its first argument (RDI).
+        entry function with arg_addr as its first argument register.
 
         Args:
             fn_addr: Address of the coroutine entry function.
