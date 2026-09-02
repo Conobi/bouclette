@@ -20,6 +20,7 @@ from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
 from boucle.watch.outcome import ConnectOutcome
+from boucle.socle.linux.raw import ECANCELED
 
 
 # ===----------------------------------------------------------------------=== #
@@ -183,7 +184,7 @@ struct _ConnectWithTimeoutState(Movable):
         )
         self_ptr[]._total_cqes += 1
 
-        if result == Int32(-125):
+        if result == -Int32(ECANCELED):
             self_ptr[]._check_done()
             return
 
@@ -223,7 +224,7 @@ struct _ConnectWithTimeoutState(Movable):
         )
         self_ptr[]._total_cqes += 1
 
-        if result == Int32(-125):
+        if result == -Int32(ECANCELED):
             self_ptr[]._check_done()
             return
 
