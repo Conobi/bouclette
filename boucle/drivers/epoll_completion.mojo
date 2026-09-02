@@ -568,6 +568,21 @@ struct EpollCompletionDriver(IoDriver):
         else:
             debug_assert(False, "unexpected op kind in _dispatch_op")
 
+        # Remove fd from epoll before freeing the slot — otherwise the
+        # stale _EpollOp pointer in epoll_event.data causes use-after-free
+        # if new data arrives on the fd.
+        if op[].kind is not _OpKind.TIMEOUT:
+            var tracked_fd = op[].fd
+            if op[].dup_fd != Int32(-1):
+                tracked_fd = op[].dup_fd
+            var dummy_ev = epoll_event()
+            _ = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
+                self._epfd,
+                Int32(EPOLL_CTL_DEL),
+                tracked_fd,
+                Pointer(to=dummy_ev),
+            )
+
         # Fire the callback.
         op[].completion[].fire(result, UInt32(0))
 
