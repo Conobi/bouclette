@@ -66,10 +66,11 @@ comptime _CLOCK_MONOTONIC = Int32(1)
 def _monotonic_ns() -> Int64:
     """Read CLOCK_MONOTONIC via libc clock_gettime (VDSO, no kernel entry)."""
     var ts = __kernel_timespec(0, 0)
-    _ = external_call["clock_gettime", Int32](
+    var res = external_call["clock_gettime", Int32](
         _CLOCK_MONOTONIC,
         Pointer(to=ts).unsafe_bitcast[__kernel_timespec](),
     )
+    debug_assert(res == 0, "clock_gettime(CLOCK_MONOTONIC) failed")
     return ts.tv_sec * 1_000_000_000 + ts.tv_nsec
 
 
