@@ -529,14 +529,16 @@ struct EpollCompletionDriver(IoDriver):
         elif op[].kind is _OpKind.CONNECT:
             var optval = Int32(0)
             var optlen = Int32(4)
-            _ = syscall[__NR_getsockopt, Scalar[DType.int64]](
+            var gso_res = syscall[__NR_getsockopt, Scalar[DType.int64]](
                 op[].fd,
                 Int32(SOL_SOCKET),
                 Int32(SO_ERROR),
                 Pointer(to=optval),
                 Pointer(to=optlen),
             )
-            if optval == 0:
+            if gso_res < 0:
+                result = gso_res.cast[DType.int32]()
+            elif optval == 0:
                 result = Int32(0)
             else:
                 result = -optval
