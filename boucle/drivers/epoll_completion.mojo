@@ -33,6 +33,7 @@ from boucle.socle.linux.raw import (
     EPOLLET,
     EPOLL_CTL_ADD,
     EPOLL_CTL_DEL,
+    EAGAIN,
     EEXIST,
     EINPROGRESS,
     ECANCELED,
@@ -491,7 +492,7 @@ struct EpollCompletionDriver(IoDriver):
             op: Pointer to the _EpollOp recovered from epoll_event.data.
 
         Returns:
-            1 (always dispatches exactly one completion).
+            1 if a completion was dispatched, 0 if EAGAIN (op stays pending).
         """
         var result = Int32(0)
 
@@ -506,6 +507,8 @@ struct EpollCompletionDriver(IoDriver):
                 UInt(0),
                 UInt(0),
             )
+            if res == -Scalar[DType.int64](EAGAIN):
+                return 0
             result = res.cast[DType.int32]()
 
         elif op[].kind is _OpKind.SEND:
@@ -519,6 +522,8 @@ struct EpollCompletionDriver(IoDriver):
                 UInt(0),
                 UInt(0),
             )
+            if res == -Scalar[DType.int64](EAGAIN):
+                return 0
             result = res.cast[DType.int32]()
 
         elif op[].kind is _OpKind.CONNECT:
@@ -553,6 +558,8 @@ struct EpollCompletionDriver(IoDriver):
                 ),
                 Int32(0),
             )
+            if res == -Scalar[DType.int64](EAGAIN):
+                return 0
             result = res.cast[DType.int32]()
 
         elif op[].kind is _OpKind.SENDMSG:
@@ -563,6 +570,8 @@ struct EpollCompletionDriver(IoDriver):
                 ),
                 Int32(MSG_NOSIGNAL),
             )
+            if res == -Scalar[DType.int64](EAGAIN):
+                return 0
             result = res.cast[DType.int32]()
 
         else:
