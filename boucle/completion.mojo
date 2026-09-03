@@ -16,25 +16,7 @@ from boucle.proactor.completion import Completion, CompletionFn
 from boucle.proactor.loop import EventLoop
 from boucle.drivers import _CompletionDriver
 from boucle.drivers.backend import Backend
-from boucle.socle.linux.raw import (
-    IORING_CQE_F_BUFFER as _IORING_CQE_F_BUFFER,
-    IORING_CQE_F_MORE as _IORING_CQE_F_MORE,
-    IORING_CQE_BUFFER_SHIFT as _IORING_CQE_BUFFER_SHIFT,
-)
 from std.memory import Pointer
-
-
-# ── CQE flags re-exports ────────────────────────────────────────────────────
-# Portable names for io_uring CQE constants so consumers don't import _sys.
-
-comptime CQE_F_MORE = _IORING_CQE_F_MORE
-"""More CQEs will follow for this SQE (multishot operations)."""
-
-comptime CQE_F_BUFFER = _IORING_CQE_F_BUFFER
-"""Buffer ID is valid in the upper bits of CQE flags."""
-
-comptime CQE_BUFFER_SHIFT = _IORING_CQE_BUFFER_SHIFT
-"""Bit shift to extract buffer ID from CQE flags."""
 
 
 # ── Opaque CompletionLoop ─────────────────────────────────────────────────────

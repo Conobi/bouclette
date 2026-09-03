@@ -8,7 +8,6 @@ from boucle.ctypes import (
     c_size_t,
     c_ssize_t,
 )
-from boucle.completion import CQE_F_MORE, CQE_F_BUFFER, CQE_BUFFER_SHIFT
 from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
@@ -27,11 +26,6 @@ def test_ctypes_reexports() raises:
 
     var v: c_void = 0
     assert_true(Int(v) == 0)
-
-    # CQE flag re-exports from boucle.completion match kernel values.
-    assert_equal(CQE_F_BUFFER, 1)
-    assert_equal(CQE_F_MORE, 2)
-    assert_equal(CQE_BUFFER_SHIFT, 16)
 
 
 def main() raises:
