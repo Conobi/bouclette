@@ -15,7 +15,7 @@ def test_connect_success_sets_open() raises:
     probe.wire_context()
 
     # Simulate connect CQE with success (result=0).
-    probe._connect_cmp.fire(result=Int32(0), flags=UInt32(0))
+    probe._connect_cmp.fire(result=0, flags=UInt32(0))
 
     assert_true(probe.result_is_set())
     assert_true(probe.result_status() == PortStatus.OPEN)
@@ -29,7 +29,7 @@ def test_timeout_fires_sets_filtered() raises:
     probe.wire_context()
 
     # Simulate timeout CQE firing (result=-ETIME = -62 typically, use 0 for "expired").
-    probe._timeout_cmp.fire(result=Int32(-62), flags=UInt32(0))
+    probe._timeout_cmp.fire(result=-62, flags=UInt32(0))
 
     assert_true(probe.result_is_set())
     assert_true(probe.result_status() == PortStatus.FILTERED)
@@ -43,7 +43,7 @@ def test_ecanceled_does_not_set_result() raises:
     probe.wire_context()
 
     # Simulate connect CQE with ECANCELED.
-    probe._connect_cmp.fire(result=Int32(-125), flags=UInt32(0))
+    probe._connect_cmp.fire(result=-125, flags=UInt32(0))
 
     assert_true(not probe.result_is_set())
     assert_equal(probe._total_cqes, 1)
@@ -56,11 +56,11 @@ def test_no_double_set() raises:
     probe.wire_context()
 
     # First: connect succeeds -> sets OPEN.
-    probe._connect_cmp.fire(result=Int32(0), flags=UInt32(0))
+    probe._connect_cmp.fire(result=0, flags=UInt32(0))
     assert_true(probe.result_status() == PortStatus.OPEN)
 
     # Second: timeout fires (non-ECANCELED) -> should NOT override.
-    probe._timeout_cmp.fire(result=Int32(-62), flags=UInt32(0))
+    probe._timeout_cmp.fire(result=-62, flags=UInt32(0))
     assert_true(probe.result_status() == PortStatus.OPEN)
     assert_equal(probe._total_cqes, 2)
 
@@ -71,13 +71,13 @@ def test_probe_done_at_three_cqes() raises:
     probe.wire_context()
 
     # Sequence: connect success, timeout ECANCELED, cancel CQE.
-    probe._connect_cmp.fire(result=Int32(0), flags=UInt32(0))
+    probe._connect_cmp.fire(result=0, flags=UInt32(0))
     assert_true(not probe.is_done())
 
-    probe._timeout_cmp.fire(result=Int32(-125), flags=UInt32(0))
+    probe._timeout_cmp.fire(result=-125, flags=UInt32(0))
     assert_true(not probe.is_done())
 
-    probe._cancel_cmp.fire(result=Int32(0), flags=UInt32(0))
+    probe._cancel_cmp.fire(result=0, flags=UInt32(0))
     assert_true(probe.is_done())
     assert_equal(probe._total_cqes, 3)
 
@@ -88,9 +88,9 @@ def test_cancel_cqe_enoent_increments_count() raises:
     probe.wire_context()
 
     # Sequence: timeout fires, connect ECANCELED, cancel ENOENT.
-    probe._timeout_cmp.fire(result=Int32(-62), flags=UInt32(0))
-    probe._connect_cmp.fire(result=Int32(-125), flags=UInt32(0))
-    probe._cancel_cmp.fire(result=Int32(-2), flags=UInt32(0))
+    probe._timeout_cmp.fire(result=-62, flags=UInt32(0))
+    probe._connect_cmp.fire(result=-125, flags=UInt32(0))
+    probe._cancel_cmp.fire(result=-2, flags=UInt32(0))
 
     assert_true(probe.is_done())
     assert_equal(probe._total_cqes, 3)
@@ -102,7 +102,7 @@ def test_connect_refused_sets_closed() raises:
     var probe = ConnectProbe.for_test()
     probe.wire_context()
 
-    probe._connect_cmp.fire(result=Int32(-111), flags=UInt32(0))
+    probe._connect_cmp.fire(result=-111, flags=UInt32(0))
 
     assert_true(probe.result_is_set())
     assert_true(probe.result_status() == PortStatus.CLOSED)

@@ -15,20 +15,20 @@ from boucle.socle.linux.raw import sockaddr_in
 struct ConnectTracker:
     """Records callback invocations for connect completions."""
 
-    var result: Int32
+    var result: Int
     var flags: UInt32
     var fired: Bool
 
     def __init__(out self):
         """Construct a zeroed tracker."""
-        self.result = Int32(0)
+        self.result = 0
         self.flags = UInt32(0)
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the connect result."""

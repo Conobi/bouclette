@@ -19,7 +19,7 @@ trait _FutureCallback(Movable):
     internal state accordingly. Not part of the public API.
     """
 
-    def set_result(mut self, result: Int32):
+    def set_result(mut self, result: Int):
         """Store the completion result from a CQE.
 
         Args:
@@ -30,7 +30,7 @@ trait _FutureCallback(Movable):
 
 
 def _dispatch[F: _FutureCallback](
-    ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int32, flags: UInt32
+    ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32
 ):
     """Generic CQE dispatch to a typed _FutureCallback.
 

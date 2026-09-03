@@ -66,7 +66,7 @@ struct _AcceptFutureState(_FutureCallback):
         self.done = move.done
         self.consumed = move.consumed
 
-    def set_result(mut self, result: Int32):
+    def set_result(mut self, result: Int):
         """Store the CQE result from io_uring accept.
 
         On success (result >= 0), stores the accepted fd.
@@ -76,9 +76,9 @@ struct _AcceptFutureState(_FutureCallback):
             result: The io_uring CQE result (accepted fd or negative errno).
         """
         if result >= 0:
-            self._socket_fd = result
+            self._socket_fd = Int32(result)
         else:
-            self._error_code = -result
+            self._error_code = Int32(-result)
         self.done = True
 
 

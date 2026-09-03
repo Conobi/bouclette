@@ -7,7 +7,7 @@ from boucle.net.probe import PortStatus
 
 def test_connect_outcome() raises:
     # 1. Success -> CONNECTED
-    var ok = ConnectOutcome.from_cqe_result(Int32(0))
+    var ok = ConnectOutcome.from_cqe_result(0)
     assert_true(ok.is_connected(), "0 should be CONNECTED")
     assert_false(ok.is_refused(), "0 should not be REFUSED")
     assert_true(
@@ -15,21 +15,21 @@ def test_connect_outcome() raises:
     )
 
     # 2. ECONNREFUSED (-111) -> REFUSED
-    var refused = ConnectOutcome.from_cqe_result(Int32(-111))
+    var refused = ConnectOutcome.from_cqe_result(-111)
     assert_true(refused.is_refused(), "-111 should be REFUSED")
     assert_true(
         refused.port_status() == PortStatus.CLOSED, "REFUSED -> CLOSED"
     )
 
     # 3. ETIMEDOUT (-110) -> TIMEOUT
-    var timeout = ConnectOutcome.from_cqe_result(Int32(-110))
+    var timeout = ConnectOutcome.from_cqe_result(-110)
     assert_true(timeout.is_timeout(), "-110 should be TIMEOUT")
     assert_true(
         timeout.port_status() == PortStatus.FILTERED, "TIMEOUT -> FILTERED"
     )
 
     # 4. ENETUNREACH (-101) -> NETWORK_UNREACHABLE
-    var net_unreach = ConnectOutcome.from_cqe_result(Int32(-101))
+    var net_unreach = ConnectOutcome.from_cqe_result(-101)
     assert_true(
         net_unreach.is_network_unreachable(),
         "-101 should be NETWORK_UNREACHABLE",
@@ -40,16 +40,16 @@ def test_connect_outcome() raises:
     )
 
     # 5. EHOSTUNREACH (-113) -> NETWORK_UNREACHABLE
-    var host_unreach = ConnectOutcome.from_cqe_result(Int32(-113))
+    var host_unreach = ConnectOutcome.from_cqe_result(-113)
     assert_true(
         host_unreach.is_network_unreachable(),
         "-113 should be NETWORK_UNREACHABLE",
     )
 
     # 6. Unknown error -> ERROR
-    var err = ConnectOutcome.from_cqe_result(Int32(-99))
+    var err = ConnectOutcome.from_cqe_result(-99)
     assert_true(err.is_error(), "-99 should be ERROR")
-    assert_equal(err.raw_result(), Int32(-99))
+    assert_equal(err.raw_result(), -99)
     assert_true(
         err.port_status() == PortStatus.FILTERED, "ERROR -> FILTERED"
     )

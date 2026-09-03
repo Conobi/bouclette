@@ -25,17 +25,17 @@ struct Tracker:
     """Records a single provide_buffers completion."""
 
     var called: Bool
-    var result: Int32
+    var result: Int
 
     def __init__(out self):
         """Construct an unfired tracker."""
         self.called = False
-        self.result = Int32(0)
+        self.result = 0
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the completion result."""

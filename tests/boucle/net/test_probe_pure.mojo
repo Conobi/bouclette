@@ -18,11 +18,11 @@ def test_port_status_equality() raises:
 
 
 def test_result_from_connect_cqe() raises:
-    assert_true(result_from_connect_cqe(Int32(0)) == PortStatus.OPEN)
-    assert_true(result_from_connect_cqe(Int32(-111)) == PortStatus.CLOSED)
-    assert_true(result_from_connect_cqe(Int32(-113)) == PortStatus.FILTERED)
-    assert_true(result_from_connect_cqe(Int32(-110)) == PortStatus.FILTERED)
-    assert_true(result_from_connect_cqe(Int32(-99)) == PortStatus.FILTERED)
+    assert_true(result_from_connect_cqe(0) == PortStatus.OPEN)
+    assert_true(result_from_connect_cqe(-111) == PortStatus.CLOSED)
+    assert_true(result_from_connect_cqe(-113) == PortStatus.FILTERED)
+    assert_true(result_from_connect_cqe(-110) == PortStatus.FILTERED)
+    assert_true(result_from_connect_cqe(-99) == PortStatus.FILTERED)
 
 
 def test_compute_batches_empty() raises:

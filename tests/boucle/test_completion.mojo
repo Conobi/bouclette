@@ -23,17 +23,17 @@ struct Counter:
     """Counts callback invocations and records the last result."""
 
     var count: Int
-    var last_result: Int32
+    var last_result: Int
 
     def __init__(out self):
         """Construct a zeroed counter."""
         self.count = 0
-        self.last_result = Int32(0)
+        self.last_result = 0
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that increments count and stores result."""
@@ -47,18 +47,18 @@ struct Counter:
 struct ResultSlot:
     """Records a single completion result and whether it fired."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired slot."""
-        self.result = Int32(0)
+        self.result = 0
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the result."""
@@ -200,13 +200,13 @@ def test_submit_cancel_cancels_pending_recv() raises:
             raise "timed out waiting for cancel completion"
 
     # Recv must report -ECANCELED (-125 on x86_64).
-    assert_equal(recv_slot.result, Int32(-125))
+    assert_equal(recv_slot.result, -125)
 
     # Cancel itself reports 0 (cancelled in flight) or -ENOENT/-EALREADY
     # if the target raced to completion.
     var cr = cancel_slot.result
     assert_true(
-        cr == Int32(0) or cr == Int32(-2) or cr == Int32(-114),
+        cr == 0 or cr == -2 or cr == -114,
         "cancel CQE result must be 0, -ENOENT (-2), or -EALREADY (-114)",
     )
 
@@ -247,7 +247,7 @@ struct MultishotTracker:
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that checks IORING_CQE_F_MORE flag."""

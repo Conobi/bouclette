@@ -92,7 +92,7 @@ struct ProbeResult(Movable):
         self.status = move.status
 
 
-def result_from_connect_cqe(result: Int32) -> PortStatus:
+def result_from_connect_cqe(result: Int) -> PortStatus:
     """Map a connect(2) CQE result code to a PortStatus.
 
     Interprets the kernel return value from an async connect operation:
@@ -106,9 +106,9 @@ def result_from_connect_cqe(result: Int32) -> PortStatus:
     Returns:
         The corresponding PortStatus.
     """
-    if result == Int32(0):
+    if result == 0:
         return PortStatus.OPEN
-    if result == Int32(-111):
+    if result == -111:
         return PortStatus.CLOSED
     return PortStatus.FILTERED
 

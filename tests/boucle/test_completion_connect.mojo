@@ -17,18 +17,18 @@ from std.testing import assert_equal, assert_true
 struct ConnectResult:
     """Records a single connect completion."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired result."""
-        self.result = Int32(0)
+        self.result = 0
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the connect result."""
@@ -94,7 +94,7 @@ def test_completion_connect() raises:
     assert_true(slot.fired, "connect completion did not fire")
     # Success is result >= 0 for connect(2); nonblocking sockets through
     # io_uring should also complete with 0 once the handshake is done.
-    assert_true(slot.result >= Int32(0))
+    assert_true(slot.result >= 0)
 
     # Keep storage and sockets alive past the completion.
     _ = target_stor

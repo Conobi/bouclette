@@ -15,18 +15,18 @@ from std.testing import assert_equal, assert_true
 struct IOResult:
     """Records a single I/O completion result."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired result."""
-        self.result = Int32(0)
+        self.result = 0
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the I/O result."""
@@ -71,7 +71,7 @@ def test_completion_io() raises:
     _ = loop.tick(wait=True)
 
     assert_true(send_slot.fired, "send completion did not fire")
-    assert_equal(send_slot.result, Int32(5))  # 5 bytes sent
+    assert_equal(send_slot.result, 5)  # 5 bytes sent
 
     # ── Recv through CompletionLoop ──────────────────────────────────────
 
@@ -92,7 +92,7 @@ def test_completion_io() raises:
     _ = loop.tick(wait=True)
 
     assert_true(recv_slot.fired, "recv completion did not fire")
-    assert_equal(recv_slot.result, Int32(5))  # 5 bytes received
+    assert_equal(recv_slot.result, 5)  # 5 bytes received
 
     # Cleanup
     _ = external_call["close", Int32](fd_a)

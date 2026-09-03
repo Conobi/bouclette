@@ -30,17 +30,17 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
     the specific errno.
     """
 
-    comptime CONNECTED = Self(tag=0, raw=Int32(0))
-    comptime REFUSED = Self(tag=1, raw=-Int32(ECONNREFUSED))
-    comptime TIMEOUT = Self(tag=2, raw=-Int32(ETIMEDOUT))
-    comptime NETWORK_UNREACHABLE = Self(tag=3, raw=-Int32(ENETUNREACH))
-    comptime ERROR = Self(tag=4, raw=Int32(-1))
+    comptime CONNECTED = Self(tag=0, raw=0)
+    comptime REFUSED = Self(tag=1, raw=-Int(ECONNREFUSED))
+    comptime TIMEOUT = Self(tag=2, raw=-Int(ETIMEDOUT))
+    comptime NETWORK_UNREACHABLE = Self(tag=3, raw=-Int(ENETUNREACH))
+    comptime ERROR = Self(tag=4, raw=-1)
 
     var _tag: UInt8
-    var _raw: Int32
+    var _raw: Int
 
     @always_inline("nodebug")
-    def __init__(out self, *, tag: UInt8, raw: Int32):
+    def __init__(out self, *, tag: UInt8, raw: Int):
         """Construct a ConnectOutcome from a tag and raw CQE result.
 
         Args:
@@ -52,7 +52,7 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
 
     @staticmethod
     @always_inline
-    def from_cqe_result(result: Int32) -> Self:
+    def from_cqe_result(result: Int) -> Self:
         """Decode a connect(2) CQE result into a ConnectOutcome.
 
         Maps common errno values to specific outcome variants.
@@ -65,13 +65,13 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
         Returns:
             The corresponding ConnectOutcome.
         """
-        if result == Int32(0):
+        if result == 0:
             return Self(tag=0, raw=result)
-        if result == -Int32(ECONNREFUSED):
+        if result == -Int(ECONNREFUSED):
             return Self(tag=1, raw=result)
-        if result == -Int32(ETIMEDOUT):
+        if result == -Int(ETIMEDOUT):
             return Self(tag=2, raw=result)
-        if result == -Int32(ENETUNREACH) or result == -Int32(EHOSTUNREACH):
+        if result == -Int(ENETUNREACH) or result == -Int(EHOSTUNREACH):
             return Self(tag=3, raw=result)
         return Self(tag=4, raw=result)
 
@@ -121,7 +121,7 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
         return self._tag == UInt8(4)
 
     @always_inline("nodebug")
-    def raw_result(self) -> Int32:
+    def raw_result(self) -> Int:
         """Return the raw CQE result code.
 
         Useful for ERROR outcomes where the caller needs the specific errno.

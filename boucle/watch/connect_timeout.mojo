@@ -57,7 +57,7 @@ struct _ConnectWithTimeoutState(Movable):
     var _cancel_cmp: Completion
     var _addr_stor: SocketAddrStorV4
     var _ts: Timeout
-    var _cqe_result: Int32
+    var _cqe_result: Int
     var _result_set: Bool
     var _resolved_by: UInt8
     var _cancel_target: UInt8
@@ -85,7 +85,7 @@ struct _ConnectWithTimeoutState(Movable):
         self._cancel_cmp = Completion()
         self._addr_stor = addr_stor
         self._ts = ts
-        self._cqe_result = Int32(0)
+        self._cqe_result = 0
         self._result_set = False
         self._resolved_by = UInt8(0)
         self._cancel_target = UInt8(0)
@@ -166,7 +166,7 @@ struct _ConnectWithTimeoutState(Movable):
     @staticmethod
     def _on_connect_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the connect completion.
@@ -184,7 +184,7 @@ struct _ConnectWithTimeoutState(Movable):
         )
         self_ptr[]._total_cqes += 1
 
-        if result == -Int32(ECANCELED):
+        if result == -Int(ECANCELED):
             self_ptr[]._check_done()
             return
 
@@ -206,7 +206,7 @@ struct _ConnectWithTimeoutState(Movable):
     @staticmethod
     def _on_timeout_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the timeout completion.
@@ -224,7 +224,7 @@ struct _ConnectWithTimeoutState(Movable):
         )
         self_ptr[]._total_cqes += 1
 
-        if result == -Int32(ECANCELED):
+        if result == -Int(ECANCELED):
             self_ptr[]._check_done()
             return
 
@@ -246,7 +246,7 @@ struct _ConnectWithTimeoutState(Movable):
     @staticmethod
     def _on_cancel_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the cancel completion.

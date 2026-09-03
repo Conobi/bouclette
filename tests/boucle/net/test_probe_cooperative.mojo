@@ -29,7 +29,7 @@ struct CoopTracker:
 
     @staticmethod
     def _on_nop(
-        ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int32, flags: UInt32
+        ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32
     ):
         """Completion callback that sets nop_fired=True on the owning tracker."""
         var self_ptr = Pointer[CoopTracker, MutUntrackedOrigin](

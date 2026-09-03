@@ -67,7 +67,7 @@ struct _TimerFutureState(_FutureCallback):
         self.done = move.done
         self.consumed = move.consumed
 
-    def set_result(mut self, result: Int32):
+    def set_result(mut self, result: Int):
         """Store the CQE result from io_uring timeout.
 
         -ETIME (-62) means the timer expired normally. Any other result
@@ -76,7 +76,7 @@ struct _TimerFutureState(_FutureCallback):
         Args:
             result: The io_uring CQE result (-62 = expired, 0 = cancelled).
         """
-        self._expired = result == Int32(-62)
+        self._expired = result == -62
         self.done = True
 
 

@@ -23,14 +23,14 @@ struct IoState(Movable, Deinitable):
     typed pointers that remain valid for the duration of the test.
     """
 
-    var io_result: Int32
-    var coro_saw_result: Int32
+    var io_result: Int
+    var coro_saw_result: Int
     var coro_completed: Bool
 
     def __init__(out self):
         """Construct zeroed I/O state."""
-        self.io_result = Int32(-999)
-        self.coro_saw_result = Int32(-999)
+        self.io_result = -999
+        self.coro_saw_result = -999
         self.coro_completed = False
 
     def __init__(out self, *, deinit move: Self):
@@ -63,7 +63,7 @@ def coro_body(mut y: CoroYielder[IoState]) raises:
 
 def _on_io_complete(
     ctx: Pointer[NoneType, MutUntrackedOrigin],
-    result: Int32,
+    result: Int,
     flags: UInt32,
 ):
     """On completion: store result in the coroutine's state and resume it.
@@ -122,8 +122,8 @@ def test_coro_with_completion_loop() raises:
     # After tick() the callback has fired and resumed the coro to completion
     assert_true(coro_heap[].is_done(), "coro must be DONE after tick()")
     var s = coro_heap[].state()
-    assert_equal(s[].io_result, Int32(0))
-    assert_equal(s[].coro_saw_result, Int32(0))
+    assert_equal(s[].io_result, 0)
+    assert_equal(s[].coro_saw_result, 0)
     assert_true(
         s[].coro_completed,
         "coroutine body must have set coro_completed",

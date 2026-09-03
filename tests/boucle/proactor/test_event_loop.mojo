@@ -11,20 +11,20 @@ from boucle.drivers.probe import ProbeCompletionDriver
 struct Tracker:
     """Records callback invocations for test assertions."""
 
-    var last_result: Int32
+    var last_result: Int
     var last_flags: UInt32
     var count: Int
 
     def __init__(out self):
         """Construct a zeroed tracker."""
-        self.last_result = Int32(0)
+        self.last_result = 0
         self.last_flags = UInt32(0)
         self.count = 0
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records result into the Tracker."""

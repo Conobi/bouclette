@@ -22,20 +22,20 @@ from std.testing import assert_equal, assert_true
 struct IOSlot:
     """Records one completion with result AND flags."""
 
-    var result: Int32
+    var result: Int
     var flags: UInt32
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired slot."""
-        self.result = Int32(0)
+        self.result = 0
         self.flags = UInt32(0)
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records result and flags."""
@@ -53,7 +53,7 @@ def _make_socketpair() raises -> Array[Int32, 2]:
     var res = external_call["socketpair", Int32](
         Int32(1),  # AF_UNIX
         Int32(1),  # SOCK_STREAM
-        Int32(0),
+        0,
         Pointer(to=sv).unsafe_bitcast[Int32](),
     )
     assert_equal(Int(res), 0, "socketpair failed")
@@ -113,7 +113,7 @@ def test_stale_fd_spurious_dispatch() raises:
 
     # Reset the slot to detect spurious fires.
     slot.fired = False
-    slot.result = Int32(0)
+    slot.result = 0
 
     # Send MORE data — fd is still in epoll with stale pointer.
     var msg2 = UInt8(0xDD)
@@ -136,7 +136,7 @@ def test_stale_fd_spurious_dispatch() raises:
 
 
 def test_ecanceled_constant() raises:
-    """Issue 6: connect_timeout.mojo checks `result == Int32(-125)` as a
+    """Issue 6: connect_timeout.mojo checks `result == -125` as a
     magic number instead of using the named ECANCELED constant.
 
     Regression guard: verifies the magic number matches the constant so
@@ -145,8 +145,8 @@ def test_ecanceled_constant() raises:
     """
     # Part 1: Constant consistency.
     assert_equal(
-        Int32(-125),
-        -Int32(ECANCELED),
+        -125,
+        -Int(ECANCELED),
         "magic -125 must equal -ECANCELED",
     )
 
@@ -189,13 +189,13 @@ def test_ecanceled_constant() raises:
     assert_true(recv_slot.fired, "cancelled recv did not fire")
     assert_equal(
         recv_slot.result,
-        -Int32(ECANCELED),
+        -Int(ECANCELED),
         "cancelled recv should get -ECANCELED",
     )
     assert_true(cancel_slot.fired, "cancel op did not fire")
     assert_equal(
         cancel_slot.result,
-        Int32(0),
+        0,
         "cancel op itself should succeed with 0",
     )
 

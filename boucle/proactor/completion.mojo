@@ -11,7 +11,7 @@ from boucle.socle.ptr import null_ptr
 
 # Function-pointer type for completion callbacks.
 # Signature: (context_ptr, cqe_result, cqe_flags) -> None
-comptime CompletionFn = def (Pointer[NoneType, MutUntrackedOrigin], Int32, UInt32) thin -> None
+comptime CompletionFn = def (Pointer[NoneType, MutUntrackedOrigin], Int, UInt32) thin -> None
 
 
 struct Completion(Movable):
@@ -49,7 +49,7 @@ struct Completion(Movable):
         self.invoke = move.invoke
         self.context = move.context
 
-    def fire(self, result: Int32, flags: UInt32):
+    def fire(self, result: Int, flags: UInt32):
         """Dispatch this completion's callback.
 
         Args:
@@ -61,7 +61,7 @@ struct Completion(Movable):
     @staticmethod
     def _noop(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Default no-op callback."""

@@ -41,7 +41,7 @@ struct _ConnectFutureState(_FutureCallback):
 
     var completion: Completion
     var _addr_stor: SocketAddrStorV4
-    var _cqe_result: Int32
+    var _cqe_result: Int
     var done: Bool
     var consumed: Bool
 
@@ -56,7 +56,7 @@ struct _ConnectFutureState(_FutureCallback):
         """
         self.completion = Completion()
         self._addr_stor = addr_stor
-        self._cqe_result = Int32(0)
+        self._cqe_result = 0
         self.done = False
         self.consumed = False
 
@@ -72,7 +72,7 @@ struct _ConnectFutureState(_FutureCallback):
         self.done = move.done
         self.consumed = move.consumed
 
-    def set_result(mut self, result: Int32):
+    def set_result(mut self, result: Int):
         """Store the raw CQE result from io_uring connect.
 
         Does not decode the result — ConnectFuture.result() handles that

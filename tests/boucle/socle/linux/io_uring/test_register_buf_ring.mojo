@@ -38,19 +38,19 @@ struct Tracker:
     """Records callback invocations for multishot recv completions."""
 
     var call_count: Int
-    var results: Array[Int32, 8]
+    var results: Array[Int, 8]
     var flags_arr: Array[UInt32, 8]
 
     def __init__(out self):
         """Construct a zeroed tracker."""
         self.call_count = 0
-        self.results = Array[Int32, 8](fill=0)
+        self.results = Array[Int, 8](fill=0)
         self.flags_arr = Array[UInt32, 8](fill=0)
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the completion result and flags."""

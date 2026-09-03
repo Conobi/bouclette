@@ -53,21 +53,21 @@ struct MultishotTracker:
     """
 
     var count: Int
-    var results: Array[Int32, 8]
+    var results: Array[Int, 8]
     var flags: Array[UInt32, 8]
     var buf_ids: Array[UInt16, 8]
 
     def __init__(out self):
         """Construct a zeroed tracker."""
         self.count = 0
-        self.results = Array[Int32, 8](fill=Int32(0))
+        self.results = Array[Int, 8](fill=0)
         self.flags = Array[UInt32, 8](fill=UInt32(0))
         self.buf_ids = Array[UInt16, 8](fill=UInt16(0))
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the completion result and buffer ID."""

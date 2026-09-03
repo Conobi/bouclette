@@ -9,17 +9,17 @@ from boucle.proactor.completion import CompletionFn
 struct _TestCallback(_FutureCallback):
     """Minimal _FutureCallback implementor for dispatch validation."""
 
-    var value: Int32
+    var value: Int
 
     def __init__(out self):
         """Construct with zero result."""
-        self.value = Int32(0)
+        self.value = 0
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self.value = move.value
 
-    def set_result(mut self, result: Int32):
+    def set_result(mut self, result: Int):
         """Store the result.
 
         Args:
@@ -31,7 +31,7 @@ struct _TestCallback(_FutureCallback):
 def test_dispatch() raises:
     # Assign _dispatch[_TestCallback] to a CompletionFn alias.
     # This proves it compiles as a thin function pointer with the exact
-    # signature (Pointer[NoneType, MutUntrackedOrigin], Int32, UInt32) -> None.
+    # signature (Pointer[NoneType, MutUntrackedOrigin], Int, UInt32) -> None.
     var fn_ptr: CompletionFn = _dispatch[_TestCallback]
 
     # Dispatch to verify runtime correctness.
@@ -41,12 +41,12 @@ def test_dispatch() raises:
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cb))
     )
-    fn_ptr(ctx, Int32(42), UInt32(0))
+    fn_ptr(ctx, 42, UInt32(0))
     var readback = ctx.unsafe_bitcast[_TestCallback]()
-    assert_equal(readback[].value, Int32(42))
+    assert_equal(readback[].value, 42)
 
-    fn_ptr(ctx, Int32(-111), UInt32(0))
-    assert_equal(readback[].value, Int32(-111))
+    fn_ptr(ctx, -111, UInt32(0))
+    assert_equal(readback[].value, -111)
 
 
 def main() raises:
