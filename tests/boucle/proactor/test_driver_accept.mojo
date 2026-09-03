@@ -6,6 +6,7 @@ from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
 from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.backend import Backend
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
@@ -40,8 +41,12 @@ struct AcceptTracker:
         self_ptr[].fired = True
 
 
-def test_driver_accept() raises:
-    """Run accept integration test."""
+def test_driver_accept(backend: Backend) raises:
+    """Run accept integration test on the given backend.
+
+    Args:
+        backend: The completion backend to force (IO_URING or EPOLL).
+    """
     # Create a listening TCP socket on loopback ephemeral port.
     var server = Socket.tcp_v4()
     var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
@@ -74,7 +79,7 @@ def test_driver_accept() raises:
     var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     # Set up driver.
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16, backend=backend)
 
     # Set up accept completion.
     var accept_tracker = AcceptTracker()
@@ -136,6 +141,20 @@ def test_driver_accept() raises:
     _ = server^
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring is available on this kernel."""
+    try:
+        var d = ProbeCompletionDriver(sq_entries=4, backend=Backend.IO_URING)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 def main() raises:
-    test_driver_accept()
+    if _has_io_uring():
+        test_driver_accept(Backend.IO_URING)
+    else:
+        print("SKIP: io_uring not available")
+    test_driver_accept(Backend.EPOLL)
     print("PASS: test_driver_accept.mojo")

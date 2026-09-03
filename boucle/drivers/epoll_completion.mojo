@@ -2,9 +2,10 @@
 
 Emulates io_uring-style completion semantics over epoll: each
 submit_* registers interest with epoll and stores a per-operation
-wrapper (_EpollOp) whose address becomes the epoll_event data.
-When epoll_wait fires, the wrapper is recovered, the blocking I/O
-is performed, and the Completion callback is invoked -- all within
+wrapper (_EpollOp) in a slab pool. The slot index and a per-slot
+generation counter are packed into epoll_event.data. When epoll_wait
+fires, the slot is recovered, checked for staleness, the non-blocking
+I/O is performed, and the Completion callback is invoked -- all within
 tick(). Operations that complete without epoll (nop, cancel,
 immediate connect) go through a deferred-ready queue drained at
 the start of each tick().
@@ -20,6 +21,7 @@ from boucle.socle.linux.raw import (
     __NR_epoll_ctl,
     __NR_dup,
     __NR_close,
+    __NR_fcntl,
     __NR_recvfrom,
     __NR_sendto,
     __NR_accept4,
@@ -37,7 +39,10 @@ from boucle.socle.linux.raw import (
     EEXIST,
     EINPROGRESS,
     ECANCELED,
+    ENOENT,
     ETIME,
+    F_GETFL,
+    F_SETFL,
     MSG_NOSIGNAL,
     O_CLOEXEC,
     O_NONBLOCK,
@@ -58,6 +63,13 @@ from boucle.drivers.backend import Backend
 
 comptime _CLOCK_MONOTONIC = Int32(1)
 
+# Slots the op pool starts with. It doubles on demand from there.
+comptime _INITIAL_POOL_CAPACITY = 64
+
+# Hard ceiling on pool slots: the slot index travels in the low 32 bits
+# of epoll_event.data, so no more than 2^32 slots can be addressed.
+comptime _MAX_POOL_CAPACITY = 1 << 32
+
 
 # ── Helper: monotonic clock ───────────────────────────────────────────────────
 
@@ -72,6 +84,51 @@ def _monotonic_ns() -> Int64:
     )
     debug_assert(res == 0, "clock_gettime(CLOCK_MONOTONIC) failed")
     return ts.tv_sec * 1_000_000_000 + ts.tv_nsec
+
+
+# ── Helper: epoll_wait timeout ────────────────────────────────────────────────
+
+
+def _epoll_wait_timeout_ms(
+    *, wait: Bool, has_deadline: Bool, remaining_ns: Int64
+) -> Int32:
+    """Compute the epoll_wait timeout for one tick().
+
+    Rules:
+        - not wait: 0, whether or not a timer is armed -- the caller has
+          work to process, so never block.
+        - wait, no timer armed: -1, block until an fd becomes ready.
+        - wait, timer armed: milliseconds until the earliest deadline,
+          in [1, Int32.MAX]. A deadline already reached gives 0. A
+          positive remainder is rounded UP to whole milliseconds (so a
+          sub-millisecond remainder gives 1 and epoll never wakes
+          before the deadline, which would busy-spin), and anything
+          beyond Int32.MAX milliseconds (~24.8 days) clamps to
+          Int32.MAX; a plain Int32 cast would wrap negative, which
+          epoll_wait reads as "block forever".
+
+    Args:
+        wait: Whether this tick may block at all.
+        has_deadline: Whether at least one timer is armed.
+        remaining_ns: Nanoseconds until the earliest deadline; only
+                      read when has_deadline is True.
+
+    Returns:
+        The timeout to pass to epoll_wait: -1, 0 or a positive count
+        of milliseconds no greater than Int32.MAX.
+    """
+    if not wait:
+        return 0
+    if not has_deadline:
+        return -1
+    if remaining_ns <= 0:
+        return 0
+    comptime NS_PER_MS = Int64(1_000_000)
+    var longest_ns = Int32.MAX.cast[DType.int64]() * NS_PER_MS
+    if remaining_ns >= longest_ns:
+        return Int32.MAX
+    var whole_ms_rounded_up = (remaining_ns + NS_PER_MS - 1) // NS_PER_MS
+    return whole_ms_rounded_up.cast[DType.int32]()
 
 
 # ── Internal data structures ──────────────────────────────────────────────────
@@ -107,8 +164,11 @@ struct _OpKind(TrivialRegisterPassable):
 struct _EpollOp(ImplicitlyCopyable, Movable):
     """Per-operation wrapper stored in the slab pool.
 
-    Holds everything _dispatch_op needs to perform the blocking
-    I/O and fire the Completion callback.
+    Holds everything _dispatch_op needs to perform the non-blocking
+    I/O and fire the Completion callback. `generation` is bumped each
+    time the slot is freed so a stale epoll event (one whose op was
+    cancelled or completed earlier in the same batch) is recognised
+    and skipped instead of dispatching a freed or re-used slot.
     """
 
     var kind: _OpKind
@@ -122,6 +182,7 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     var completion: Pointer[Completion, MutUntrackedOrigin]
     var deadline_ns: Int64
     var pool_index: Int
+    var generation: UInt32
     var active: Bool
 
     def __init__(out self, *, pool_index: Int):
@@ -137,7 +198,25 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
         self.completion = null_ptr[Completion, MutUntrackedOrigin]()
         self.deadline_ns = Int64(-1)
         self.pool_index = pool_index
+        self.generation = UInt32(0)
         self.active = False
+
+
+@always_inline
+def _event_data(op: Pointer[_EpollOp, MutUntrackedOrigin]) -> UInt64:
+    """Pack an op's slot index (low 32 bits) and generation (high 32 bits).
+
+    This is the value stored in epoll_event.data; tick() unpacks it and
+    only dispatches when the slot is still active with the same
+    generation.
+
+    Args:
+        op: Pointer to the op whose identity is being packed.
+
+    Returns:
+        The 64-bit epoll user data for this op.
+    """
+    return (UInt64(op[].generation) << 32) | UInt64(op[].pool_index)
 
 
 @fieldwise_init
@@ -261,10 +340,25 @@ struct _TimerHeap(Movable):
 
 
 struct _OpPool(Movable):
-    """Slab allocator for _EpollOp instances.
+    """Growable slab allocator for _EpollOp instances.
 
-    Pre-allocates a fixed number of slots. alloc() pops a free slot
-    and returns a stable pointer; free() returns the slot to the pool.
+    alloc() pops a free slot and returns a pointer to it; free() returns
+    the slot to the pool. When no slot is free the slot array is
+    reallocated at double its size and every live slot is copied over,
+    so there is no fixed limit on in-flight ops (matching io_uring,
+    where the kernel holds them) short of the 2^32 slots that the
+    32-bit index packed into epoll_event.data can address.
+
+    Reallocation moves slot addresses, which is sound because nothing
+    in the driver retains a slot pointer across a call that can
+    allocate: tick() re-derives the pointer from the event's index for
+    every event, _dispatch_op and the timer path copy what they need
+    and free the slot BEFORE firing the callback (the only place user
+    code, and hence a nested submit_*, can run), submit_cancel scans
+    without allocating, and each submit_* fills its freshly allocated
+    slot and registers it without allocating again. Everything that
+    outlives a call refers to slots by index (timer heap, epoll data),
+    never by address.
     """
 
     var _slots: Pointer[_EpollOp, MutUntrackedOrigin]
@@ -272,10 +366,11 @@ struct _OpPool(Movable):
     var _capacity: Int
 
     def __init__(out self, capacity: Int):
-        """Create a pool with the given number of pre-allocated slots.
+        """Create a pool with the given number of initial slots.
 
         Args:
-            capacity: Number of op slots to pre-allocate.
+            capacity: Number of op slots to allocate up front; the pool
+                      doubles from here whenever it runs out.
         """
         self._capacity = capacity
         self._slots = unsafe_alloc[_EpollOp](capacity)
@@ -297,32 +392,75 @@ struct _OpPool(Movable):
         self._slots.unsafe_free()
 
     def alloc(mut self) raises -> Pointer[_EpollOp, MutUntrackedOrigin]:
-        """Allocate a slot from the pool.
+        """Allocate a slot, growing the pool if none is free.
 
-        Returns a pointer to the allocated _EpollOp. The caller must
-        set all relevant fields before registering with epoll.
+        Returns a pointer to the allocated _EpollOp. The caller must set
+        all relevant fields before registering with epoll and must not
+        keep the pointer across another alloc(), which may move the
+        slot array (see the struct docstring).
 
         Raises:
-            If the pool is exhausted.
+            If the pool already holds 2^32 slots, the most the 32-bit
+            slot index in epoll_event.data can address.
         """
         if len(self._free) == 0:
-            raise "op pool exhausted (capacity=" + String(self._capacity) + ")"
+            self._grow()
         var idx = self._free.pop()
         self._slots[unsafe_offset=idx].active = True
         return self._slots.unsafe_offset(idx)
 
+    def _grow(mut self) raises:
+        """Double the slot array, preserving every existing slot.
+
+        Live and free slots alike are copied to the new array with
+        their pool_index, generation and active flag intact, so packed
+        epoll event data and timer heap entries stay valid. The added
+        slots are pushed onto the free list and the old array is
+        released.
+
+        Raises:
+            If the pool is already at the 2^32-slot ceiling.
+        """
+        if self._capacity >= _MAX_POOL_CAPACITY:
+            raise "op pool exhausted (2^32 slot limit of epoll_event.data)"
+        var new_capacity = min(self._capacity * 2, _MAX_POOL_CAPACITY)
+        var new_slots = unsafe_alloc[_EpollOp](new_capacity)
+        for i in range(self._capacity):
+            new_slots.unsafe_offset(i).unsafe_write(
+                self._slots[unsafe_offset=i]
+            )
+        for i in range(self._capacity, new_capacity):
+            new_slots.unsafe_offset(i).unsafe_write(_EpollOp(pool_index=i))
+            self._free.append(i)
+        self._slots.unsafe_free()
+        self._slots = new_slots
+        self._capacity = new_capacity
+
     def free(mut self, index: Int):
-        """Return a slot to the pool.
+        """Return a slot to the pool and bump its generation.
+
+        Freeing a slot that is not active is a double free; it is
+        rejected by debug_assert so the free list can never hold the
+        same index twice.
 
         Args:
             index: The pool index of the slot to free.
         """
+        debug_assert(
+            self._slots[unsafe_offset=index].active,
+            "double free of op pool slot",
+        )
         self._slots[unsafe_offset=index].active = False
+        self._slots[unsafe_offset=index].generation += 1
         self._free.append(index)
 
     def free_count(self) -> Int:
-        """Return the number of available slots."""
+        """Return the number of free slots in the current array."""
         return len(self._free)
+
+    def capacity(self) -> Int:
+        """Return the number of slots in the current array, free or not."""
+        return self._capacity
 
     def slot_ptr(self, index: Int) -> Pointer[_EpollOp, MutUntrackedOrigin]:
         """Return a pointer to the slot at the given index.
@@ -336,6 +474,43 @@ struct _OpPool(Movable):
         return self._slots.unsafe_offset(index)
 
 
+# ── Heap-boxed mutable state ─────────────────────────────────────────────────
+
+
+struct _DriverState(Movable):
+    """All driver state that a Completion callback may mutate.
+
+    Callbacks run inside tick(), which holds `mut self` on the driver,
+    yet they may legally call submit_* on that same driver through a
+    raw pointer. Because `mut` grants exclusive access, the compiler
+    may keep the driver's inline fields (e.g. a List length) in
+    registers across the callback call and never observe the
+    callback's writes. Boxing this state on the heap forces every
+    access to go through a loaded pointer, so post-callback reads see
+    memory as it really is.
+    """
+
+    var pool: _OpPool
+    var timers: _TimerHeap
+    var ready: List[_ReadyEntry]
+
+    def __init__(out self, *, capacity: Int):
+        """Create the pool, an empty timer heap and an empty ready queue.
+
+        Args:
+            capacity: Number of op slots in the pool.
+        """
+        self.pool = _OpPool(capacity=capacity)
+        self.timers = _TimerHeap()
+        self.ready = List[_ReadyEntry]()
+
+    def __init__(out self, *, deinit move: Self):
+        """Move constructor."""
+        self.pool = move.pool^
+        self.timers = move.timers^
+        self.ready = move.ready^
+
+
 # ── EpollCompletionDriver ────────────────────────────────────────────────────
 
 
@@ -343,62 +518,68 @@ struct EpollCompletionDriver(IoDriver):
     """IoDriver that emulates completion semantics over Linux epoll.
 
     Each submit_* allocates an _EpollOp from a slab pool, stores the
-    operation kind, buffer pointers, and Completion pointer. The op's
-    address goes into epoll_event.data. On tick(), epoll_wait() fires,
-    the op is recovered from data, blocking I/O is performed, and the
-    Completion callback is invoked.
+    operation kind, buffer pointers, and Completion pointer. The slot
+    index and generation go into epoll_event.data. On tick(),
+    epoll_wait() fires, the op is recovered and validated, the
+    non-blocking I/O is performed, and the Completion callback is
+    invoked.
 
     Operations that complete without epoll (nop, cancel, immediate
-    connect success) enqueue a _ReadyEntry. At the start of tick(),
+    connect result) enqueue a _ReadyEntry. At the start of tick(),
     the ready queue is drained before calling epoll_wait(). ALL
     callbacks fire during tick() -- never during submit_*.
+
+    Callbacks may call submit_* on this driver; see _DriverState for
+    why the mutable state is heap-boxed to make that sound.
     """
 
     var _epfd: Int32
     var _events: Pointer[epoll_event, MutUntrackedOrigin]
     var _max_events: Int32
-    var _pool: _OpPool
-    var _timers: _TimerHeap
-    var _ready: List[_ReadyEntry]
+    var _state: Pointer[_DriverState, MutUntrackedOrigin]
 
     def __init__(out self, *, max_events: Int32 = 64) raises:
         """Create an epoll completion driver.
 
+        The op pool is independent of `max_events`: it starts with 64
+        slots and doubles whenever a submit finds none free, so the
+        number of in-flight ops is unbounded (up to the 2^32 slots the
+        epoll event data can index), as with io_uring. `max_events`
+        only bounds how many events one epoll_wait call, and so one
+        tick(), can dispatch.
+
         Args:
-            max_events: Maximum events per epoll_wait call and initial
-                        pool capacity (default 64).
+            max_events: Maximum events per epoll_wait call (default 64).
         """
         self._epfd = epoll_create()
         self._max_events = max_events
         self._events = unsafe_alloc[epoll_event](Int(max_events))
-        self._pool = _OpPool(capacity=Int(max_events))
-        self._timers = _TimerHeap()
-        self._ready = List[_ReadyEntry]()
+        self._state = unsafe_alloc[_DriverState](1)
+        self._state.unsafe_write(
+            _DriverState(capacity=_INITIAL_POOL_CAPACITY)
+        )
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
+        """Move constructor. Copies the state pointer for address stability."""
         self._epfd = move._epfd
         self._events = move._events
         self._max_events = move._max_events
-        self._pool = move._pool^
-        self._timers = move._timers^
-        self._ready = move._ready^
+        self._state = move._state
 
     def __deinit__(deinit self):
-        """Release all resources: dup'd fds, epoll fd, event buffer."""
+        """Release all resources: dup'd fds, epoll fd, event buffer, state."""
         # Close dup'd fds for active ops.
-        for i in range(self._pool._capacity):
-            if self._pool._slots[unsafe_offset=i].active:
-                if self._pool._slots[unsafe_offset=i].dup_fd != Int32(-1):
-                    close_unchecked(
-                        unsafe_fd=self._pool._slots[unsafe_offset=i].dup_fd
-                    )
+        for i in range(self._state[].pool.capacity()):
+            var op = self._state[].pool.slot_ptr(i)
+            if op[].active and op[].dup_fd != Int32(-1):
+                close_unchecked(unsafe_fd=op[].dup_fd)
         # Close the epoll instance.
         close_unchecked(unsafe_fd=self._epfd)
         # Free the event buffer.
         self._events.unsafe_free()
-        # _pool, _timers, _ready drop naturally (their destructors
-        # free internal memory).
+        # Destroy the boxed state (pool, timers, ready queue) and free it.
+        self._state.unsafe_deinit_pointee()
+        self._state.unsafe_free()
 
     def backend(self) -> Backend:
         """Return Backend.EPOLL."""
@@ -408,6 +589,16 @@ struct EpollCompletionDriver(IoDriver):
         """Drain ready queue, poll epoll, fire expired timers.
 
         All Completion callbacks fire here -- never during submit_*.
+
+        Callbacks may themselves call submit_* on this driver. Ready
+        entries they append (nop, cancel, immediate connect) are kept
+        and fire on the NEXT tick, mirroring io_uring where an SQE
+        queued from a callback is not entered until the following
+        tick. Only the entries present when the drain started fire in
+        this tick, so a callback that re-submits on every completion
+        cannot spin the drain forever. Epoll events whose op was
+        cancelled or completed by an earlier callback in the same
+        batch are recognised by their stale generation and skipped.
 
         Args:
             wait: If True, block until at least one event or timer.
@@ -419,37 +610,32 @@ struct EpollCompletionDriver(IoDriver):
         """
         var dispatched = 0
 
-        # 1. Drain deferred-ready queue.
-        for i in range(len(self._ready)):
-            self._ready[i].completion[].fire(
-                self._ready[i].result, self._ready[i].flags
-            )
+        # 1. Drain the deferred-ready queue. The bound is fixed before
+        #    firing; entries appended by callbacks land past it and are
+        #    preserved for the next tick instead of being cleared away.
+        #    Each entry is copied out first because a callback may
+        #    append and reallocate the queue's buffer.
+        var ready_count = len(self._state[].ready)
+        for i in range(ready_count):
+            var entry = self._state[].ready[i]
+            entry.completion[].fire(entry.result, entry.flags)
             dispatched += 1
-        self._ready.clear()
+        self._drop_ready_prefix(ready_count)
 
         # 2. Compute epoll timeout from timer heap.
         # If we already dispatched from the ready queue, don't block —
         # the caller has work to process.
         var effective_wait = wait and dispatched == 0
-        var now_ns = _monotonic_ns()
-        var next_deadline = self._timers.peek_deadline()
-        var timeout_ms: Int32
-        if not effective_wait and next_deadline == Int64.MAX:
-            timeout_ms = 0
-        elif next_deadline == Int64.MAX:
-            timeout_ms = -1
-        else:
-            var remaining_ns = next_deadline - now_ns
-            var remaining_ms = remaining_ns // 1_000_000
-            if remaining_ms <= 0:
-                remaining_ms = 0
-            if not effective_wait and remaining_ms > 0:
-                remaining_ms = 0
-            # Sub-millisecond remainder: round up to 1ms to avoid
-            # busy-spinning when the deadline is < 1ms away.
-            if effective_wait and remaining_ms == 0 and remaining_ns > 0:
-                remaining_ms = 1
-            timeout_ms = Int32(remaining_ms)
+        var next_deadline = self._state[].timers.peek_deadline()
+        var has_deadline = next_deadline != Int64.MAX
+        var remaining_ns = Int64(0)
+        if has_deadline:
+            remaining_ns = next_deadline - _monotonic_ns()
+        var timeout_ms = _epoll_wait_timeout_ms(
+            wait=effective_wait,
+            has_deadline=has_deadline,
+            remaining_ns=remaining_ns,
+        )
 
         # 3. epoll_wait.
         var n = epoll_wait(
@@ -459,45 +645,96 @@ struct EpollCompletionDriver(IoDriver):
             timeout=timeout_ms,
         )
 
-        # 4. Dispatch epoll events.
+        # 4. Dispatch epoll events, skipping stale ones.
         for i in range(Int(n)):
             var data = self._events[unsafe_offset=i].data()
-            var op = Pointer[_EpollOp, MutUntrackedOrigin](
-                unsafe_from_address=Int(data)
-            )
+            var index = Int(data & 0xFFFF_FFFF)
+            var generation = UInt32(data >> 32)
+            var op = self._state[].pool.slot_ptr(index)
+            if not op[].active or op[].generation != generation:
+                # The op behind this event was cancelled (or completed
+                # and its slot re-used) by a callback earlier in this
+                # batch; its completion has already been accounted for.
+                continue
             dispatched += self._dispatch_op(op)
 
-        # 5. Fire expired timers.
-        now_ns = _monotonic_ns()
-        while self._timers.peek_deadline() <= now_ns:
-            var entry = self._timers.pop()
-            var op = self._pool.slot_ptr(entry.pool_index)
-            op[].completion[].fire(
-                -Int(ETIME), UInt32(0)
-            )
-            self._pool.free(entry.pool_index)
+        # 5. Fire expired timers. Free the slot BEFORE firing so a
+        #    callback that cancels this very completion sees "not found"
+        #    rather than freeing the slot a second time.
+        var now_ns = _monotonic_ns()
+        while self._state[].timers.peek_deadline() <= now_ns:
+            var entry = self._state[].timers.pop()
+            var completion = self._state[].pool.slot_ptr(
+                entry.pool_index
+            )[].completion
+            self._state[].pool.free(entry.pool_index)
+            completion[].fire(-Int(ETIME), UInt32(0))
             dispatched += 1
 
         return dispatched
 
+    def _drop_ready_prefix(mut self, count: Int):
+        """Remove the first `count` entries of the ready queue.
+
+        Entries appended past `count` by callbacks during the drain are
+        kept, in order, so they fire on the next tick. The common case
+        (nothing appended) is a plain clear with no allocation.
+
+        Args:
+            count: Number of leading entries that have already fired.
+        """
+        var total = len(self._state[].ready)
+        if total <= count:
+            self._state[].ready.clear()
+            return
+        var remaining = List[_ReadyEntry](capacity=total - count)
+        for i in range(count, total):
+            remaining.append(self._state[].ready[i])
+        self._state[].ready = remaining^
+
+    def _epoll_remove(self, fd: Int32):
+        """Remove fd from the epoll interest list, ignoring errors.
+
+        Used when an op completes or is cancelled. ENOENT (fd already
+        gone, e.g. closed by the user) is harmless here.
+
+        Args:
+            fd: The tracked fd (the original or its dup) to remove.
+        """
+        var dummy_ev = epoll_event()
+        _ = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
+            self._epfd,
+            Int32(EPOLL_CTL_DEL),
+            fd,
+            Pointer(to=dummy_ev),
+        )
+
     def _dispatch_op(
         mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]
     ) -> Int:
-        """Perform blocking I/O for the given op and fire its callback.
+        """Perform non-blocking I/O for the given op and fire its callback.
 
-        Called from tick() when epoll_wait returns an event whose data
-        field points to this _EpollOp. The actual I/O syscall happens
-        here (not during submit_*).
+        Called from tick() when epoll_wait returns a live event for this
+        _EpollOp. The actual I/O syscall happens here (not during
+        submit_*). If the syscall reports EAGAIN (spurious wake-up, or
+        another op on a dup of the same fd consumed the readiness), the
+        op stays registered and nothing fires.
+
+        The slot is detached from epoll, released to the pool and its
+        dup'd fd closed BEFORE the callback fires, so a callback that
+        cancels this same completion sees "not found" and a callback
+        that submits a new op may legitimately re-use the slot.
 
         Args:
-            op: Pointer to the _EpollOp recovered from epoll_event.data.
+            op: Pointer to the live _EpollOp recovered from epoll_event.data.
 
         Returns:
             1 if a completion was dispatched, 0 if EAGAIN (op stays pending).
         """
+        var kind = op[].kind
         var result = Int(0)
 
-        if op[].kind is _OpKind.RECV:
+        if kind is _OpKind.RECV:
             var res = syscall[__NR_recvfrom, Scalar[DType.int64]](
                 op[].fd,
                 Pointer[UInt8, MutUntrackedOrigin](
@@ -512,7 +749,7 @@ struct EpollCompletionDriver(IoDriver):
                 return 0
             result = Int(res)
 
-        elif op[].kind is _OpKind.SEND:
+        elif kind is _OpKind.SEND:
             var res = syscall[__NR_sendto, Scalar[DType.int64]](
                 op[].fd,
                 Pointer[UInt8, MutUntrackedOrigin](
@@ -527,7 +764,7 @@ struct EpollCompletionDriver(IoDriver):
                 return 0
             result = Int(res)
 
-        elif op[].kind is _OpKind.CONNECT:
+        elif kind is _OpKind.CONNECT:
             var optval = Int32(0)
             var optlen = Int32(4)
             var gso_res = syscall[__NR_getsockopt, Scalar[DType.int64]](
@@ -544,16 +781,20 @@ struct EpollCompletionDriver(IoDriver):
             else:
                 result = -Int(optval)
 
-        elif op[].kind is _OpKind.ACCEPT:
+        elif kind is _OpKind.ACCEPT:
             var res = syscall[__NR_accept4, Scalar[DType.int64]](
                 op[].fd,
                 UInt(0),
                 UInt(0),
                 Int32(O_CLOEXEC | O_NONBLOCK),
             )
+            if res == -Scalar[DType.int64](EAGAIN):
+                # Another accept on (a dup of) this listener took the
+                # connection; stay armed for the next one.
+                return 0
             result = Int(res)
 
-        elif op[].kind is _OpKind.RECVMSG:
+        elif kind is _OpKind.RECVMSG:
             var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
                 op[].fd,
                 Pointer[NoneType, MutUntrackedOrigin](
@@ -565,7 +806,7 @@ struct EpollCompletionDriver(IoDriver):
                 return 0
             result = Int(res)
 
-        elif op[].kind is _OpKind.SENDMSG:
+        elif kind is _OpKind.SENDMSG:
             var res = syscall[__NR_sendmsg, Scalar[DType.int64]](
                 op[].fd,
                 Pointer[NoneType, MutUntrackedOrigin](
@@ -580,30 +821,20 @@ struct EpollCompletionDriver(IoDriver):
         else:
             debug_assert(False, "unexpected op kind in _dispatch_op")
 
-        # Remove fd from epoll before freeing the slot — otherwise the
-        # stale _EpollOp pointer in epoll_event.data causes use-after-free
-        # if new data arrives on the fd.
-        if op[].kind is not _OpKind.TIMEOUT:
-            var tracked_fd = op[].fd
-            if op[].dup_fd != Int32(-1):
-                tracked_fd = op[].dup_fd
-            var dummy_ev = epoll_event()
-            _ = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
-                self._epfd,
-                Int32(EPOLL_CTL_DEL),
-                tracked_fd,
-                Pointer(to=dummy_ev),
-            )
+        # Copy what the callback needs, then release everything before
+        # firing. Remove the fd from epoll first: a stale registration
+        # would otherwise wake on the next data with a dead slot index.
+        var completion = op[].completion
+        var dup_fd = op[].dup_fd
+        var tracked_fd = op[].fd
+        if dup_fd != Int32(-1):
+            tracked_fd = dup_fd
+        self._epoll_remove(tracked_fd)
+        if dup_fd != Int32(-1):
+            close_unchecked(unsafe_fd=dup_fd)
+        self._state[].pool.free(op[].pool_index)
 
-        # Fire the callback.
-        op[].completion[].fire(result, UInt32(0))
-
-        # Close dup'd fd if applicable.
-        if op[].dup_fd != Int32(-1):
-            close_unchecked(unsafe_fd=op[].dup_fd)
-
-        # Return slot to pool.
-        self._pool.free(op[].pool_index)
+        completion[].fire(result, UInt32(0))
         return 1
 
     def _register_op(
@@ -617,37 +848,67 @@ struct EpollCompletionDriver(IoDriver):
         register the duplicate instead. The dup'd fd is stored in
         op[].dup_fd and closed after I/O completion.
 
+        If registration fails (e.g. EPERM for a file that cannot be
+        polled, or dup failure), the slot is returned to the pool and
+        any dup'd fd is closed before the error propagates, so a
+        failed submit leaves the driver exactly as it was.
+
+        Args:
+            op: Pointer to the freshly allocated _EpollOp to register.
+            events: Epoll event flags (EPOLLIN and/or EPOLLOUT).
+                    EPOLLET is added automatically.
+
+        Raises:
+            If epoll_ctl or dup fails.
+        """
+        try:
+            self._add_to_epoll(op, events)
+        except e:
+            if op[].dup_fd != Int32(-1):
+                close_unchecked(unsafe_fd=op[].dup_fd)
+                op[].dup_fd = Int32(-1)
+            self._state[].pool.free(op[].pool_index)
+            raise e
+
+    def _add_to_epoll(
+        mut self,
+        op: Pointer[_EpollOp, MutUntrackedOrigin],
+        events: UInt32,
+    ) raises:
+        """Issue the epoll_ctl(ADD) for op, dup'ing the fd on EEXIST.
+
         Args:
             op: Pointer to the _EpollOp to register.
             events: Epoll event flags (EPOLLIN and/or EPOLLOUT).
                     EPOLLET is added automatically.
+
+        Raises:
+            If epoll_ctl or dup fails. On dup failure op[].dup_fd is
+            left at -1; on a failed second epoll_ctl it holds the
+            dup'd fd for the caller to close.
         """
         var ev = epoll_event(
-            events=events | UInt32(EPOLLET), data=UInt64(Int(op))
+            events=events | UInt32(EPOLLET), data=_event_data(op)
         )
-        var tracked_fd = op[].fd
         var res = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
             self._epfd,
             Int32(EPOLL_CTL_ADD),
-            tracked_fd,
+            op[].fd,
             Pointer(to=ev),
         )
         if res == -Scalar[DType.int64](EEXIST):
             # fd already registered -- dup and retry.
             var dup_res = syscall[__NR_dup, Scalar[DType.int64]](op[].fd)
-            tracked_fd = unsafe_decode_result[DType.int32](dup_res)
-            op[].dup_fd = tracked_fd
-            ev = epoll_event(
-                events=events | UInt32(EPOLLET), data=UInt64(Int(op))
-            )
+            var dup_fd = unsafe_decode_result[DType.int32](dup_res)
+            op[].dup_fd = dup_fd
             var res2 = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
                 self._epfd,
                 Int32(EPOLL_CTL_ADD),
-                tracked_fd,
+                dup_fd,
                 Pointer(to=ev),
             )
             _check_for_errors(res2)
-        elif res < 0:
+        else:
             _check_for_errors(res)
 
     # ── Submit methods ────────────────────────────────────────────────────
@@ -660,7 +921,7 @@ struct EpollCompletionDriver(IoDriver):
         Args:
             c: Pointer to the caller-owned Completion token.
         """
-        self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
+        self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
 
     def submit_connect(
         mut self,
@@ -669,34 +930,61 @@ struct EpollCompletionDriver(IoDriver):
         addr_len: UInt64,
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
-        """Queue a connect. Tries non-blocking connect first.
+        """Queue a connect. Issues a non-blocking connect(2) first.
 
-        If connect returns EINPROGRESS, registers for EPOLLOUT and
-        defers to tick(). Immediate success enqueues to the ready
-        queue.
+        io_uring connects asynchronously whatever the socket's blocking
+        mode, so this driver does too: if the socket is blocking,
+        O_NONBLOCK is set for the duration of connect(2) and the
+        original flags are restored right after (an in-progress
+        handshake keeps progressing regardless). If connect returns
+        EINPROGRESS, the fd is registered for EPOLLOUT and the result
+        is read from SO_ERROR in tick(). An immediate result (success
+        or an error such as -ECONNREFUSED) is enqueued to the ready
+        queue and fires on the next tick().
 
         Args:
             fd: The socket file descriptor.
             addr: Pointer to the sockaddr structure.
             addr_len: Size in bytes of the sockaddr structure.
             c: Pointer to the caller-owned Completion token.
+
+        Raises:
+            If epoll registration fails.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.CONNECT
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].completion = c
 
-        var res = syscall[__NR_connect, Scalar[DType.int64]](
-            op[].fd, addr, addr_len
+        var flags = syscall[__NR_fcntl, Scalar[DType.int64]](
+            fd, Int32(F_GETFL), Int32(0)
         )
+        var force_nonblocking = (
+            flags >= 0 and (flags & Scalar[DType.int64](O_NONBLOCK)) == 0
+        )
+        if force_nonblocking:
+            _ = syscall[__NR_fcntl, Scalar[DType.int64]](
+                fd,
+                Int32(F_SETFL),
+                flags.cast[DType.int32]() | Int32(O_NONBLOCK),
+            )
+        var res = syscall[__NR_connect, Scalar[DType.int64]](
+            fd, addr, addr_len
+        )
+        if force_nonblocking:
+            _ = syscall[__NR_fcntl, Scalar[DType.int64]](
+                fd, Int32(F_SETFL), flags.cast[DType.int32]()
+            )
+
         if res == -Scalar[DType.int64](EINPROGRESS):
             self._register_op(op, UInt32(EPOLLOUT))
         else:
             # Immediate result (success or error like -ECONNREFUSED).
-            # Deliver as a completion callback, matching io_uring CQE semantics.
-            self._ready.append(_ReadyEntry(c, Int(res), UInt32(0)))
-            self._pool.free(op[].pool_index)
+            # Deliver as a completion callback, matching io_uring CQE
+            # semantics.
+            self._state[].pool.free(op[].pool_index)
+            self._state[].ready.append(_ReadyEntry(c, Int(res), UInt32(0)))
 
     def submit_timeout(
         mut self,
@@ -717,13 +1005,13 @@ struct EpollCompletionDriver(IoDriver):
         var deadline_ns = _monotonic_ns() + (
             ts_ptr[].tv_sec * 1_000_000_000 + ts_ptr[].tv_nsec
         )
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.TIMEOUT
         op[].fd = Int32(-1)
         op[].dup_fd = Int32(-1)
         op[].completion = c
         op[].deadline_ns = deadline_ns
-        self._timers.push(
+        self._state[].timers.push(
             _TimerEntry(
                 deadline_ns=deadline_ns, pool_index=op[].pool_index
             )
@@ -736,65 +1024,46 @@ struct EpollCompletionDriver(IoDriver):
     ) raises:
         """Cancel a previously submitted operation.
 
-        Finds the target by Completion pointer comparison. If found,
-        the target receives -ECANCELED and the cancel op succeeds
-        with result 0. Both fire during the next tick().
+        Finds the target by Completion pointer comparison among the
+        pending ops. If found, the target receives -ECANCELED and the
+        cancel op succeeds with result 0. If the target is not pending
+        (already completed, already cancelled, or never submitted) the
+        cancel op receives -ENOENT, matching io_uring. Both fire
+        during the next tick().
 
         Args:
             target: Pointer to the Completion of the op to cancel.
             c: Pointer to the Completion for the cancel itself.
         """
-        for i in range(self._pool._capacity):
-            if not self._pool._slots[unsafe_offset=i].active:
+        for i in range(self._state[].pool.capacity()):
+            var op = self._state[].pool.slot_ptr(i)
+            if not op[].active:
                 continue
-            if Int(self._pool._slots[unsafe_offset=i].completion) != Int(
-                target
-            ):
+            if Int(op[].completion) != Int(target):
                 continue
 
-            # Found the target op.
-            if self._pool._slots[unsafe_offset=i].kind is _OpKind.TIMEOUT:
-                # Remove from timer heap.
-                _ = self._timers.remove_by_pool_index(i)
+            # Found the pending target op.
+            if op[].kind is _OpKind.TIMEOUT:
+                _ = self._state[].timers.remove_by_pool_index(i)
             else:
-                # Remove from epoll.
-                var tracked_fd = self._pool._slots[unsafe_offset=i].fd
-                if (
-                    self._pool._slots[unsafe_offset=i].dup_fd
-                    != Int32(-1)
-                ):
-                    tracked_fd = self._pool._slots[
-                        unsafe_offset=i
-                    ].dup_fd
-                var dummy_ev = epoll_event()
-                _ = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
-                    self._epfd,
-                    Int32(EPOLL_CTL_DEL),
-                    tracked_fd,
-                    Pointer(to=dummy_ev),
-                )
-                if (
-                    self._pool._slots[unsafe_offset=i].dup_fd
-                    != Int32(-1)
-                ):
-                    close_unchecked(
-                        unsafe_fd=self._pool._slots[
-                            unsafe_offset=i
-                        ].dup_fd
-                    )
+                var tracked_fd = op[].fd
+                if op[].dup_fd != Int32(-1):
+                    tracked_fd = op[].dup_fd
+                self._epoll_remove(tracked_fd)
+                if op[].dup_fd != Int32(-1):
+                    close_unchecked(unsafe_fd=op[].dup_fd)
 
-            # Enqueue cancelled target and cancel success.
-            self._ready.append(
-                _ReadyEntry(
-                    target, -Int(ECANCELED), UInt32(0)
-                )
+            self._state[].pool.free(i)
+            self._state[].ready.append(
+                _ReadyEntry(target, -Int(ECANCELED), UInt32(0))
             )
-            self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
-            self._pool.free(i)
+            self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
             return
 
-        # Target not found -- already completed.
-        self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
+        # Target not pending: nothing to cancel.
+        self._state[].ready.append(
+            _ReadyEntry(c, -Int(ENOENT), UInt32(0))
+        )
 
     def submit_accept(
         mut self,
@@ -807,7 +1076,7 @@ struct EpollCompletionDriver(IoDriver):
             fd: The listening socket file descriptor.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.ACCEPT
         op[].fd = fd
         op[].dup_fd = Int32(-1)
@@ -830,7 +1099,7 @@ struct EpollCompletionDriver(IoDriver):
             len: Maximum bytes to receive.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.RECV
         op[].fd = fd
         op[].dup_fd = Int32(-1)
@@ -854,7 +1123,7 @@ struct EpollCompletionDriver(IoDriver):
             len: Number of bytes to send.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.SEND
         op[].fd = fd
         op[].dup_fd = Int32(-1)
@@ -877,7 +1146,7 @@ struct EpollCompletionDriver(IoDriver):
                  completion fires.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.RECVMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
@@ -899,7 +1168,7 @@ struct EpollCompletionDriver(IoDriver):
                  completion fires.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._pool.alloc()
+        var op = self._state[].pool.alloc()
         op[].kind = _OpKind.SENDMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
@@ -908,9 +1177,20 @@ struct EpollCompletionDriver(IoDriver):
         self._register_op(op, UInt32(EPOLLOUT))
 
     def sq_space(mut self) -> Int:
-        """Return the number of available op pool slots.
+        """Return a lower bound on submissions that cannot raise for space.
+
+        io_uring reports its free SQ ring entries. This driver's op pool
+        grows on demand, so the honest counterpart is the free slots
+        plus the slots the next doubling adds: at least that many
+        submit_* calls will succeed. The value decreases as ops are
+        submitted and recovers as they complete or are cancelled, and
+        it never reaches 0 below the 2^32-slot ceiling, so callers
+        that gate a multi-op submit (connect + timeout) on this are
+        never refused spuriously.
 
         Returns:
-            The number of slots currently available for submission.
+            Free slots plus the slots one growth step would add.
         """
-        return self._pool.free_count()
+        return (
+            self._state[].pool.free_count() + self._state[].pool.capacity()
+        )

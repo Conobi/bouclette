@@ -7,6 +7,7 @@ from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
 from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.backend import Backend
 from boucle.handle import RawHandle
 
 
@@ -38,8 +39,12 @@ struct ResultTracker:
         self_ptr[].fired = True
 
 
-def test_driver_recv_send() raises:
-    """Run recv/send integration test."""
+def test_driver_recv_send(backend: Backend) raises:
+    """Run recv/send integration test on the given backend.
+
+    Args:
+        backend: The completion backend to force (IO_URING or EPOLL).
+    """
     # Create a connected socket pair (AF_UNIX=1, SOCK_STREAM=1).
     var fds = unsafe_alloc[Int32](2)
     var sp_res = external_call["socketpair", Int32](
@@ -59,7 +64,7 @@ def test_driver_recv_send() raises:
     fds.unsafe_free()
 
     # Set up driver.
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16, backend=backend)
 
     # Prepare send buffer: "hello" (5 bytes).
     var send_buf = unsafe_alloc[UInt8](5)
@@ -149,6 +154,20 @@ def test_driver_recv_send() raises:
     _ = recv_cmp
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring is available on this kernel."""
+    try:
+        var d = ProbeCompletionDriver(sq_entries=4, backend=Backend.IO_URING)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 def main() raises:
-    test_driver_recv_send()
+    if _has_io_uring():
+        test_driver_recv_send(Backend.IO_URING)
+    else:
+        print("SKIP: io_uring not available")
+    test_driver_recv_send(Backend.EPOLL)
     print("PASS: test_driver_recv_send.mojo")

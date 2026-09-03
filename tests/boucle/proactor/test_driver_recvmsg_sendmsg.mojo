@@ -9,6 +9,7 @@ from boucle.socle.linux.raw import msghdr
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
 from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.backend import Backend
 
 comptime AF_INET = 2
 comptime SOCK_DGRAM = 2
@@ -42,8 +43,12 @@ struct ResultTracker:
         self_ptr[].fired = True
 
 
-def test_driver_recvmsg_sendmsg() raises:
-    """Run recvmsg/sendmsg integration test."""
+def test_driver_recvmsg_sendmsg(backend: Backend) raises:
+    """Run recvmsg/sendmsg integration test on the given backend.
+
+    Args:
+        backend: The completion backend to force (IO_URING or EPOLL).
+    """
     # --- 1. Create two UDP sockets ---
     var fd_a = external_call["socket", Int32](
         Int32(AF_INET), Int32(SOCK_DGRAM), Int32(0)
@@ -97,7 +102,7 @@ def test_driver_recvmsg_sendmsg() raises:
     assert_true(port > 0, "ephemeral port is 0")
 
     # --- 4. Set up driver ---
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = ProbeCompletionDriver(sq_entries=16, backend=backend)
 
     # --- 5. Prepare sendmsg (all heap-allocated for io_uring safety) ---
     # msghdr layout on x86_64 (56 bytes):
@@ -260,6 +265,20 @@ def test_driver_recvmsg_sendmsg() raises:
     _ = recv_cmp
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring is available on this kernel."""
+    try:
+        var d = ProbeCompletionDriver(sq_entries=4, backend=Backend.IO_URING)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 def main() raises:
-    test_driver_recvmsg_sendmsg()
+    if _has_io_uring():
+        test_driver_recvmsg_sendmsg(Backend.IO_URING)
+    else:
+        print("SKIP: io_uring not available")
+    test_driver_recvmsg_sendmsg(Backend.EPOLL)
     print("PASS: test_driver_recvmsg_sendmsg.mojo")
