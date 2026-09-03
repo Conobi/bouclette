@@ -28,10 +28,7 @@ def main() raises:
     server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
     server.listen(Backlog.DEFAULT)
 
-    # Extract the kernel-assigned port (big-endian → host order).
-    var bound = server.local_addr_v4()
-    var be = bound.addr.sin_port
-    var port = ((be << 8) | (be >> 8)) & UInt16(0xFFFF)
+    var port = server.local_addr_v4().port
 
     # Client socket.
     var client = Socket.tcp_v4()

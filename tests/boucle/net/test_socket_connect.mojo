@@ -3,36 +3,18 @@ from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4, SocketAddrV6, SocketAddrStorV4, SocketAddrStorV6
+from boucle.net.addr import SocketAddrV4, SocketAddrV6, SocketAddrStorV4
 from boucle.net.options import Backlog
 
 
 def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
-    var stor = SocketAddrStorV4()
-    var stor_p = Pointer(to=stor)
-    var len = UInt32(16)
-    var len_p = Pointer(to=len)
-    var res = external_call["getsockname", Int32](
-        s.raw(), stor_p, len_p,
-    )
-    if res < 0:
-        raise String("getsockname failed: ", Int(res))
-    var be = stor.addr.sin_port
-    return (UInt16(be) >> 8) | ((UInt16(be) & UInt16(0xFF)) << 8)
+    """Extract the OS-assigned port from a bound IPv4 socket."""
+    return s.local_addr_v4().port
 
 
 def _getsockname_port_v6(ref s: Socket) raises -> UInt16:
-    var stor = SocketAddrStorV6()
-    var stor_p = Pointer(to=stor)
-    var len = UInt32(28)
-    var len_p = Pointer(to=len)
-    var res = external_call["getsockname", Int32](
-        s.raw(), stor_p, len_p,
-    )
-    if res < 0:
-        raise String("getsockname failed: ", Int(res))
-    var be = stor.addr.sin6_port
-    return (UInt16(be) >> 8) | ((UInt16(be) & UInt16(0xFF)) << 8)
+    """Extract the OS-assigned port from a bound IPv6 socket."""
+    return s.local_addr_v6().port
 
 
 def _accept_one(ref server: Socket) raises -> Int32:

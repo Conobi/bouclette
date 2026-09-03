@@ -6,12 +6,10 @@ The receiver calls recv_from to read the datagram and verify the
 sender's source address.
 """
 
-from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4
-from boucle.socle.linux.raw.utils import _to_be
 
 
 def main() raises:
@@ -21,8 +19,7 @@ def main() raises:
     receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
 
     # --- Retrieve the ephemeral port assigned by the kernel ---
-    var local = receiver.local_addr_v4()
-    var local_port = _to_be[DType.uint16, 1](local.addr.sin_port)
+    var local_port = receiver.local_addr_v4().port
     assert_true(Int(local_port) > 0, "ephemeral port should be > 0")
 
     # --- Create UDP sender socket ---
@@ -50,11 +47,10 @@ def main() raises:
     assert_equal(buf[4], UInt8(ord("o")), "byte 4 should be 'o'")
 
     # --- Verify source address is 127.0.0.1 ---
-    var src_ip_ptr = Pointer(to=src_addr.addr.sin_addr_s_addr).unsafe_bitcast[UInt8]()
-    assert_equal(src_ip_ptr[unsafe_offset=0], UInt8(127), "src IP byte 0")
-    assert_equal(src_ip_ptr[unsafe_offset=1], UInt8(0), "src IP byte 1")
-    assert_equal(src_ip_ptr[unsafe_offset=2], UInt8(0), "src IP byte 2")
-    assert_equal(src_ip_ptr[unsafe_offset=3], UInt8(1), "src IP byte 3")
+    assert_equal(Int(src_addr.ip.octets[0]), 127, "src IP byte 0")
+    assert_equal(Int(src_addr.ip.octets[1]), 0, "src IP byte 1")
+    assert_equal(Int(src_addr.ip.octets[2]), 0, "src IP byte 2")
+    assert_equal(Int(src_addr.ip.octets[3]), 1, "src IP byte 3")
 
     # --- Clean up ---
     sender.close()

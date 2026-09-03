@@ -21,6 +21,7 @@ from boucle.socle.linux.raw import (
     __NR_socket,
     __NR_bind,
     __NR_listen,
+    __NR_accept4,
     __NR_setsockopt,
     __NR_connect,
     __NR_recvfrom,
@@ -88,6 +89,29 @@ def _listen(fd: Int32, backlog: Int32) raises:
     """
     var res = syscall[__NR_listen, Scalar[DType.int64]](fd, backlog)
     _check_for_errors(res)
+
+
+@always_inline
+def _raw_accept4(fd: Int32, flags: Int32) raises -> Int32:
+    """Accept a connection via accept4(2) without capturing the peer address.
+
+    Args:
+        fd: Listening socket file descriptor.
+        flags: Flags for the new socket (e.g. SOCK_CLOEXEC | SOCK_NONBLOCK).
+
+    Returns:
+        The accepted socket file descriptor.
+
+    Raises:
+        On syscall failure.
+    """
+    var res = syscall[__NR_accept4, Scalar[DType.int64]](
+        fd,
+        null_ptr[c_void, ImmStaticOrigin](),
+        null_ptr[c_void, ImmStaticOrigin](),
+        flags,
+    )
+    return unsafe_decode_result[DType.int32](res)
 
 
 @always_inline

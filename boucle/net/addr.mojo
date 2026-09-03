@@ -141,6 +141,25 @@ struct SocketAddrStorV4(ImplicitlyCopyable, Movable, SocketAddr):
             unsafe_from_address=Int(Pointer(to=self.addr))
         )
 
+    @always_inline
+    def to_v4(self) -> SocketAddrV4:
+        """Convert kernel sockaddr_in to user-facing SocketAddrV4.
+
+        Byte-swaps port from network order to host order and extracts
+        the four IP octets.
+        """
+        var port = _to_be[DType.uint16, 1](self.addr.sin_port)
+        var octets = Pointer(to=self.addr.sin_addr_s_addr).unsafe_bitcast[
+            UInt8
+        ]()
+        return SocketAddrV4(
+            octets[unsafe_offset=0],
+            octets[unsafe_offset=1],
+            octets[unsafe_offset=2],
+            octets[unsafe_offset=3],
+            port=port,
+        )
+
 
 comptime SocketAddrStorMutV4 = SocketAddrStorAnyMut[SocketAddrStorV4]
 
@@ -219,6 +238,28 @@ struct SocketAddrStorV6(ImplicitlyCopyable, Movable, SocketAddr):
     ) -> Pointer[UInt8, ImmStaticOrigin]:
         return Pointer[UInt8, ImmStaticOrigin](
             unsafe_from_address=Int(Pointer(to=self.addr))
+        )
+
+    @always_inline
+    def to_v6(self) -> SocketAddrV6:
+        """Convert kernel sockaddr_in6 to user-facing SocketAddrV6.
+
+        Byte-swaps port and segments from network order to host order.
+        """
+        var port = _to_be[DType.uint16, 1](self.addr.sin6_port)
+        var src = Pointer(to=self.addr.sin6_addr_a).unsafe_bitcast[UInt32]()
+        var be_segs = SIMD[DType.uint16, 8]()
+        var seg_ptr = Pointer(to=be_segs).unsafe_bitcast[UInt32]()
+        seg_ptr[unsafe_offset=0] = src[unsafe_offset=0]
+        seg_ptr[unsafe_offset=1] = src[unsafe_offset=1]
+        seg_ptr[unsafe_offset=2] = src[unsafe_offset=2]
+        seg_ptr[unsafe_offset=3] = src[unsafe_offset=3]
+        var segs = _to_be[DType.uint16, 8](be_segs)
+        return SocketAddrV6(
+            segs[0], segs[1], segs[2], segs[3],
+            segs[4], segs[5], segs[6], segs[7],
+            port=port,
+            scope_id=self.addr.sin6_scope_id,
         )
 
 

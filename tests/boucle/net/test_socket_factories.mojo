@@ -3,7 +3,7 @@ from std.memory import Pointer
 from std.testing import assert_true, assert_equal
 
 from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrStorV6
+from boucle.net.addr import SocketAddrV6
 from boucle.socle.ptr import null_ptr
 from boucle.socle.linux.raw import (
     SOL_SOCKET,
@@ -33,18 +33,8 @@ def _getsockopt_int(ref s: Socket, level: Int32, optname: Int32) raises -> Int32
 
 
 def _getsockname_port(ref s: Socket) raises -> UInt16:
-    # IPv6 sockaddr is 28 bytes; sin6_port is at offset 2 (network order).
-    var stor = SocketAddrStorV6()
-    var stor_p = Pointer(to=stor)
-    var len = UInt32(28)
-    var len_p = Pointer(to=len)
-    var res = external_call["getsockname", Int32](
-        s.raw(), stor_p, len_p,
-    )
-    if res < 0:
-        raise String("getsockname failed: ", Int(res))
-    var be = stor.addr.sin6_port
-    return (UInt16(be) >> 8) | ((UInt16(be) & UInt16(0xFF)) << 8)
+    """Extract the OS-assigned port from a bound IPv6 socket."""
+    return s.local_addr_v6().port
 
 
 def _check_listener_opts(ref s: Socket) raises:

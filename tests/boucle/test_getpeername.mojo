@@ -12,17 +12,7 @@ from boucle.net.socket import _getpeername
 
 def _getsockname_port_v4(ref s: Socket) raises -> UInt16:
     """Extract the OS-assigned port from a bound IPv4 socket."""
-    var stor = SocketAddrStorV4()
-    var stor_p = Pointer(to=stor)
-    var slen = UInt32(16)
-    var len_p = Pointer(to=slen)
-    var res = external_call["getsockname", Int32](
-        s.raw(), stor_p, len_p,
-    )
-    if res < 0:
-        raise String("getsockname failed: ", Int(res))
-    var be = stor.addr.sin_port
-    return (UInt16(be) >> 8) | ((UInt16(be) & UInt16(0xFF)) << 8)
+    return s.local_addr_v4().port
 
 
 def _accept_one(ref server: Socket) raises -> Int32:

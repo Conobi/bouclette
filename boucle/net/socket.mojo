@@ -32,6 +32,7 @@ from boucle.socle.linux.net.syscalls import (
     _socket,
     _bind,
     _listen,
+    _raw_accept4,
     _setsockopt,
     _connect,
     _recv,
@@ -62,6 +63,7 @@ from boucle.socle.linux.raw import (
     IPPROTO_IPV6,
     IPV6_V6ONLY,
     O_NONBLOCK,
+    O_CLOEXEC,
     MSG_NOSIGNAL,
 )
 from boucle.socle.linux.raw.utils import _to_be
@@ -156,7 +158,7 @@ def _getpeername(fd: RawHandle) raises -> String:
         )
         return String(ip)
     else:
-        raise String("unsupported address family: ", Int(family))
+        raise t"unsupported address family: {Int(family)}"
 
 
 # ===----------------------------------------------------------------------=== #
@@ -278,6 +280,17 @@ struct Socket(Movable):
     def listen(self, backlog: Backlog) raises:
         """Marks the socket as passive for accepting connections."""
         _sys_listen(self._handle, backlog)
+
+    def accept(self) raises -> Self:
+        """Accept a connection via accept4(2).
+
+        Returns a new non-blocking, close-on-exec Socket for the
+        accepted connection. Blocks on a blocking listening socket
+        until a connection arrives.
+        """
+        var flags = Int32(O_NONBLOCK) | Int32(O_CLOEXEC)
+        var fd = _raw_accept4(self._handle.raw(), flags)
+        return Self(OwnedHandle(raw=fd))
 
     def set_reuse_addr(self, value: Bool = True) raises:
         """Sets `SO_REUSEADDR` on the socket."""
@@ -479,12 +492,12 @@ struct Socket(Movable):
 
     def recv_from[
         origin: MutOrigin,
-    ](self, buf: Span[UInt8, origin]) raises -> Tuple[Int, SocketAddrStorV4]:
+    ](self, buf: Span[UInt8, origin]) raises -> Tuple[Int, SocketAddrV4]:
         """Receive a datagram and the sender's address via recvfrom(2).
 
         Designed for unconnected UDP sockets. Returns a tuple of bytes
-        read and the sender's ``SocketAddrStorV4`` so the caller can
-        reply to the correct peer.
+        read and the sender's SocketAddrV4 so the caller can reply to
+        the correct peer.
 
         Args:
             buf: Mutable byte span to receive into.
@@ -512,15 +525,15 @@ struct Socket(Movable):
         )
         if n < 0:
             raise String(n)
-        var result = SocketAddrStorV4()
-        result.addr = addr
-        return (n, result)
+        var stor = SocketAddrStorV4()
+        stor.addr = addr
+        return (n, stor.to_v4())
 
     def shutdown(self, how: Shutdown) raises:
         """Shut down read, write, or both directions."""
         _shutdown(self._handle._raw, how.value)
 
-    def local_addr_v4(self) raises -> SocketAddrStorV4:
+    def local_addr_v4(self) raises -> SocketAddrV4:
         """Return the local IPv4 address bound to this socket."""
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
@@ -531,11 +544,11 @@ struct Socket(Movable):
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
         )
-        var result = SocketAddrStorV4()
-        result.addr = addr
-        return result
+        var stor = SocketAddrStorV4()
+        stor.addr = addr
+        return stor.to_v4()
 
-    def local_addr_v6(self) raises -> SocketAddrStorV6:
+    def local_addr_v6(self) raises -> SocketAddrV6:
         """Return the local IPv6 address bound to this socket."""
         var addr = sockaddr_in6()
         var addrlen = socklen_t(size_of[sockaddr_in6]())
@@ -546,11 +559,11 @@ struct Socket(Movable):
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
         )
-        var result = SocketAddrStorV6()
-        result.addr = addr
-        return result
+        var stor = SocketAddrStorV6()
+        stor.addr = addr
+        return stor.to_v6()
 
-    def peer_addr_v4(self) raises -> SocketAddrStorV4:
+    def peer_addr_v4(self) raises -> SocketAddrV4:
         """Return the peer IPv4 address of a connected socket."""
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
@@ -561,11 +574,11 @@ struct Socket(Movable):
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
         )
-        var result = SocketAddrStorV4()
-        result.addr = addr
-        return result
+        var stor = SocketAddrStorV4()
+        stor.addr = addr
+        return stor.to_v4()
 
-    def peer_addr_v6(self) raises -> SocketAddrStorV6:
+    def peer_addr_v6(self) raises -> SocketAddrV6:
         """Return the peer IPv6 address of a connected socket."""
         var addr = sockaddr_in6()
         var addrlen = socklen_t(size_of[sockaddr_in6]())
@@ -576,9 +589,9 @@ struct Socket(Movable):
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
         )
-        var result = SocketAddrStorV6()
-        result.addr = addr
-        return result
+        var stor = SocketAddrStorV6()
+        stor.addr = addr
+        return stor.to_v6()
 
     def close(mut self) raises:
         """Explicitly close the socket. Idempotent -- safe to call before destructor."""
