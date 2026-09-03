@@ -27,7 +27,7 @@ def epoll_create() raises -> Int32:
     """Creates an epoll instance with CLOEXEC flag."""
     var res = external_call["epoll_create1", Int32](Int32(0x80000))  # O_CLOEXEC
     if res < 0:
-        raise "epoll_create1 failed with errno=" + String(Int(get_errno()))
+        raise t"epoll_create1 failed with errno={Int(get_errno())}"
     return res
 
 
@@ -46,7 +46,7 @@ def epoll_ctl(
         event_p,
     )
     if res < 0:
-        raise "epoll_ctl failed with errno=" + String(Int(get_errno()))
+        raise t"epoll_ctl failed with errno={Int(get_errno())}"
 
 
 @always_inline
@@ -71,4 +71,4 @@ def epoll_wait(
         var e = get_errno()
         if e == Int32(EINTR):
             continue
-        raise "epoll_wait failed with errno=" + String(Int(e))
+        raise t"epoll_wait failed with errno={Int(e)}"

@@ -1035,7 +1035,7 @@ struct OwnedFd[is_registered: Bool = False](
                 # down; only fire the diagnostic for unexpected errors.
                 debug_assert(
                     String(e) == String(-Int(EINVAL)),
-                    "OwnedFd.__deinit__: io_uring_register failed: " + String(e),
+                    t"OwnedFd.__deinit__: io_uring_register failed: {e}",
                 )
         else:
             close_unchecked(unsafe_fd=self._fd)

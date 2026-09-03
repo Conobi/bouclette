@@ -133,7 +133,7 @@ struct Region(Movable):
         try:
             munmap(unsafe_ptr=self.ptr, len=self.len)
         except e:
-            debug_assert(False, "Region.__deinit__: munmap failed: " + String(e))
+            debug_assert(False, t"Region.__deinit__: munmap failed: {e}")
 
     @always_inline
     def __init__(out self, *, deinit move: Self):

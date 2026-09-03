@@ -56,15 +56,7 @@ def main() raises:
     if len(args) > 3:
         timeout_ms = UInt64(atol(args[3]))
 
-    print(
-        "Scanning",
-        args[1],
-        "ports",
-        start_port,
-        "-",
-        end_port,
-        "(" + String(timeout_ms) + "ms timeout)...",
-    )
+    print(t"Scanning {args[1]} ports {start_port}-{end_port} ({timeout_ms}ms timeout)...")
 
     var open_count = 0
     var closed_count = 0
@@ -100,22 +92,18 @@ def main() raises:
             var port = p + i
             var outcome = futures[i].result()
             if outcome.is_connected():
-                print("  " + String(port) + "/tcp\tOPEN")
+                print(t"  {port}/tcp\tOPEN")
                 open_count += 1
             elif outcome.is_refused():
                 closed_count += 1
             elif outcome.is_timeout():
-                print("  " + String(port) + "/tcp\tFILTERED")
+                print(t"  {port}/tcp\tFILTERED")
                 filtered_count += 1
             elif outcome.is_network_unreachable():
-                print("  " + String(port) + "/tcp\tFILTERED (unreachable)")
+                print(t"  {port}/tcp\tFILTERED (unreachable)")
                 filtered_count += 1
             else:
-                print(
-                    "  " + String(port) + "/tcp\tERROR ("
-                    + String(outcome.raw_result())
-                    + ")"
-                )
+                print(t"  {port}/tcp\tERROR ({outcome.raw_result()})")
                 filtered_count += 1
 
         # Close sockets before next batch.
@@ -125,11 +113,4 @@ def main() raises:
         p = batch_end + 1
 
     print()
-    print(
-        String(open_count)
-        + " open, "
-        + String(closed_count)
-        + " closed, "
-        + String(filtered_count)
-        + " filtered"
-    )
+    print(t"{open_count} open, {closed_count} closed, {filtered_count} filtered")

@@ -126,7 +126,7 @@ def _check_for_errors(raw: Scalar[DType.int64]) raises:
     """
     if raw < 0:
         if raw < -4095:
-            raise "error number out of range: " + String(raw)
+            raise t"error number out of range: {raw}"
         raise String(raw)
 
 
@@ -169,5 +169,5 @@ def unsafe_decode_none(raw: Scalar[DType.int64]) raises:
     """
     if raw != 0:
         if not (raw >= -4095 and raw < 0):
-            raise "error number out of range: " + String(raw)
+            raise t"error number out of range: {raw}"
         raise String(raw)
