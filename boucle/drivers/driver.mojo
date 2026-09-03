@@ -75,15 +75,15 @@ trait IoDriver(Movable):
 
     def submit_timeout(
         mut self,
-        ts: Pointer[NoneType, ImmStaticOrigin],
+        ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
         Args:
             ts: Opaque pointer to a platform-specific timespec (e.g.
-                16-byte kernel_timespec on Linux). Must remain valid
-                until completion fires.
+                16-byte kernel_timespec on Linux). Caller must keep
+                the timespec alive until the completion fires.
             c: Pointer to the caller-owned Completion token.
         """
         ...

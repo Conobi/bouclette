@@ -20,7 +20,7 @@ struct SpaceTracker:
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the completion fired."""
@@ -42,7 +42,7 @@ def test_driver_sq_space() raises:
     # internal pool (it's immediately ready). Timeout allocates a slot
     # on both io_uring and epoll backends.
     var ts = __kernel_timespec(tv_sec=Int64(5), tv_nsec=Int64(0))
-    var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+    var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
 

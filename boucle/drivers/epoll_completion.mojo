@@ -145,7 +145,7 @@ struct _ReadyEntry(ImplicitlyCopyable, Movable):
     """Deferred completion for operations that complete without epoll."""
 
     var completion: Pointer[Completion, MutUntrackedOrigin]
-    var result: Int32
+    var result: Int
     var flags: UInt32
 
 
@@ -473,7 +473,7 @@ struct EpollCompletionDriver(IoDriver):
             var entry = self._timers.pop()
             var op = self._pool.slot_ptr(entry.pool_index)
             op[].completion[].fire(
-                Int32(-Int32(ETIME)), UInt32(0)
+                -Int(ETIME), UInt32(0)
             )
             self._pool.free(entry.pool_index)
             dispatched += 1
@@ -495,7 +495,7 @@ struct EpollCompletionDriver(IoDriver):
         Returns:
             1 if a completion was dispatched, 0 if EAGAIN (op stays pending).
         """
-        var result = Int32(0)
+        var result = Int(0)
 
         if op[].kind is _OpKind.RECV:
             var res = syscall[__NR_recvfrom, Scalar[DType.int64]](
@@ -510,7 +510,7 @@ struct EpollCompletionDriver(IoDriver):
             )
             if res == -Scalar[DType.int64](EAGAIN):
                 return 0
-            result = res.cast[DType.int32]()
+            result = Int(res)
 
         elif op[].kind is _OpKind.SEND:
             var res = syscall[__NR_sendto, Scalar[DType.int64]](
@@ -525,7 +525,7 @@ struct EpollCompletionDriver(IoDriver):
             )
             if res == -Scalar[DType.int64](EAGAIN):
                 return 0
-            result = res.cast[DType.int32]()
+            result = Int(res)
 
         elif op[].kind is _OpKind.CONNECT:
             var optval = Int32(0)
@@ -538,11 +538,11 @@ struct EpollCompletionDriver(IoDriver):
                 Pointer(to=optlen),
             )
             if gso_res < 0:
-                result = gso_res.cast[DType.int32]()
+                result = Int(gso_res)
             elif optval == 0:
-                result = Int32(0)
+                result = 0
             else:
-                result = -optval
+                result = -Int(optval)
 
         elif op[].kind is _OpKind.ACCEPT:
             var res = syscall[__NR_accept4, Scalar[DType.int64]](
@@ -551,7 +551,7 @@ struct EpollCompletionDriver(IoDriver):
                 UInt(0),
                 Int32(O_CLOEXEC | O_NONBLOCK),
             )
-            result = res.cast[DType.int32]()
+            result = Int(res)
 
         elif op[].kind is _OpKind.RECVMSG:
             var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
@@ -563,7 +563,7 @@ struct EpollCompletionDriver(IoDriver):
             )
             if res == -Scalar[DType.int64](EAGAIN):
                 return 0
-            result = res.cast[DType.int32]()
+            result = Int(res)
 
         elif op[].kind is _OpKind.SENDMSG:
             var res = syscall[__NR_sendmsg, Scalar[DType.int64]](
@@ -575,7 +575,7 @@ struct EpollCompletionDriver(IoDriver):
             )
             if res == -Scalar[DType.int64](EAGAIN):
                 return 0
-            result = res.cast[DType.int32]()
+            result = Int(res)
 
         else:
             debug_assert(False, "unexpected op kind in _dispatch_op")
@@ -660,7 +660,7 @@ struct EpollCompletionDriver(IoDriver):
         Args:
             c: Pointer to the caller-owned Completion token.
         """
-        self._ready.append(_ReadyEntry(c, Int32(0), UInt32(0)))
+        self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
 
     def submit_connect(
         mut self,
@@ -695,22 +695,23 @@ struct EpollCompletionDriver(IoDriver):
         else:
             # Immediate result (success or error like -ECONNREFUSED).
             # Deliver as a completion callback, matching io_uring CQE semantics.
-            self._ready.append(_ReadyEntry(c, Int32(res), UInt32(0)))
+            self._ready.append(_ReadyEntry(c, Int(res), UInt32(0)))
             self._pool.free(op[].pool_index)
 
     def submit_timeout(
         mut self,
-        ts: Pointer[NoneType, ImmStaticOrigin],
+        ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout. Fires with -ETIME when the deadline passes.
 
         Args:
             ts: Opaque pointer to a 16-byte __kernel_timespec
-                (relative duration).
+                (relative duration). Caller must keep it alive until
+                the completion fires.
             c: Pointer to the caller-owned Completion token.
         """
-        var ts_ptr = Pointer[__kernel_timespec, ImmStaticOrigin](
+        var ts_ptr = Pointer[__kernel_timespec, MutUntrackedOrigin](
             unsafe_from_address=Int(ts)
         )
         var deadline_ns = _monotonic_ns() + (
@@ -785,15 +786,15 @@ struct EpollCompletionDriver(IoDriver):
             # Enqueue cancelled target and cancel success.
             self._ready.append(
                 _ReadyEntry(
-                    target, Int32(-Int32(ECANCELED)), UInt32(0)
+                    target, -Int(ECANCELED), UInt32(0)
                 )
             )
-            self._ready.append(_ReadyEntry(c, Int32(0), UInt32(0)))
+            self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
             self._pool.free(i)
             return
 
         # Target not found -- already completed.
-        self._ready.append(_ReadyEntry(c, Int32(0), UInt32(0)))
+        self._ready.append(_ReadyEntry(c, 0, UInt32(0)))
 
     def submit_accept(
         mut self,

@@ -647,7 +647,7 @@ struct Timeout[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
     def __init__(
         out self,
         ref [Self.origin]sqe: Sqe[Self.type],
-        ts_ptr: Pointer[c_void, ImmStaticOrigin],
+        ts_ptr: Pointer[c_void, MutUntrackedOrigin],
         count: UInt64 = 0,
     ):
         _prep_rw(

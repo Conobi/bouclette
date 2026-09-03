@@ -188,7 +188,7 @@ struct ConnectProbe(Movable):
         )
 
         # Submit timeout SQE.
-        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+        var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=self._ts))
         )
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
@@ -282,7 +282,7 @@ struct ConnectProbe(Movable):
     @staticmethod
     def _on_connect_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the connect completion.
@@ -307,7 +307,7 @@ struct ConnectProbe(Movable):
         self_ptr[]._total_cqes += 1
 
         # ECANCELED: the connect was cancelled by the other path.
-        if result == Int32(-125):
+        if result == -125:
             self_ptr[]._check_done()
             return
 
@@ -333,7 +333,7 @@ struct ConnectProbe(Movable):
     @staticmethod
     def _on_timeout_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the timeout completion.
@@ -358,7 +358,7 @@ struct ConnectProbe(Movable):
         self_ptr[]._total_cqes += 1
 
         # ECANCELED: the timeout was cancelled by the other path.
-        if result == Int32(-125):
+        if result == -125:
             self_ptr[]._check_done()
             return
 
@@ -384,7 +384,7 @@ struct ConnectProbe(Movable):
     @staticmethod
     def _on_cancel_cb(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Static callback for the cancel completion.

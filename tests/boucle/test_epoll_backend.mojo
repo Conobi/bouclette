@@ -15,18 +15,18 @@ from std.memory import Pointer
 struct _NopSlot:
     """Records a nop completion result."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired slot."""
-        self.result = Int32(-999)
+        self.result = -999
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the result."""
@@ -40,18 +40,18 @@ struct _NopSlot:
 struct _TimeoutSlot:
     """Records a timeout completion result."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired slot."""
-        self.result = Int32(-999)
+        self.result = -999
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the result."""
@@ -100,7 +100,7 @@ def test_epoll_timeout() raises:
 
     # 50ms timeout via __kernel_timespec (layout matches Timeout).
     var ts = __kernel_timespec(0, 50_000_000)
-    var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+    var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
     loop.submit_timeout(ts_ptr, cmp_ptr)

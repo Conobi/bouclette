@@ -197,7 +197,7 @@ struct WatchLoop(Movable):
                 Pointer(to=state_ptr[]._timeout_cmp)
             )
         )
-        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+        var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
         self._driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
@@ -323,7 +323,7 @@ struct WatchLoop(Movable):
             )
         )
 
-        var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+        var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
         self._driver.submit_timeout(ts_ptr, cmp_ptr)

@@ -70,7 +70,7 @@ struct IoUringDriver(IoDriver):
             var cmp = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(cqe.user_data)
             )
-            cmp[].fire(cqe.res, UInt32(cqe.flags.value))
+            cmp[].fire(Int(cqe.res), UInt32(cqe.flags.value))
             dispatched += 1
         cq^.__deinit__()
         return dispatched
@@ -115,19 +115,20 @@ struct IoUringDriver(IoDriver):
 
     def submit_timeout(
         mut self,
-        ts: Pointer[NoneType, ImmStaticOrigin],
+        ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
         Args:
-            ts: Opaque pointer to a 16-byte kernel_timespec.
+            ts: Opaque pointer to a 16-byte kernel_timespec. Caller
+                must keep it alive until the completion fires.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
-        var ts_cv = Pointer[c_void, ImmStaticOrigin](
+        var ts_cv = Pointer[c_void, MutUntrackedOrigin](
             unsafe_from_address=Int(ts)
         )
         _ = Timeout(sq.__next__(), ts_cv).user_data(UInt64(Int(c)))

@@ -11,26 +11,26 @@ from boucle.socle.linux.raw import __kernel_timespec
 struct TimeoutTracker:
     """Records callback invocations for timeout and cancel completions."""
 
-    var timeout_result: Int32
+    var timeout_result: Int
     var timeout_flags: UInt32
     var timeout_fired: Bool
-    var cancel_result: Int32
+    var cancel_result: Int
     var cancel_flags: UInt32
     var cancel_fired: Bool
 
     def __init__(out self):
         """Construct a zeroed tracker."""
-        self.timeout_result = Int32(0)
+        self.timeout_result = 0
         self.timeout_flags = UInt32(0)
         self.timeout_fired = False
-        self.cancel_result = Int32(0)
+        self.cancel_result = 0
         self.cancel_flags = UInt32(0)
         self.cancel_fired = False
 
     @staticmethod
     def on_timeout(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback for the timeout completion."""
@@ -44,7 +44,7 @@ struct TimeoutTracker:
     @staticmethod
     def on_cancel(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback for the cancel completion."""
@@ -82,7 +82,7 @@ def test_driver_timeout() raises:
 
     # Submit a 5-second timeout (long enough it won't fire naturally).
     var ts = __kernel_timespec(tv_sec=Int64(5), tv_nsec=Int64(0))
-    var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+    var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
     driver.submit_timeout(ts_ptr, timeout_cmp_ptr)

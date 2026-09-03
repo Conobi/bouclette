@@ -131,13 +131,14 @@ struct ProbeCompletionDriver(IoDriver):
 
     def submit_timeout(
         mut self,
-        ts: Pointer[NoneType, ImmStaticOrigin],
+        ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue a timeout (kernel timer).
 
         Args:
-            ts: Opaque pointer to a platform-specific timespec.
+            ts: Opaque pointer to a platform-specific timespec. Caller
+                must keep it alive until the completion fires.
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:

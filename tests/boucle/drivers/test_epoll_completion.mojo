@@ -18,18 +18,18 @@ from boucle.socle.linux.raw import __kernel_timespec, ETIME
 struct ResultSlot:
     """Records a single completion result and whether it fired."""
 
-    var result: Int32
+    var result: Int
     var fired: Bool
 
     def __init__(out self):
         """Construct an unfired slot."""
-        self.result = Int32(0)
+        self.result = 0
         self.fired = False
 
     @staticmethod
     def on_complete(
         ctx: Pointer[NoneType, MutUntrackedOrigin],
-        result: Int32,
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the result."""
@@ -79,7 +79,7 @@ def test_timeout_fires_with_etime() raises:
 
     # 50ms timeout.
     var ts = __kernel_timespec(0, 50_000_000)
-    var ts_ptr = Pointer[NoneType, ImmStaticOrigin](
+    var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
     driver.submit_timeout(ts_ptr, cmp_ptr)
