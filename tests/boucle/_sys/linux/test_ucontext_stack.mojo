@@ -9,7 +9,7 @@ encapsulate the mmap + ucontext lifecycle:
 - Pool back-reference storage
 """
 
-from boucle._sys.linux.ucontext_stack import (
+from boucle.socle.linux.ucontext_stack import (
     _MappedRegion,
     _UContext,
     _UcontextStack,

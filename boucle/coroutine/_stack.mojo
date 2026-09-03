@@ -4,6 +4,6 @@ Selects the platform-specific backend at compile time,
 following the same pattern as RawHandle in the handle layer.
 """
 
-from boucle._sys.linux.ucontext_stack import _UcontextStack
+from boucle.socle.linux.ucontext_stack import _UcontextStack
 
 comptime _CoroStack = _UcontextStack
