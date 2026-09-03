@@ -100,6 +100,7 @@ def test_driver_connect() raises:
     assert_equal(Int(tracker.result), 0)
 
     # Keep resources alive past completion.
+    _ = cmp
     _ = target_stor
     _ = client^
     _ = server^
@@ -134,6 +135,7 @@ def test_driver_connect() raises:
     assert_equal(Int(tracker2.result), -111)
 
     # Keep resources alive past completion.
+    _ = cmp2
     _ = target2_stor
     _ = client2^
 

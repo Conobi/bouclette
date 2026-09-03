@@ -109,6 +109,9 @@ def test_driver_timeout() raises:
         Int(tracker.cancel_result),
         0,
     )
+    _ = timeout_cmp
+    _ = cancel_cmp
+    _ = ts
 
 
 def main() raises:

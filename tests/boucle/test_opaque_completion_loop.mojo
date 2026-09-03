@@ -55,6 +55,7 @@ def test_nop_single() raises:
 
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
+    _ = cmp
 
 
 def test_nop_multiple() raises:
@@ -85,6 +86,9 @@ def test_nop_multiple() raises:
     _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 3)
+    _ = cmp1
+    _ = cmp2
+    _ = cmp3
 
 
 def test_run_once() raises:
@@ -103,6 +107,7 @@ def test_run_once() raises:
     loop.run_once()
 
     assert_equal(tracker.count, 1)
+    _ = cmp
 
 
 def main() raises:

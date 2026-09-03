@@ -52,6 +52,7 @@ def test_driver_nop() raises:
 
     assert_equal(tracker.count, 1)
     assert_equal(Int(tracker.last_result), 0)
+    _ = cmp
 
 
 def main() raises:

@@ -129,6 +129,8 @@ def test_driver_accept() raises:
     _ = external_call["close", Int32](Int32(accepted_fd))
 
     # Keep resources alive past completion.
+    _ = accept_cmp
+    _ = connect_cmp
     _ = target_stor
     _ = client^
     _ = server^

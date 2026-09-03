@@ -40,6 +40,9 @@ def test_syscalls() raises:
     # Listen
     _listen(tcp_nb, Backlog.DEFAULT.value)
 
+    # Keep addr storage alive past syscalls that read through its pointer.
+    _ = stor
+
     # Clean up raw fds (no RAII here — these are plain Int32 values)
     _ = external_call["close", Int32](tcp)
     _ = external_call["close", Int32](udp)
