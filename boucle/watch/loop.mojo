@@ -1,4 +1,24 @@
-"""WatchLoop — ergonomic completion-based I/O loop."""
+"""WatchLoop — ergonomic completion-based I/O loop.
+
+Every submit_* method heap-allocates a per-operation state whose
+Completion address is handed to the driver, and returns a Future handle
+owning that state. The loop records every such state in an in-flight
+registry and owns it jointly with the handle (rules in `_callback.mojo`):
+
+- run() sweeps the registry after each tick: states that are done leave
+  it, and those whose handle was already dropped are freed there.
+- Destroying the loop while operations are in flight tears the driver
+  down first, then settles every remaining entry: orphaned states are
+  freed, states still owned by a live handle are marked `loop_gone` so
+  the handle frees them on drop and result() reports the loss.
+
+No state is ever freed by a completion callback, and nothing leaks if
+run() is never called again after a drop.
+
+Warning: recv() and send() buffers stay caller-owned. Dropping the
+RecvFuture or SendFuture does NOT release the kernel's reference to the
+buffer — it must stay valid until run() has delivered the completion.
+"""
 
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
@@ -10,7 +30,7 @@ from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
-from boucle.watch._callback import _FutureCallback, _dispatch
+from boucle.watch._callback import _FutureCallback, _InFlightEntry, _dispatch
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
 from boucle.watch.connect_timeout import (
@@ -28,11 +48,22 @@ struct WatchLoop(Movable):
     The driver is hidden behind a comptime alias. Users never see IoUringDriver.
     _pending tracks CQEs in flight — each SQE adds 1, each dispatched CQE
     subtracts 1, managed entirely by run().
+
+    _in_flight is the registry of every operation state not yet settled,
+    simple and composite alike; it is what lets the loop free orphaned
+    states and inform surviving handles when the loop is destroyed.
+
+    _composites_awaiting_cancel additionally lists the composite states,
+    because only they need the loop to submit a deferred cancel SQE
+    after each tick. It never owns anything: a composite is dropped
+    from it as soon as it is done, and the registry alone decides who
+    frees the state.
     """
 
     var _driver: _WatchDriver
     var _pending: Int
-    var _active_composites: List[
+    var _in_flight: List[_InFlightEntry]
+    var _composites_awaiting_cancel: List[
         Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
     ]
 
@@ -46,7 +77,8 @@ struct WatchLoop(Movable):
         """
         self._driver = _WatchDriver(sq_entries=sq_entries, backend=backend)
         self._pending = 0
-        self._active_composites = List[
+        self._in_flight = List[_InFlightEntry]()
+        self._composites_awaiting_cancel = List[
             Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
         ]()
 
@@ -54,11 +86,64 @@ struct WatchLoop(Movable):
         """Move constructor."""
         self._driver = move._driver^
         self._pending = move._pending
-        self._active_composites = move._active_composites^
+        self._in_flight = move._in_flight^
+        self._composites_awaiting_cancel = move._composites_awaiting_cancel^
+
+    def __deinit__(deinit self):
+        """Tear down the driver, then settle every operation still in flight.
+
+        The driver goes first so that no completion callback can run
+        while the registry is being settled. Once it is gone nothing
+        references the Completion inside any state anymore:
+
+        - io_uring: SQEs are only pushed to the kernel from tick(), so
+          operations never run through run() were never submitted at
+          all; for the ones that were, closing the ring cancels them
+          kernel-side and their CQEs land in a completion queue nobody
+          reads. The kernel copies the timespec and sockaddr at
+          submission, so freeing `_ts` / `_addr_stor` is safe too.
+        - epoll: destroying the driver closes the epoll fd and frees its
+          op pool and timer heap, so no callback can fire either.
+
+        Every remaining registry entry is then detached: orphaned states
+        are freed here, states still owned by a live handle are marked
+        `loop_gone`. The caller-owned recv/send buffers are not covered
+        by this — the kernel may still touch them while it finishes
+        cancelling an io_uring request.
+        """
+        self._driver^.__deinit__()
+        for entry in self._in_flight:
+            entry.detach(entry.state)
+        self._in_flight.clear()
+        self._composites_awaiting_cancel.clear()
 
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism is active."""
         return self._driver.backend()
+
+    def in_flight_count(self) -> Int:
+        """Return how many operation states the loop still tracks.
+
+        Diagnostic accessor for tests: every submitted operation is
+        registered until run() has seen it complete, so this must be 0
+        after run() returns. A composite counts as one entry.
+
+        Returns:
+            The number of registry entries not yet settled.
+        """
+        return len(self._in_flight)
+
+    def pending_composites(self) -> Int:
+        """Return how many connect_with_timeout operations still await a cancel.
+
+        Diagnostic accessor for tests: a composite stays listed from
+        submission until run() has seen all three of its completions,
+        so this must be 0 after run() returns.
+
+        Returns:
+            The number of composite operations awaiting completion.
+        """
+        return len(self._composites_awaiting_cancel)
 
     def accept(mut self, ref socket: Socket) raises -> AcceptFuture:
         """Submit an async accept on a listening socket.
@@ -90,6 +175,7 @@ struct WatchLoop(Movable):
         var fd = socket.raw()
         self._driver.submit_accept(fd, cmp_ptr)
         self._pending += 1
+        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return AcceptFuture(state_ptr)
 
@@ -129,6 +215,7 @@ struct WatchLoop(Movable):
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
         self._driver.submit_connect(fd, addr_ptr, addr_len, cmp_ptr)
         self._pending += 1
+        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return ConnectFuture(state_ptr)
 
@@ -204,7 +291,8 @@ struct WatchLoop(Movable):
 
         # 2 SQEs submitted → 2 CQEs expected.
         self._pending += 2
-        self._active_composites.append(state_ptr)
+        self._in_flight.append(_InFlightEntry(state_ptr))
+        self._composites_awaiting_cancel.append(state_ptr)
 
         return ConnectWithTimeoutFuture(state_ptr)
 
@@ -219,7 +307,9 @@ struct WatchLoop(Movable):
         after run() completes.
 
         Warning: The buffer is NOT owned by the future. The caller must
-        ensure the buffer remains valid until run() completes.
+        ensure the buffer remains valid until run() completes — dropping
+        the RecvFuture early does not make the buffer safe to free; the
+        kernel may still write into it until the completion is delivered.
 
         Args:
             socket: The socket to receive from.
@@ -248,6 +338,7 @@ struct WatchLoop(Movable):
         )
         self._driver.submit_recv(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
         self._pending += 1
+        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return RecvFuture(state_ptr)
 
@@ -264,7 +355,9 @@ struct WatchLoop(Movable):
         written after run() completes.
 
         Warning: The buffer is NOT owned by the future. The caller must
-        ensure the buffer remains valid until run() completes.
+        ensure the buffer remains valid until run() completes — dropping
+        the SendFuture early does not make the buffer safe to free; the
+        kernel may still read from it until the completion is delivered.
 
         Args:
             socket: The socket to send on.
@@ -293,6 +386,7 @@ struct WatchLoop(Movable):
         )
         self._driver.submit_send(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
         self._pending += 1
+        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return SendFuture(state_ptr)
 
@@ -328,6 +422,7 @@ struct WatchLoop(Movable):
         )
         self._driver.submit_timeout(ts_ptr, cmp_ptr)
         self._pending += 1
+        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return TimerFuture(state_ptr)
 
@@ -338,8 +433,13 @@ struct WatchLoop(Movable):
         dispatched CQEs; run() decrements directly. Callbacks never
         touch the counter — they only set result state.
 
-        After each tick, flushes deferred cancel SQEs for composite
-        operations (each cancel adds 1 to _pending for its own CQE).
+        After each tick, first flushes deferred cancel SQEs for composite
+        operations (each cancel adds 1 to _pending for its own CQE) and
+        forgets the composites whose three CQEs have all arrived, then
+        sweeps the in-flight registry: every state that is done leaves
+        it, and the ones whose handle was dropped early are freed there.
+        The cancel list is trimmed before the sweep so it never keeps a
+        pointer to a state the sweep is about to free.
 
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
@@ -347,11 +447,33 @@ struct WatchLoop(Movable):
         while self._pending > 0:
             var dispatched = self._driver.tick(wait=True)
             self._pending -= dispatched
-            var i = len(self._active_composites) - 1
-            while i >= 0:
-                var state_ptr = self._active_composites[i]
-                var cancels = state_ptr[].flush_cancel(self._driver)
-                self._pending += cancels
-                if state_ptr[].done:
-                    _ = self._active_composites.pop(i)
-                i -= 1
+            self._flush_composite_cancels()
+            self._sweep_in_flight()
+
+    def _flush_composite_cancels(mut self) raises:
+        """Submit deferred cancel SQEs and forget finished composites.
+
+        Called after each tick, before the registry sweep. Only
+        composites need this step; the registry handles their ownership.
+        """
+        var i = len(self._composites_awaiting_cancel) - 1
+        while i >= 0:
+            var state_ptr = self._composites_awaiting_cancel[i]
+            self._pending += state_ptr[].flush_cancel(self._driver)
+            if state_ptr[].done:
+                _ = self._composites_awaiting_cancel.pop(i)
+            i -= 1
+
+    def _sweep_in_flight(mut self):
+        """Drop every settled registry entry, freeing the orphaned ones.
+
+        Called after each tick. Each entry's sweep hook reports whether
+        the state is done and, if its handle was already dropped, frees
+        it; done entries leave the registry either way.
+        """
+        var i = len(self._in_flight) - 1
+        while i >= 0:
+            var entry = self._in_flight[i].copy()
+            if entry.sweep(entry.state):
+                _ = self._in_flight.pop(i)
+            i -= 1

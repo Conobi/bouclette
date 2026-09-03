@@ -27,6 +27,34 @@ struct _TestCallback(_FutureCallback):
         """
         self.value = result
 
+    def is_done(self) -> Bool:
+        """Always True: a single dispatch settles this stand-in.
+
+        Returns:
+            True; the registry hooks are not exercised by this test.
+        """
+        return True
+
+    def owner_dropped(self) -> Bool:
+        """Always False: this stack-allocated stand-in is never orphaned.
+
+        Returns:
+            False, so no registry hook ever tries to free the stack object.
+        """
+        return False
+
+    def loop_gone(self) -> Bool:
+        """Always False: no WatchLoop is involved in this test.
+
+        Returns:
+            False.
+        """
+        return False
+
+    def mark_loop_gone(mut self):
+        """No-op: no WatchLoop is involved in this test."""
+        pass
+
 
 def test_dispatch() raises:
     # Assign _dispatch[_TestCallback] to a CompletionFn alias.

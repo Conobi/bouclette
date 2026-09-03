@@ -10,6 +10,16 @@ waits for all 3 CQEs before declaring done.
 
 Cancel submission is deferred: callbacks set a flag, and WatchLoop.run()
 calls flush_cancel() after each tick.
+
+The state is shared with the WatchLoop that submitted it and follows the
+ownership rules in `_callback.mojo`: it joins the loop's in-flight
+registry as an _InFlightState. Dropping the ConnectWithTimeoutFuture
+before all 3 CQEs have arrived is safe: the handle marks the state as
+orphaned and the loop frees it once done, or when the loop itself is
+destroyed. Destroying the loop first is also safe: the future frees the
+state on drop and result() reports the destroyed loop. The static
+callbacks never free the state — each one only knows about its own CQE,
+not whether the other two have arrived.
 """
 
 from std.memory import Pointer
@@ -19,6 +29,7 @@ from boucle.drivers.probe import ProbeCompletionDriver
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
+from boucle.watch._callback import _InFlightState
 from boucle.watch.outcome import ConnectOutcome
 from boucle.socle.linux.raw import ECANCELED
 
@@ -28,13 +39,14 @@ from boucle.socle.linux.raw import ECANCELED
 # ===----------------------------------------------------------------------=== #
 
 
-struct _ConnectWithTimeoutState(Movable):
+struct _ConnectWithTimeoutState(_InFlightState):
     """State machine for a composite connect+timeout+cancel lifecycle.
 
     Owns 3 Completion tokens (connect, timeout, cancel) and resolves
     the operation when the first non-ECANCELED CQE arrives on connect
     or timeout. The other operation is then cancelled via deferred
-    flush_cancel().
+    flush_cancel(). Implements _InFlightState so the WatchLoop registry
+    can settle its ownership like any simple state.
 
     Fields:
         _connect_cmp: Completion token for the connect operation.
@@ -50,6 +62,10 @@ struct _ConnectWithTimeoutState(Movable):
         _total_cqes: Number of CQEs received so far (done when 3).
         done: True when all 3 CQEs have been received.
         consumed: True after result() has been called.
+        _owner_dropped: True if the ConnectWithTimeoutFuture was dropped
+                        before done; the WatchLoop then frees this state.
+        _loop_gone: True if the WatchLoop was destroyed before done; the
+                    ConnectWithTimeoutFuture then frees this state.
     """
 
     var _connect_cmp: Completion
@@ -65,6 +81,8 @@ struct _ConnectWithTimeoutState(Movable):
     var _total_cqes: Int
     var done: Bool
     var consumed: Bool
+    var _owner_dropped: Bool
+    var _loop_gone: Bool
 
     def __init__(
         out self,
@@ -93,6 +111,8 @@ struct _ConnectWithTimeoutState(Movable):
         self._total_cqes = 0
         self.done = False
         self.consumed = False
+        self._owner_dropped = False
+        self._loop_gone = False
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -113,6 +133,36 @@ struct _ConnectWithTimeoutState(Movable):
         self._total_cqes = move._total_cqes
         self.done = move.done
         self.consumed = move.consumed
+        self._owner_dropped = move._owner_dropped
+        self._loop_gone = move._loop_gone
+
+    def is_done(self) -> Bool:
+        """Return True once all 3 CQEs have arrived.
+
+        Returns:
+            True if no callback will write this state again.
+        """
+        return self.done
+
+    def owner_dropped(self) -> Bool:
+        """Return True if the ConnectWithTimeoutFuture was dropped early.
+
+        Returns:
+            True if the WatchLoop must free this state.
+        """
+        return self._owner_dropped
+
+    def loop_gone(self) -> Bool:
+        """Return True if the WatchLoop was destroyed before completion.
+
+        Returns:
+            True if the ConnectWithTimeoutFuture is the sole remaining owner.
+        """
+        return self._loop_gone
+
+    def mark_loop_gone(mut self):
+        """Record that the WatchLoop was destroyed with this composite in flight."""
+        self._loop_gone = True
 
     def _check_done(mut self):
         """Mark operation as done when all 3 CQEs have arrived."""
@@ -277,6 +327,11 @@ struct ConnectWithTimeoutFuture(Movable):
     Owns a heap-allocated _ConnectWithTimeoutState. Call done() to check
     completion, then result() to extract the ConnectOutcome.
 
+    Dropping the handle before run() has delivered all three completions
+    is safe: ownership of the state passes to the WatchLoop, which frees
+    it once the composite is finished or when the loop is destroyed.
+    Destroying the loop first is also safe (result() then raises).
+
     No fd cleanup needed on drop — connect modifies the existing socket
     in place, it does not produce a new fd.
     """
@@ -303,9 +358,20 @@ struct ConnectWithTimeoutFuture(Movable):
         self._state = move._state
 
     def __deinit__(deinit self):
-        """Release the heap-allocated state."""
-        self._state.unsafe_deinit_pointee()
-        self._state.unsafe_free()
+        """Release the state, or hand it over to the WatchLoop.
+
+        If all three completions have been delivered, or the loop has
+        already been destroyed, this handle is the last owner and frees
+        the state. Otherwise the loop still tracks the composite, so the
+        state is marked as orphaned and the loop frees it — once the
+        last CQE has arrived during run(), or when the loop itself is
+        destroyed.
+        """
+        if self._state[].done or self._state[]._loop_gone:
+            self._state.unsafe_deinit_pointee()
+            self._state.unsafe_free()
+        else:
+            self._state[]._owner_dropped = True
 
     def result(mut self) raises -> ConnectOutcome:
         """Decode the operation result into a ConnectOutcome.
@@ -321,12 +387,14 @@ struct ConnectWithTimeoutFuture(Movable):
             NETWORK_UNREACHABLE, or ERROR.
 
         Raises:
-            If the result was already consumed or not all CQEs have
-            arrived yet.
+            If the result was already consumed, the loop was destroyed
+            before all CQEs arrived, or not all CQEs have arrived yet.
         """
         if self._state[].consumed:
             raise "result already consumed"
         if not self._state[].done:
+            if self._state[]._loop_gone:
+                raise "loop destroyed before completion"
             raise "operation not complete"
         self._state[].consumed = True
         if self._state[]._resolved_by == UInt8(1):
@@ -335,6 +403,9 @@ struct ConnectWithTimeoutFuture(Movable):
 
     def done(self) -> Bool:
         """Return True when all 3 CQEs have been received.
+
+        Stays False forever if the loop was destroyed first; result()
+        then raises with the reason.
 
         Returns:
             True once the entire connect+timeout+cancel lifecycle
