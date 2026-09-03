@@ -13,6 +13,7 @@ from boucle.socle.linux.raw.general import (
     __NR_mmap,
     __NR_mprotect,
     __NR_munmap,
+    __NR_mincore,
     __NR_madvise,
     __NR_dup,
     __NR_socket,

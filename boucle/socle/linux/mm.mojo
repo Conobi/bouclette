@@ -5,6 +5,7 @@ from boucle.socle.linux.raw import (
     __NR_mmap,
     __NR_mprotect,
     __NR_munmap,
+    __NR_mincore,
     __NR_madvise,
     MAP_SHARED,
     MAP_SHARED_VALIDATE,
@@ -16,6 +17,8 @@ from boucle.socle.linux.raw import (
     MAP_HUGETLB,
     MAP_HUGE_2MB,
     MAP_HUGE_1GB,
+    MAP_HUGE_MASK,
+    MAP_HUGE_SHIFT,
     MAP_LOCKED,
     MAP_NORESERVE,
     MAP_POPULATE,
@@ -188,6 +191,37 @@ def madvise(
 
 
 @always_inline
+def mincore(
+    *,
+    unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
+    len: UInt,
+    vec: Pointer[UInt8, ImmStaticOrigin],
+) raises:
+    """Reports which pages of a mapping are resident in core.
+    [Linux]: https://man7.org/linux/man-pages/man2/mincore.2.html.
+
+    On return, byte `i` of `vec` describes page `i` of the range: bit 0 is
+    set when the page is resident. Bytes beyond bit 0 are reserved.
+
+    Args:
+        unsafe_ptr: Start of the range (must be page-aligned).
+        len: Length of the range in bytes; rounded up to a page multiple.
+        vec: Output vector of at least `ceil(len / page_size)` bytes. The
+             kernel writes into it even though the pointer is typed with an
+             immutable origin, mirroring how `mmap` results are typed here.
+
+    Raises:
+        `Errno` if the syscall returned an error (`ENOMEM` when part of the
+        range is unmapped, `EFAULT` when `vec` is not writable).
+
+    Safety:
+        `vec` must point to writable memory of sufficient size.
+    """
+    var res = syscall[__NR_mincore, Scalar[DType.int64]](unsafe_ptr, len, vec)
+    unsafe_decode_none(res)
+
+
+@always_inline
 def mprotect(
     *, unsafe_ptr: Pointer[c_void, ImmStaticOrigin], len: UInt, prot: ProtFlags
 ) raises:
@@ -257,6 +291,44 @@ struct MapFlags(TrivialRegisterPassable, Defaultable):
             rhs: The RHS value.
         """
         self = self | rhs
+
+    @always_inline("nodebug")
+    def __and__(self, rhs: Self) -> Self:
+        """Returns `self & rhs`.
+
+        Args:
+            rhs: The RHS value.
+
+        Returns:
+            `self & rhs`.
+        """
+        return self.value & rhs.value
+
+    @always_inline("nodebug")
+    def __bool__(self) -> Bool:
+        """Returns True when at least one flag bit is set.
+
+        Returns:
+            `self.value != 0`.
+        """
+        return self.value != 0
+
+    @always_inline("nodebug")
+    def without_huge_pages(self) -> Self:
+        """Returns a copy with `MAP_HUGETLB` and the huge-page size cleared.
+
+        The huge-page size is encoded in bits `MAP_HUGE_SHIFT..+6`
+        (`MAP_HUGE_2MB`, `MAP_HUGE_1GB`, ...); both it and `MAP_HUGETLB` are
+        removed so the result requests a regular-page mapping. All other
+        flags are preserved.
+
+        Returns:
+            `self` minus `MAP_HUGETLB` and any `MAP_HUGE_*` size bits.
+        """
+        comptime huge_bits = c_uint(MAP_HUGETLB) | (
+            c_uint(MAP_HUGE_MASK) << c_uint(MAP_HUGE_SHIFT)
+        )
+        return self.value & ~huge_bits
 
 
 struct ProtFlags(TrivialRegisterPassable, Defaultable):
