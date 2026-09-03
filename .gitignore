@@ -46,3 +46,6 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 port_scan
+completion_echo
+coro_echo
+readiness_echo

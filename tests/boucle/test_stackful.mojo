@@ -373,7 +373,7 @@ def test_custom_stack_size() raises:
 
 def _read_seeded_body(mut y: CoroYielder[_RunToCompletionState]) raises:
     """Body that reads state seeded by the caller before first resume."""
-    debug_assert(y.state()[].value == 99, "caller-seeded value not visible")
+    assert_true(y.state()[].value == 99, "caller-seeded value not visible")
     y.state()[].value += 1
 
 
