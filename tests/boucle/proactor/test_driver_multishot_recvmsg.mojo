@@ -24,7 +24,7 @@ from boucle.socle.linux.raw import (
 )
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
-from boucle.proactor.bufring import BufRing
+from boucle.drivers.bufring import BufRing
 from boucle.drivers.io_uring import IoUringDriver
 
 comptime AF_INET = 2

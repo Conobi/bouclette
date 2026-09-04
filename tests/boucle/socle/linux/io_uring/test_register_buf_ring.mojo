@@ -5,7 +5,7 @@ Exercises the BufRing path: register, recv, recycle, recv again.
 
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.proactor.completion import Completion
-from boucle.proactor.bufring import BufRing
+from boucle.drivers.bufring import BufRing
 from boucle.socle.ptr import null_ptr
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import (
