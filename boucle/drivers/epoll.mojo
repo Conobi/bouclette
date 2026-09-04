@@ -15,7 +15,16 @@ from boucle.socle.linux.epoll.syscalls import (
     epoll_wait,
     EpollOp,
 )
-from boucle.socle.linux.raw import epoll_event, EPOLLRDHUP
+from boucle.socle.linux.raw import (
+    epoll_event,
+    EPOLLIN,
+    EPOLLOUT,
+    EPOLLET,
+    EPOLLONESHOT,
+    EPOLLERR,
+    EPOLLHUP,
+    EPOLLRDHUP,
+)
 from boucle.socle.linux.fd import close_unchecked
 from boucle.handle import RawHandle
 from boucle.interest import Interest
@@ -24,6 +33,38 @@ from boucle.readiness_state import Readiness
 from boucle.drivers.backend import Backend
 from boucle.drivers.driver import ReadinessDriver
 from boucle.drivers.readiness_event import ReadinessEvent
+
+
+@always_inline
+def _interest_to_epoll(interest: Interest) -> UInt32:
+    """Translate portable Interest bits to epoll event flags."""
+    var events = UInt32(0)
+    if interest.value & Interest.READABLE.value:
+        events |= EPOLLIN
+    if interest.value & Interest.WRITABLE.value:
+        events |= EPOLLOUT
+    if interest.value & Interest.EDGE_TRIGGERED.value:
+        events |= EPOLLET
+    if interest.value & Interest.ONESHOT.value:
+        events |= EPOLLONESHOT
+    return events
+
+
+@always_inline
+def _epoll_to_readiness(events: UInt32) -> Readiness:
+    """Translate epoll event flags to portable Readiness bits."""
+    var r = UInt32(0)
+    if events & EPOLLIN:
+        r |= Readiness.READABLE
+    if events & EPOLLOUT:
+        r |= Readiness.WRITABLE
+    if events & EPOLLERR:
+        r |= Readiness.ERROR
+    if events & EPOLLHUP:
+        r |= Readiness.HUP
+    if events & EPOLLRDHUP:
+        r |= Readiness.READ_HUP
+    return Readiness(r)
 
 
 struct EpollDriver(ReadinessDriver):
@@ -77,7 +118,7 @@ struct EpollDriver(ReadinessDriver):
                    in ReadinessEvent on notification.
         """
         var ev = epoll_event(
-            events=interest.value | EPOLLRDHUP,
+            events=_interest_to_epoll(interest) | EPOLLRDHUP,
             data=token.value,
         )
         epoll_ctl(self._epfd, EpollOp.ADD, fd, ev)
@@ -94,7 +135,7 @@ struct EpollDriver(ReadinessDriver):
             token: New opaque token for subsequent notifications.
         """
         var ev = epoll_event(
-            events=interest.value | EPOLLRDHUP,
+            events=_interest_to_epoll(interest) | EPOLLRDHUP,
             data=token.value,
         )
         epoll_ctl(self._epfd, EpollOp.MOD, fd, ev)
@@ -133,7 +174,7 @@ struct EpollDriver(ReadinessDriver):
         for i in range(Int(n)):
             var ev = self._events[unsafe_offset=i]
             result.append(
-                ReadinessEvent(Token(ev.data()), Readiness(ev.events()))
+                ReadinessEvent(Token(ev.data()), _epoll_to_readiness(ev.events()))
             )
         return result^
 
