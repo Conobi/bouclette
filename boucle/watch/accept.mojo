@@ -1,6 +1,6 @@
 """AcceptFuture — async accept via WatchLoop.
 
-_AcceptFutureState holds the per-operation Completion token and the CQE
+_AcceptFutureState holds the per-operation Completion token and the completion
 result (accepted fd or errno). AcceptFuture is the RAII handle returned
 to callers. Destroying the state closes an unclaimed accepted fd, so the
 fd never leaks whichever party frees the state.
@@ -32,7 +32,7 @@ struct _AcceptFutureState(_FutureCallback):
     """Internal state for a single async accept operation.
 
     Implements _FutureCallback so the generic _dispatch can deliver
-    CQE results into this struct and the WatchLoop registry can settle
+    completion results into this struct and the WatchLoop registry can settle
     its ownership. Stored on the heap; the Completion's context pointer
     points back to the enclosing _AcceptFutureState.
 
@@ -40,7 +40,7 @@ struct _AcceptFutureState(_FutureCallback):
         completion: The io_uring completion token (fn ptr + context ptr).
         _socket_fd: The accepted socket fd (-1 = not yet set).
         _error_code: The errno on failure (0 = no error).
-        done: True once the CQE callback has fired.
+        done: True once the completion callback has fired.
         consumed: True once result() has been called.
         _owner_dropped: True if the AcceptFuture was dropped before done;
                         the WatchLoop then frees this state.
@@ -85,13 +85,13 @@ struct _AcceptFutureState(_FutureCallback):
         self._loop_gone = move._loop_gone
 
     def set_result(mut self, result: Int):
-        """Store the CQE result from io_uring accept and mark done.
+        """Store the completion result from accept operation and mark done.
 
         On success (result >= 0), stores the accepted fd.
         On failure (result < 0), stores the negated errno.
 
         Args:
-            result: The io_uring CQE result (accepted fd or negative errno).
+            result: The io_uring completion result (accepted fd or negative errno).
         """
         if result >= 0:
             self._socket_fd = Int32(result)
@@ -100,7 +100,7 @@ struct _AcceptFutureState(_FutureCallback):
         self.done = True
 
     def is_done(self) -> Bool:
-        """Return True once the CQE callback has fired.
+        """Return True once the completion callback has fired.
 
         Returns:
             True if no callback will write this state again.
@@ -183,7 +183,7 @@ struct AcceptFuture(Movable):
         If the completion has been delivered, or the loop has already
         been destroyed, this handle is the last owner and frees the
         state. Otherwise the loop still tracks the state, so it is
-        marked as orphaned and the loop frees it — after the CQE arrives
+        marked as orphaned and the loop frees it — after the completion arrives
         during run(), or when the loop itself is destroyed.
 
         Either way, destroying the state closes the accepted fd if
@@ -229,6 +229,6 @@ struct AcceptFuture(Movable):
         then raises with the reason.
 
         Returns:
-            True once the CQE callback has fired (success or failure).
+            True once the completion callback has fired (success or failure).
         """
         return self._state[].done

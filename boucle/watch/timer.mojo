@@ -1,7 +1,7 @@
 """TimerFuture — async timeout via WatchLoop.
 
 _TimerFutureState holds the per-operation Completion token and a
-__kernel_timespec (for pointer stability — the SQE points to it).
+Timeout (for pointer stability — the operation points to it).
 TimerFuture is the RAII handle returned to callers.
 
 The state is shared with the WatchLoop that armed the timer (see
@@ -29,16 +29,16 @@ struct _TimerFutureState(_FutureCallback):
     """Internal state for a single async timeout operation.
 
     Implements _FutureCallback so the generic _dispatch can deliver
-    CQE results into this struct and the WatchLoop registry can settle
+    completion results into this struct and the WatchLoop registry can settle
     its ownership. The Timeout (layout-compatible with
-    __kernel_timespec) is stored here for pointer stability — the SQE
-    points to it and it must remain valid until the CQE fires.
+    Timeout) is stored here for pointer stability — the operation
+    points to it and it must remain valid until the completion fires.
 
     Fields:
         completion: The io_uring completion token (fn ptr + context ptr).
-        _ts: Timeout value (layout-identical to __kernel_timespec).
-        _expired: True if the timer expired normally (CQE result == -ETIME).
-        done: True once the CQE callback has fired.
+        _ts: Timeout value (layout-identical to Timeout).
+        _expired: True if the timer expired normally (completion result == -ETIME).
+        done: True once the completion callback has fired.
         consumed: True once result() has been called.
         _owner_dropped: True if the TimerFuture was dropped before done;
                         the WatchLoop then frees this state.
@@ -86,19 +86,19 @@ struct _TimerFutureState(_FutureCallback):
         self._loop_gone = move._loop_gone
 
     def set_result(mut self, result: Int):
-        """Store the CQE result from io_uring timeout and mark done.
+        """Store the completion result from timeout operation and mark done.
 
         -ETIME (-62) means the timer expired normally. Any other result
         (e.g. 0 for cancellation) means it did not expire.
 
         Args:
-            result: The io_uring CQE result (-62 = expired, 0 = cancelled).
+            result: The io_uring completion result (-62 = expired, 0 = cancelled).
         """
         self._expired = result == -62
         self.done = True
 
     def is_done(self) -> Bool:
-        """Return True once the CQE callback has fired.
+        """Return True once the completion callback has fired.
 
         Returns:
             True if no callback will write this state again.
@@ -166,9 +166,9 @@ struct TimerFuture(Movable):
 
         If the completion has been delivered, or the loop has already
         been destroyed, this handle is the last owner and frees the
-        state. Otherwise the loop still tracks the state (and the SQE
+        state. Otherwise the loop still tracks the state (and the operation
         may still point at `_ts`), so it is marked as orphaned and the
-        loop frees it — after the CQE arrives during run(), or when the
+        loop frees it — after the completion arrives during run(), or when the
         loop itself is destroyed.
         """
         if self._state[].done or self._state[]._loop_gone:
@@ -205,6 +205,6 @@ struct TimerFuture(Movable):
         then raises with the reason.
 
         Returns:
-            True once the CQE callback has fired.
+            True once the completion callback has fired.
         """
         return self._state[].done

@@ -1,7 +1,7 @@
 """Internal traits and generic hooks for Future state ownership.
 
 Two type-erased hand-offs meet here. The driver holds each operation's
-Completion (function pointer + void* context) and fires it on CQE
+Completion (function pointer + void* context) and fires it on completion
 arrival; the WatchLoop holds a registry entry for every state still in
 flight so that it can settle ownership after each tick and when it is
 destroyed. Both sides work on `Pointer[NoneType, MutUntrackedOrigin]`
@@ -75,17 +75,17 @@ trait _InFlightState(Movable, Deinitable):
 
 
 trait _FutureCallback(_InFlightState):
-    """Internal trait for simple Future states driven by one CQE.
+    """Internal trait for simple Future states driven by one completion.
 
-    Implementors receive the CQE result via set_result(), which must
+    Implementors receive the completion result via set_result(), which must
     also mark the state done. Not part of the public API.
     """
 
     def set_result(mut self, result: Int):
-        """Store the completion result from a CQE and mark the state done.
+        """Store the completion result from a completion and mark the state done.
 
         Args:
-            result: The io_uring CQE result (negative errno on error,
+            result: The operation result (negative errno on error,
                     non-negative on success).
         """
         ...
@@ -99,7 +99,7 @@ comptime _DetachFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> None
 def _dispatch[F: _FutureCallback](
     ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32
 ):
-    """Generic CQE dispatch to a typed _FutureCallback.
+    """Generic completion dispatch to a typed _FutureCallback.
 
     After monomorphisation this is a plain function pointer compatible with
     CompletionFn — no closure capture, no heap allocation.
@@ -110,8 +110,8 @@ def _dispatch[F: _FutureCallback](
     Args:
         ctx: Type-erased pointer to the heap-allocated _FutureCallback
              implementor.
-        result: The io_uring CQE result.
-        flags: The io_uring CQE flags (currently unused by _FutureCallback).
+        result: The operation result.
+        flags: The operation flags (currently unused by _FutureCallback).
     """
     var state_ptr = ctx.unsafe_bitcast[F]()
     state_ptr[].set_result(result)
