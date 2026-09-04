@@ -1,9 +1,9 @@
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.net.socket import Socket
-from boucle._sys.linux.raw import (
+from boucle.socle.linux.raw import (
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,
@@ -15,8 +15,8 @@ from boucle._sys.linux.raw import (
 def _getsockopt_int(fd: Int32, level: Int32, optname: Int32) raises -> Int32:
     var val = Int32(-1)
     var optlen = UInt32(4)
-    var v_p = UnsafePointer(to=val)
-    var l_p = UnsafePointer(to=optlen)
+    var v_p = Pointer(to=val)
+    var l_p = Pointer(to=optlen)
     var res = external_call["getsockopt", Int32](
         fd, level, optname, v_p, l_p,
     )

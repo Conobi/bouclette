@@ -1,0 +1,19 @@
+"""WatchLoop — ergonomic completion-based I/O with asyncio-style Futures.
+
+Submit an operation, keep the Future it returns, and read its result
+once the loop has run. `Backend` is re-exported here because selecting
+or inspecting the kernel mechanism (`WatchLoop(backend=Backend.EPOLL)`,
+`loop.backend()`) is part of using the loop.
+"""
+
+from boucle.drivers.backend import Backend
+
+from .accept import AcceptFuture
+from .connect import ConnectFuture
+from .connect_timeout import ConnectWithTimeoutFuture
+from .loop import WatchLoop
+from .outcome import ConnectOutcome
+from .recv import RecvFuture
+from .send import SendFuture
+from .transfer import TransferResult
+from .timer import TimerFuture

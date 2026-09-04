@@ -1,156 +1,68 @@
-"""Completion-model echo example: loopback TCP send/recv.
+"""Completion-model echo: TCP accept + connect, then send + recv.
 
-Demonstrates the CompletionLoop API end-to-end:
-  1. Bind a listening TCP socket on 127.0.0.1:0 (OS-assigned port).
-  2. Submit accept on the server.
-  3. Submit connect on a client socket.
-  4. Drive the loop until both complete; capture the accepted fd.
-  5. Submit send on the client and recv on the accepted side.
-  6. Drive the loop until both complete; assert bytes_received == bytes_sent.
+Demonstrates the WatchLoop API end-to-end:
+  1. Bind a listening TCP socket, discover the ephemeral port.
+  2. Submit async accept + connect, run() to completion.
+  3. Submit async send + recv, run() again.
+  4. Verify byte counts match.
 
-The handler is a tiny state machine over CQE tokens — io_uring delivers
-out-of-order completions, so we route by token rather than ordering.
+WatchLoop wraps the platform completion backend (io_uring when
+available, epoll otherwise) behind asyncio-style Futures.
+Submit operations, call run(), extract results.
+
+send() and recv() take the buffer by value: it belongs to the loop until
+the operation completes, and result() hands it back with the byte count.
 
 Run:
     uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 """
 
-from boucle.completion import CompletionLoop, CompletionHandler
-from boucle.handle import RawHandle
+from boucle.watch import WatchLoop
 from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
+from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
-from boucle._sys.linux.raw import sockaddr_in
-from std.ffi import external_call
-from std.memory import UnsafePointer
 from std.testing import assert_equal, assert_true
 
 
-comptime _TOK_ACCEPT: UInt64 = 1
-comptime _TOK_CONNECT: UInt64 = 2
-comptime _TOK_SEND: UInt64 = 3
-comptime _TOK_RECV: UInt64 = 4
-
-comptime _MSG: StaticString = "ping"
-comptime _MSG_LEN: Int = 4
-
-
-struct EchoTracker(CompletionHandler):
-    """Tracks the four completions and stashes the accepted fd."""
-
-    var accepted_fd: Int32
-    var connect_result: Int32
-    var bytes_sent: Int32
-    var bytes_recvd: Int32
-    var accept_done: Bool
-    var connect_done: Bool
-    var send_done: Bool
-    var recv_done: Bool
-
-    def __init__(out self):
-        self.accepted_fd = -1
-        self.connect_result = 0
-        self.bytes_sent = 0
-        self.bytes_recvd = 0
-        self.accept_done = False
-        self.connect_done = False
-        self.send_done = False
-        self.recv_done = False
-
-    def __init__(out self, *, deinit take: Self):
-        self.accepted_fd = take.accepted_fd
-        self.connect_result = take.connect_result
-        self.bytes_sent = take.bytes_sent
-        self.bytes_recvd = take.bytes_recvd
-        self.accept_done = take.accept_done
-        self.connect_done = take.connect_done
-        self.send_done = take.send_done
-        self.recv_done = take.recv_done
-
-    def on_complete(mut self, token: UInt64, result: Int32, flags: UInt32):
-        if token == _TOK_ACCEPT:
-            self.accepted_fd = result
-            self.accept_done = True
-        elif token == _TOK_CONNECT:
-            self.connect_result = result
-            self.connect_done = True
-        elif token == _TOK_SEND:
-            self.bytes_sent = result
-            self.send_done = True
-        elif token == _TOK_RECV:
-            self.bytes_recvd = result
-            self.recv_done = True
-
-
 def main() raises:
-    # ── Listening socket on loopback, ephemeral port ─────────────────────
+    # Server: bind to loopback, OS-assigned port.
     var server = Socket.tcp_v4()
-    var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
-    server.bind(bind_addr)
+    server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
     server.listen(Backlog.DEFAULT)
 
-    # Discover the kernel-assigned port via getsockname(2).
-    var bound = sockaddr_in()
-    var bound_len = Int32(16)  # sizeof(sockaddr_in)
-    var gs = external_call["getsockname", Int32](
-        server.raw(),
-        UnsafePointer(to=bound).bitcast[Int8](),
-        UnsafePointer(to=bound_len).bitcast[Int8](),
-    )
-    if Int(gs) != 0:
-        raise "getsockname failed"
+    var port = server.local_addr_v4().port
 
-    var be_port: UInt16 = bound.sin_port
-    var host_port: UInt16 = (
-        (be_port << 8) | (be_port >> 8)
-    ) & UInt16(0xFFFF)
-    assert_true(host_port != 0)
-
-    # ── Submit accept + connect, drive the loop ──────────────────────────
+    # Client socket.
     var client = Socket.tcp_v4()
-    var target = SocketAddrV4(127, 0, 0, 1, port=host_port)
-    var target_stor = target.addr_stor()
-    var addr_ptr = target_stor.addr_unsafe_ptr()
-    var addr_len: UInt64 = UInt64(SocketAddrStorV4.ADDR_LEN)
+    var target = SocketAddrV4(127, 0, 0, 1, port=port)
 
-    var loop = CompletionLoop(EchoTracker(), sq_entries=8)
-    loop.submit_accept(server.raw(), token=_TOK_ACCEPT)
-    loop.submit_connect(client.raw(), addr_ptr, addr_len, token=_TOK_CONNECT)
+    # Phase 1: async accept + connect.
+    var loop = WatchLoop(capacity=8)
+    var accept_f = loop.accept(server)
+    var connect_f = loop.connect(client, target)
     loop.run()
 
-    assert_true(loop._handler.accept_done)
-    assert_true(loop._handler.connect_done)
-    assert_true(loop._handler.accepted_fd >= 0)
-    assert_true(loop._handler.connect_result >= 0)
+    assert_true(connect_f.result().is_connected())
+    var accepted = accept_f.result()
 
-    var accepted_fd: RawHandle = loop._handler.accepted_fd
-
-    # ── Send a small literal payload, recv on the accepted side ──────────
-    var send_buf = UnsafePointer[Int8, StaticConstantOrigin](
-        unsafe_from_address=Int(_MSG.unsafe_ptr())
-    )
-    var recv_buf = List[UInt8](length=16, fill=0)
-    var recv_ptr = UnsafePointer[Int8, StaticConstantOrigin](
-        unsafe_from_address=Int(recv_buf.unsafe_ptr())
-    )
-
-    loop.submit_send(client.raw(), send_buf, UInt(_MSG_LEN), token=_TOK_SEND)
-    loop.submit_recv(accepted_fd, recv_ptr, UInt(16), token=_TOK_RECV)
+    # Phase 2: send "ping" from client, recv on accepted socket.
+    # Each buffer is handed to the loop and comes back from result(),
+    # so nothing else can touch it while the kernel does.
+    var msg = String("ping")
+    var out_buf = List[UInt8]()
+    for c in msg.as_bytes():
+        out_buf.append(c)
+    var send_f = loop.send(client, out_buf^)
+    var recv_f = loop.recv(accepted, List[UInt8](length=16, fill=0))
     loop.run()
 
-    assert_true(loop._handler.send_done)
-    assert_true(loop._handler.recv_done)
-    assert_equal(loop._handler.bytes_sent, Int32(_MSG_LEN))
-    assert_equal(loop._handler.bytes_recvd, Int32(_MSG_LEN))
+    var sent = send_f^.result()
+    var received = recv_f^.result()
+    assert_equal(sent.count, 4)
+    assert_equal(received.count, 4)
+    assert_equal(String(from_utf8=received.transferred()), msg)
 
-    # Verify byte content.
-    for i in range(_MSG_LEN):
-        assert_equal(Int(recv_buf[i]), Int(_MSG.unsafe_ptr()[i]))
-
-    # Close the accepted fd; the Socket destructors handle client/server.
-    _ = external_call["close", Int32](accepted_fd)
-    _ = target_stor
-    _ = client^
-    _ = server^
-
+    accepted.close()
+    client.close()
+    server.close()
     print("OK")

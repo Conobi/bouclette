@@ -1,38 +1,39 @@
-"""Integration test: submit accept via IoUringDriver."""
+"""Integration test: submit accept via completion driver."""
 
 from std.ffi import external_call
-from std.memory import UnsafePointer
+from std.memory import Pointer
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.io_uring import IoUringDriver
+from boucle.drivers.auto import AutoDriver
+from boucle.drivers.backend import Backend
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.options import Backlog
-from boucle._sys.linux.raw import sockaddr_in
+from boucle.socle.linux.raw import sockaddr_in
 
 
 struct AcceptTracker:
     """Records callback invocations for accept completions."""
 
-    var result: Int32
+    var result: Int
     var flags: UInt32
     var fired: Bool
 
     def __init__(out self):
         """Construct a zeroed tracker."""
-        self.result = Int32(0)
+        self.result = 0
         self.flags = UInt32(0)
         self.fired = False
 
     @staticmethod
     def on_complete(
-        ctx: UnsafePointer[NoneType, MutAnyOrigin],
-        result: Int32,
+        ctx: Pointer[NoneType, MutUntrackedOrigin],
+        result: Int,
         flags: UInt32,
     ):
         """Callback that records the accept result."""
-        var self_ptr = UnsafePointer[AcceptTracker, MutAnyOrigin](
+        var self_ptr = Pointer[AcceptTracker, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
         self_ptr[].result = result
@@ -40,8 +41,12 @@ struct AcceptTracker:
         self_ptr[].fired = True
 
 
-def test_driver_accept() raises:
-    """Run accept integration test."""
+def test_driver_accept(backend: Backend) raises:
+    """Run accept integration test on the given backend.
+
+    Args:
+        backend: The completion backend to force (IO_URING or EPOLL).
+    """
     # Create a listening TCP socket on loopback ephemeral port.
     var server = Socket.tcp_v4()
     var bind_addr = SocketAddrV4(127, 0, 0, 1, port=0)
@@ -51,14 +56,14 @@ def test_driver_accept() raises:
     # Discover the kernel-assigned port via getsockname(2).
     var bound = sockaddr_in()
     var bound_len = Int32(16)
-    var bound_ptr = UnsafePointer(to=bound).bitcast[Int8]()
-    var bound_len_ptr = UnsafePointer(to=bound_len).bitcast[Int8]()
+    var bound_ptr = Pointer(to=bound).unsafe_bitcast[Int8]()
+    var bound_len_ptr = Pointer(to=bound_len).unsafe_bitcast[Int8]()
     var gs = external_call["getsockname", Int32](
         server.raw(), bound_ptr, bound_len_ptr
     )
     if Int(gs) != 0:
         var en = external_call[
-            "__errno_location", UnsafePointer[Int32, MutAnyOrigin]
+            "__errno_location", Pointer[Int32, MutUntrackedOrigin]
         ]()
         raise String("getsockname failed, errno=") + String(Int(en[]))
 
@@ -74,42 +79,42 @@ def test_driver_accept() raises:
     var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     # Set up driver.
-    var driver = IoUringDriver(sq_entries=16)
+    var driver = AutoDriver(capacity=16, backend=backend)
 
     # Set up accept completion.
     var accept_tracker = AcceptTracker()
-    var accept_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_tracker))
+    var accept_ctx = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_tracker))
     )
     var accept_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=accept_ctx
     )
-    var accept_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=accept_cmp))
+    var accept_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=accept_cmp))
     )
 
     # Set up connect completion.
     var connect_tracker = AcceptTracker()
-    var connect_ctx = UnsafePointer[NoneType, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_tracker))
+    var connect_ctx = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_tracker))
     )
     var connect_cmp = Completion(
         invoke=AcceptTracker.on_complete, context=connect_ctx
     )
-    var connect_cmp_ptr = UnsafePointer[Completion, MutAnyOrigin](
-        unsafe_from_address=Int(UnsafePointer(to=connect_cmp))
+    var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=connect_cmp))
     )
 
     # Submit accept on the server socket first, then connect from client.
-    driver.submit_accept(server.raw(), accept_cmp_ptr)
+    driver.accept(server.raw(), accept_cmp_ptr)
 
     var client = Socket.tcp_v4()
-    driver.submit_connect(client.raw(), addr_ptr, addr_len, connect_cmp_ptr)
+    driver.connect(client.raw(), addr_ptr, addr_len, connect_cmp_ptr)
 
     # Tick until both completions fire.
     var ticks = 0
     while not accept_tracker.fired or not connect_tracker.fired:
-        driver.tick(wait=True)
+        _ = driver.tick(wait=True)
         ticks += 1
         if ticks > 100:
             raise "timed out waiting for accept/connect completion"
@@ -129,11 +134,27 @@ def test_driver_accept() raises:
     _ = external_call["close", Int32](Int32(accepted_fd))
 
     # Keep resources alive past completion.
+    _ = accept_cmp
+    _ = connect_cmp
     _ = target_stor
     _ = client^
     _ = server^
 
 
+def _has_io_uring() -> Bool:
+    """Probe whether io_uring is available on this kernel."""
+    try:
+        var d = AutoDriver(capacity=4, backend=Backend.IO_URING)
+        _ = d^
+        return True
+    except:
+        return False
+
+
 def main() raises:
-    test_driver_accept()
+    if _has_io_uring():
+        test_driver_accept(Backend.IO_URING)
+    else:
+        print("SKIP: io_uring not available")
+    test_driver_accept(Backend.EPOLL)
     print("PASS: test_driver_accept.mojo")

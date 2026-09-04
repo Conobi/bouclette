@@ -11,5 +11,3 @@ from .options import (
     SendFlags,
     RecvFlags,
 )
-from .probe import PortStatus, ProbeResult, result_from_connect_cqe, compute_batches, BatchSpec, ProbeBatch
-from .connect_probe import ConnectProbe

@@ -1,6 +1,6 @@
 """Portable I/O resource handle types."""
 
-from boucle._sys.linux.fd import (
+from boucle.socle.platform import (
     UnsafeFd,
     close,
     close_unchecked,
@@ -32,12 +32,13 @@ struct OwnedHandle(Movable):
         self._raw = raw
 
     @always_inline("nodebug")
-    def __init__(out self, *, deinit take: Self):
-        self._raw = take._raw
+    def __init__(out self, *, deinit move: Self):
+        self._raw = move._raw
 
     @always_inline("nodebug")
-    def __del__(deinit self):
-        close_unchecked(unsafe_fd=self._raw)
+    def __deinit__(deinit self):
+        if self._raw >= 0:
+            close_unchecked(unsafe_fd=self._raw)
 
     @always_inline("nodebug")
     def raw(self) raises -> RawHandle:

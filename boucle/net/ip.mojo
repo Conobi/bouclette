@@ -13,7 +13,7 @@ def _write_hex_segment[W: Writer](mut writer: W, v: UInt16):
     if v == 0:
         writer.write_string("0")
         return
-    var digits = InlineArray[UInt8, 4](fill=0)
+    var digits = Array[UInt8, 4](fill=0)
     var n = 0
     var x = UInt32(v)
     while x > 0:
@@ -22,11 +22,11 @@ def _write_hex_segment[W: Writer](mut writer: W, v: UInt16):
         x = x >> 4
         n += 1
     # Write in reverse — digits is little-endian here.
-    var out = InlineArray[UInt8, 4](fill=0)
+    var out = Array[UInt8, 4](fill=0)
     for i in range(n):
         out[i] = digits[n - 1 - i]
     var slc = StringSlice(
-        unsafe_from_utf8=Span[UInt8, origin_of(out)](ptr=out.unsafe_ptr(), length=n)
+        unsafe_from_utf8=Span[UInt8, origin_of(out)](unsafe_ptr=out.unsafe_ptr(), length=n)
     )
     writer.write_string(slc)
 

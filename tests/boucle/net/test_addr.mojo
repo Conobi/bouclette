@@ -39,15 +39,15 @@ def test_addr() raises:
     # Verify IPv6 byte layout: ::1 should have byte 15 = 1, all others = 0
     # The flattened sockaddr_in6 stores address bytes in sin6_addr_a/b/c/d.
     # Byte 15 is the last byte of sin6_addr_d.
-    var addr_d_ptr = UnsafePointer(to=stor6.addr.sin6_addr_d).bitcast[UInt8]()
+    var addr_d_ptr = Pointer(to=stor6.addr.sin6_addr_d).unsafe_bitcast[UInt8]()
     assert_equal(
-        Int(addr_d_ptr[3]),
+        Int(addr_d_ptr[unsafe_offset=3]),
         1,
         "last byte of ::1 must be 1",
     )
-    var addr_a_ptr = UnsafePointer(to=stor6.addr.sin6_addr_a).bitcast[UInt8]()
+    var addr_a_ptr = Pointer(to=stor6.addr.sin6_addr_a).unsafe_bitcast[UInt8]()
     assert_equal(
-        Int(addr_a_ptr[0]),
+        Int(addr_a_ptr[unsafe_offset=0]),
         0,
         "first byte of ::1 must be 0",
     )
@@ -55,13 +55,13 @@ def test_addr() raises:
     # Verify 2001:db8::1 byte layout
     var addr6b = SocketAddrV6(0x2001, 0x0db8, 0, 0, 0, 0, 0, 1, port=80)
     var stor6b = addr6b.addr_stor()
-    var b_addr_a_ptr = UnsafePointer(to=stor6b.addr.sin6_addr_a).bitcast[UInt8]()
-    assert_equal(Int(b_addr_a_ptr[0]), 0x20)
-    assert_equal(Int(b_addr_a_ptr[1]), 0x01)
-    assert_equal(Int(b_addr_a_ptr[2]), 0x0d)
-    assert_equal(Int(b_addr_a_ptr[3]), 0xb8)
-    var b_addr_d_ptr = UnsafePointer(to=stor6b.addr.sin6_addr_d).bitcast[UInt8]()
-    assert_equal(Int(b_addr_d_ptr[3]), 0x01)
+    var b_addr_a_ptr = Pointer(to=stor6b.addr.sin6_addr_a).unsafe_bitcast[UInt8]()
+    assert_equal(Int(b_addr_a_ptr[unsafe_offset=0]), 0x20)
+    assert_equal(Int(b_addr_a_ptr[unsafe_offset=1]), 0x01)
+    assert_equal(Int(b_addr_a_ptr[unsafe_offset=2]), 0x0d)
+    assert_equal(Int(b_addr_a_ptr[unsafe_offset=3]), 0xb8)
+    var b_addr_d_ptr = Pointer(to=stor6b.addr.sin6_addr_d).unsafe_bitcast[UInt8]()
+    assert_equal(Int(b_addr_d_ptr[unsafe_offset=3]), 0x01)
 
 
 def main() raises:

@@ -3,9 +3,11 @@
 Wraps platform-specific constants behind typed structs so user code
 does not import raw kernel values directly.
 
-Constants are defined as literals rather than importing from
-io._sys.linux.raw to avoid a Mojo 0.26.2 mojopkg deserialization
-crash when importing across multiple internal subpackages.
+Constants are defined as literals rather than read from the platform
+facade, so this module stays readable as the portable definition of
+each option. The one exception is a compile-time-only import at the end
+of this file, used solely to assert the literals match the values the
+active backend reports through `boucle.socle.platform`.
 """
 
 
@@ -199,15 +201,60 @@ struct Backlog(TrivialRegisterPassable):
         self.value = value
 
 
-struct Shutdown(TrivialRegisterPassable):
-    """`SHUT_*` constants for use with `shutdown`."""
+struct Shutdown(TrivialRegisterPassable, Equatable):
+    """Direction for shutting down part or all of a connection.
+
+    Maps to `SHUT_RD`, `SHUT_WR`, and `SHUT_RDWR` constants.
+    """
 
     comptime RD = Self(0)     # SHUT_RD
     comptime WR = Self(1)     # SHUT_WR
     comptime RDWR = Self(2)   # SHUT_RDWR
 
+    # Aliases matching the portable API naming convention.
+    comptime READ = Self(0)
+    comptime WRITE = Self(1)
+    comptime BOTH = Self(2)
+
     var value: Int32
 
     @always_inline("nodebug")
+    @implicit
     def __init__(out self, value: Int32):
         self.value = value
+
+    @always_inline("nodebug")
+    def __eq__(self, other: Self) -> Bool:
+        """Returns True if both values represent the same shutdown direction."""
+        return self.value == other.value
+
+    @always_inline("nodebug")
+    def __ne__(self, other: Self) -> Bool:
+        """Returns True if the values represent different shutdown directions."""
+        return self.value != other.value
+
+
+# ── Compile-time platform value verification ─────────────────────────
+# When a non-Linux platform arrives, mismatched values fire at compile
+# time, forcing the constants to be updated.
+
+from boucle.socle.platform import (
+    AF_UNSPEC as _AF_UNSPEC,
+    AF_UNIX as _AF_UNIX,
+    AF_INET as _AF_INET,
+    AF_INET6 as _AF_INET6,
+    SOCK_STREAM as _SOCK_STREAM,
+    SOCK_DGRAM as _SOCK_DGRAM,
+)
+
+def _verify_platform_values():
+    """Assert hardcoded portable constants match the Linux backend values."""
+    comptime assert AddrFamily.UNSPEC.id == UInt16(_AF_UNSPEC), "AF_UNSPEC mismatch"
+    comptime assert AddrFamily.UNIX.id == UInt16(_AF_UNIX), "AF_UNIX mismatch"
+    comptime assert AddrFamily.INET.id == UInt16(_AF_INET), "AF_INET mismatch"
+    comptime assert AddrFamily.INET6.id == UInt16(_AF_INET6), "AF_INET6 mismatch"
+    comptime assert SocketType.STREAM.id == Int32(_SOCK_STREAM), "SOCK_STREAM mismatch"
+    comptime assert SocketType.DGRAM.id == Int32(_SOCK_DGRAM), "SOCK_DGRAM mismatch"
+
+
+comptime _VERIFIED_PLATFORM_VALUES: None = _verify_platform_values()

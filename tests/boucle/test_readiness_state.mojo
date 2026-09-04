@@ -3,26 +3,26 @@ from std.testing import assert_true, assert_false
 
 
 def test_readiness_state() raises:
-    var r = Readiness(0x001)  # EPOLLIN
+    var r = Readiness(Readiness.READABLE)
     assert_true(r.is_readable())
     assert_false(r.is_writable())
     assert_false(r.is_error())
     assert_false(r.is_hup())
 
-    var w = Readiness(0x004)  # EPOLLOUT
+    var w = Readiness(Readiness.WRITABLE)
     assert_false(w.is_readable())
     assert_true(w.is_writable())
 
-    var e = Readiness(0x008)  # EPOLLERR
+    var e = Readiness(Readiness.ERROR)
     assert_true(e.is_error())
 
-    var h = Readiness(0x010)  # EPOLLHUP
+    var h = Readiness(Readiness.HUP)
     assert_true(h.is_hup())
 
-    var rh = Readiness(0x2000)  # EPOLLRDHUP
+    var rh = Readiness(Readiness.READ_HUP)
     assert_true(rh.is_read_hup())
 
-    var rw = Readiness(0x001 | 0x004)
+    var rw = Readiness(Readiness.READABLE | Readiness.WRITABLE)
     assert_true(rw.is_readable())
     assert_true(rw.is_writable())
 

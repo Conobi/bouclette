@@ -8,6 +8,7 @@ docs/superpowers/
 # Internal docs — kept local, not committed
 specs/
 research/
+issues/
 docs/project-context.md
 
 # Local agent guide and config
@@ -28,6 +29,10 @@ credentials.*
 # Parallel worktrees (managed by atelier:using-git-worktrees skill)
 .worktrees/
 
+# Local caches
+.cache/
+.local/
+
 # mojox cache
 .mojox/
 
@@ -41,3 +46,7 @@ dist/
 __pycache__/
 .mypy_cache/
 .ruff_cache/
+port_scan
+completion_echo
+coro_echo
+readiness_echo

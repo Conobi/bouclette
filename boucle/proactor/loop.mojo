@@ -1,13 +1,21 @@
 """EventLoop — single-threaded event loop driven by completions."""
 
-from .driver import IoDriver
+from boucle.drivers.driver import IoDriver
 
 
 struct EventLoop[D: IoDriver](Movable):
     """Single-threaded event loop wrapping an IoDriver.
 
-    Provides blocking and non-blocking poll methods. Not generic over
-    a handler — operations bring their own Completion callbacks.
+    Three ways to drive it, named as everywhere else in boucle:
+    `run_once()` is one blocking tick, `poll()` one non-blocking tick,
+    and `run_forever()` repeats blocking ticks until `stop()`.
+
+    `run_once()` takes no timeout: the driver's tick() only offers
+    "wait" or "do not wait", so a bounded wait would have to be faked
+    with a timer operation the caller can submit just as well.
+
+    Not generic over a handler — operations bring their own Completion
+    callbacks.
     """
 
     var driver: Self.D
@@ -22,25 +30,33 @@ struct EventLoop[D: IoDriver](Movable):
         self.driver = driver^
         self.running = False
 
-    def __init__(out self, *, deinit take: Self):
+    def __init__(out self, *, deinit move: Self):
         """Move constructor."""
-        self.driver = take.driver^
-        self.running = take.running
+        self.driver = move.driver^
+        self.running = move.running
 
-    def __del__(deinit self):
+    def __deinit__(deinit self):
         """Destroy the event loop and its underlying driver."""
-        self.driver^.__del__()
+        self.driver^.__deinit__()
 
     def run_once(mut self) raises:
-        """Block until at least one completion fires, then dispatch all ready."""
-        self.driver.tick(wait=True)
+        """Run one blocking tick.
 
-    def try_poll(mut self) raises:
-        """Non-blocking: dispatch any ready completions, return immediately."""
-        self.driver.tick(wait=False)
+        Waits for at least one completion, then dispatches every
+        completion that is ready by the time it wakes up.
+        """
+        _ = self.driver.tick(wait=True)
 
-    def run(mut self) raises:
-        """Run until stop() is called."""
+    def poll(mut self) raises:
+        """Run one non-blocking tick.
+
+        Dispatches the completions that are already available and
+        returns, even when there are none.
+        """
+        _ = self.driver.tick(wait=False)
+
+    def run_forever(mut self) raises:
+        """Run blocking ticks until stop() is called."""
         self.running = True
         while self.running:
             self.run_once()

@@ -4,21 +4,14 @@ Declares what I/O events you care about on a resource.
 Used with `ReadinessLoop.register()` to tell the OS what to watch for.
 """
 
-from boucle._sys.linux.raw import (
-    EPOLLET,
-    EPOLLIN,
-    EPOLLONESHOT,
-    EPOLLOUT,
-)
-
 
 struct Interest(TrivialRegisterPassable, Defaultable):
     """I/O interest flags — what events to monitor."""
 
-    comptime READABLE = Self(EPOLLIN)
-    comptime WRITABLE = Self(EPOLLOUT)
-    comptime EDGE_TRIGGERED = Self(EPOLLET)
-    comptime ONESHOT = Self(EPOLLONESHOT)
+    comptime READABLE = Self(1)
+    comptime WRITABLE = Self(2)
+    comptime EDGE_TRIGGERED = Self(4)
+    comptime ONESHOT = Self(8)
 
     var value: UInt32
 
@@ -41,16 +34,16 @@ struct Interest(TrivialRegisterPassable, Defaultable):
 
     @always_inline("nodebug")
     def is_readable(self) -> Bool:
-        return self.value & EPOLLIN != 0
+        return self.value & Self.READABLE.value != 0
 
     @always_inline("nodebug")
     def is_writable(self) -> Bool:
-        return self.value & EPOLLOUT != 0
+        return self.value & Self.WRITABLE.value != 0
 
     @always_inline("nodebug")
     def is_edge_triggered(self) -> Bool:
-        return self.value & EPOLLET != 0
+        return self.value & Self.EDGE_TRIGGERED.value != 0
 
     @always_inline("nodebug")
     def is_oneshot(self) -> Bool:
-        return self.value & EPOLLONESHOT != 0
+        return self.value & Self.ONESHOT.value != 0
