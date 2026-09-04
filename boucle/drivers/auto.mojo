@@ -1,9 +1,9 @@
-"""Runtime-probing completion driver with io_uring-to-epoll fallback.
+"""Auto-selecting completion driver with io_uring-to-epoll fallback.
 
 Probes for io_uring support at construction time and falls back to
 EpollCompletionDriver when unavailable. Implements IoDriver by
 delegating every method to whichever backend is active. The backend
-branch is perfectly predicted after init -- essentially zero cost.
+branch is perfectly predicted after init — essentially zero cost.
 """
 
 from std.collections import Optional
@@ -17,7 +17,7 @@ from boucle.drivers.io_uring import IoUringDriver
 from boucle.drivers.epoll_completion import EpollCompletionDriver
 
 
-struct ProbeCompletionDriver(IoDriver):
+struct AutoDriver(IoDriver):
     """IoDriver that probes for io_uring and falls back to epoll.
 
     At construction, attempts to create an IoUringDriver. If the

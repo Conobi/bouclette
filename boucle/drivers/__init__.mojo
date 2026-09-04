@@ -11,8 +11,8 @@ from .backend import Backend
 from .io_uring import IoUringDriver
 from .epoll import EpollDriver
 from .epoll_completion import EpollCompletionDriver
-from .probe import ProbeCompletionDriver
+from .auto import AutoDriver
 
-comptime _CompletionDriver = ProbeCompletionDriver
-comptime _WatchDriver = ProbeCompletionDriver
+comptime _CompletionDriver = AutoDriver
+comptime _WatchDriver = AutoDriver
 comptime _ReadinessDriver = EpollDriver
