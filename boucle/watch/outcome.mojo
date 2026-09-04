@@ -13,7 +13,6 @@ from boucle.socle.linux.raw import (
     ENETUNREACH,
     EHOSTUNREACH,
 )
-from boucle.net.probe import PortStatus
 
 
 struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
@@ -130,23 +129,6 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
             The original io_uring CQE res field.
         """
         return self._raw
-
-    def port_status(self) -> PortStatus:
-        """Map this outcome to a PortStatus for probe compatibility.
-
-        Provides interoperability with the existing probe infrastructure:
-        - CONNECTED -> PortStatus.OPEN
-        - REFUSED -> PortStatus.CLOSED
-        - TIMEOUT, NETWORK_UNREACHABLE, ERROR -> PortStatus.FILTERED
-
-        Returns:
-            The corresponding PortStatus.
-        """
-        if self._tag == UInt8(0):
-            return PortStatus.OPEN
-        if self._tag == UInt8(1):
-            return PortStatus.CLOSED
-        return PortStatus.FILTERED
 
     @always_inline
     def write_to[W: Writer](self, mut writer: W):
