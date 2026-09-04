@@ -3,10 +3,11 @@
 Wraps platform-specific constants behind typed structs so user code
 does not import raw kernel values directly.
 
-Constants are defined as literals rather than importing from
-boucle.socle.linux.raw to keep this module free of platform imports.
-The one exception is a compile-time-only import at the end of this
-file, used solely to assert the literals match the Linux backend.
+Constants are defined as literals rather than read from the platform
+facade, so this module stays readable as the portable definition of
+each option. The one exception is a compile-time-only import at the end
+of this file, used solely to assert the literals match the values the
+active backend reports through `boucle.socle.platform`.
 """
 
 
@@ -237,7 +238,7 @@ struct Shutdown(TrivialRegisterPassable, Equatable):
 # When a non-Linux platform arrives, mismatched values fire at compile
 # time, forcing the constants to be updated.
 
-from boucle.socle.linux.raw import (
+from boucle.socle.platform import (
     AF_UNSPEC as _AF_UNSPEC,
     AF_UNIX as _AF_UNIX,
     AF_INET as _AF_INET,

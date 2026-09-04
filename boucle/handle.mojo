@@ -1,6 +1,6 @@
 """Portable I/O resource handle types."""
 
-from boucle.socle.linux.fd import (
+from boucle.socle.platform import (
     UnsafeFd,
     close,
     close_unchecked,

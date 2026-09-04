@@ -17,10 +17,10 @@ from std.memory import Pointer
 
 from boucle.net.ip import IpAddrV4, IpAddrV6
 from boucle.net.options import AddrFamily
-from boucle.socle.linux.raw.ctypes import c_uint
-from boucle.socle.linux.raw.utils import _to_be
-from boucle.socle.linux.raw import (
+from boucle.socle.platform import (
     __be32,
+    _to_be,
+    c_uint,
     sockaddr_in,
     sockaddr_in6,
     socklen_t,

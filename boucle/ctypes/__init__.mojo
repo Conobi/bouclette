@@ -3,10 +3,10 @@
 Re-exports a small set of C type aliases for consumers that wire up
 `external_call` themselves without owning their own ctypes module. The
 set is intentionally narrow — widen on demand rather than mirroring
-every typedef from the raw platform layer.
+every typedef from the platform facade.
 """
 
-from boucle.socle.linux.raw.ctypes import (
+from boucle.socle.platform import (
     c_void,
     c_char,
     c_int,
