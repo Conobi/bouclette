@@ -12,13 +12,13 @@ from std.testing import assert_equal, assert_true
 
 def test_create_and_destroy() raises:
     """EpollDriver can be created and dropped without error."""
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     _ = driver^
 
 
 def test_poll_empty_returns_no_events() raises:
     """Polling with no registered fds and zero timeout returns empty."""
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     var events = driver.poll(timeout_ms=0)
     assert_equal(len(events), 0)
 
@@ -33,7 +33,7 @@ def test_pipe_readable() raises:
     var read_fd = pipefd[0]
     var write_fd = pipefd[1]
 
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     driver.register(read_fd, Interest.READABLE, Token(42))
 
     # Write a byte to make read end readable.
@@ -63,7 +63,7 @@ def test_pipe_writable() raises:
     var read_fd = pipefd[0]
     var write_fd = pipefd[1]
 
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     driver.register(write_fd, Interest.WRITABLE, Token(99))
 
     var events = driver.poll(timeout_ms=100)
@@ -86,7 +86,7 @@ def test_modify_interest() raises:
     var read_fd = pipefd[0]
     var write_fd = pipefd[1]
 
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
 
     # Register write end for READABLE — pipe write end is not readable,
     # so a short poll should return nothing.
@@ -117,7 +117,7 @@ def test_deregister_stops_events() raises:
     var read_fd = pipefd[0]
     var write_fd = pipefd[1]
 
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     driver.register(write_fd, Interest.WRITABLE, Token(55))
 
     # Confirm we get an event.
@@ -146,7 +146,7 @@ def test_multiple_fds() raises:
     assert_equal(Int(r1), 0)
     assert_equal(Int(r2), 0)
 
-    var driver = EpollDriver(max_events=16)
+    var driver = EpollDriver(capacity=16)
     driver.register(pipe1[1], Interest.WRITABLE, Token(10))
     driver.register(pipe2[1], Interest.WRITABLE, Token(20))
 
