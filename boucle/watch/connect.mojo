@@ -36,11 +36,12 @@ struct _ConnectFutureState(_FutureCallback):
     pointer points back to the enclosing _ConnectFutureState.
 
     The address storage is copied into this struct so that the pointer
-    passed to io_uring remains valid until the completion fires,
+    handed to the driver remains valid until the completion fires,
     regardless of the caller's stack lifetime.
 
     Fields:
-        completion: The io_uring completion token (fn ptr + context ptr).
+        completion: The per-operation completion token (fn ptr + context
+                    ptr) whose address the driver holds.
         _addr_stor: Copy of the target address for pointer stability.
         _result: Raw completion result (0 on success, negative errno on
                  failure).
@@ -92,14 +93,14 @@ struct _ConnectFutureState(_FutureCallback):
         self._loop_gone = move._loop_gone
 
     def set_result(mut self, result: Int):
-        """Store the raw completion result from io_uring connect and mark done.
+        """Store the raw completion result of the connect and mark it done.
 
         Does not decode the result — ConnectFuture.result() handles that
         via ConnectOutcome.from_result().
 
         Args:
-            result: The io_uring completion result (0 on success, negative
-                    errno on failure).
+            result: The completion result reported by the backend (0 on
+                    success, negative errno on failure).
         """
         self._result = result
         self.done = True
@@ -201,9 +202,10 @@ struct ConnectFuture(Movable):
             NETWORK_UNREACHABLE, or ERROR.
 
         Raises:
-            If the result was already consumed, the loop was destroyed
-            before the operation completed, or the operation has not
-            completed.
+            A plain message if the result was already consumed, the loop
+            was destroyed before the operation completed, or the
+            operation has not completed. A failed connect is not an
+            exception here — it comes back as a ConnectOutcome.
         """
         if self._state[].consumed:
             raise "result already consumed"

@@ -5,20 +5,20 @@ until the completion is delivered. If the caller drops the future first,
 the completion must still land in live memory, and any resource it
 produces (an accepted fd) must still be released.
 
-Uses direct syscalls for socket setup due to a Mojo 1.0.0 compiler bug
-affecting Socket.bind() through parametric inlining.
+socketpair(2), dup(2) and fcntl(2) are called directly: boucle.net does
+not wrap them, and the fd-leak check needs raw descriptor numbers.
 """
 
 from std.ffi import external_call
 from std.memory import Pointer
-from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
 from boucle.handle import OwnedHandle
 from boucle.net.addr import SocketAddrV4
+from boucle.net.options import Backlog
 from boucle.net.socket import Socket
 from boucle.socle.linux.errno import get_errno
-from boucle.socle.linux.raw import F_GETFL, sockaddr_in, socklen_t
+from boucle.socle.linux.raw import F_GETFL
 from boucle.watch import WatchLoop
 
 
@@ -42,78 +42,28 @@ def _make_socketpair() raises -> Tuple[Int32, Int32]:
 
 
 def _make_tcp_listener() raises -> Socket:
-    """Create a non-blocking TCP v4 listener on 127.0.0.1 with an ephemeral port."""
-    var fd = external_call["socket", Int32](
-        Int32(2), Int32(1 | 2048 | 524288), Int32(6)
-    )
-    if fd < 0:
-        raise String("socket failed: errno ", Int(get_errno()))
-    var one = Int32(1)
-    var one_p = Pointer(to=one)
-    _ = external_call["setsockopt", Int32](
-        fd, Int32(1), Int32(2), one_p, UInt32(4)
-    )
-    var addr = sockaddr_in()
-    addr.sin_family = UInt16(2)
-    addr.sin_port = UInt16(0)
-    addr.sin_addr_s_addr = UInt32(0x0100007F)
-    var addr_p = Pointer(to=addr)
-    var res = external_call["bind", Int32](
-        fd, addr_p, UInt32(size_of[sockaddr_in]())
-    )
-    if res < 0:
-        _ = external_call["close", Int32](fd)
-        raise String("bind failed: errno ", Int(get_errno()))
-    res = external_call["listen", Int32](fd, Int32(128))
-    if res < 0:
-        _ = external_call["close", Int32](fd)
-        raise String("listen failed: errno ", Int(get_errno()))
-    return Socket(OwnedHandle(raw=fd))
+    """Create a non-blocking TCP v4 listener on 127.0.0.1 with an ephemeral port.
 
-
-def _get_port(ref server: Socket) raises -> UInt16:
-    """Return the ephemeral port assigned to a bound socket."""
-    var addr = sockaddr_in()
-    var addrlen = socklen_t(size_of[sockaddr_in]())
-    var addr_p = Pointer(to=addr)
-    var len_p = Pointer(to=addrlen)
-    var fd = server.raw()
-    var res = external_call["getsockname", Int32](fd, addr_p, len_p)
-    if res < 0:
-        raise String("getsockname failed: errno ", Int(get_errno()))
-    var be = addr.sin_port
-    return ((be << 8) | (be >> 8)) & UInt16(0xFFFF)
+    Returns:
+        The listening socket.
+    """
+    var server = Socket.tcp_v4()
+    server.set_reuse_addr()
+    server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    server.listen(Backlog.DEFAULT)
+    return server^
 
 
 def _make_blocking_client(port: UInt16) raises -> Socket:
-    """Create a blocking TCP client already connected to 127.0.0.1:port."""
-    var fd = external_call["socket", Int32](
-        Int32(2), Int32(1 | 524288), Int32(6)
-    )
-    if fd < 0:
-        raise String("socket failed: errno ", Int(get_errno()))
-    var addr = sockaddr_in()
-    addr.sin_family = UInt16(2)
-    addr.sin_port = ((port << 8) | (port >> 8)) & UInt16(0xFFFF)
-    addr.sin_addr_s_addr = UInt32(0x0100007F)
-    var addr_p = Pointer(to=addr)
-    var res = external_call["connect", Int32](
-        fd, addr_p, UInt32(size_of[sockaddr_in]())
-    )
-    if res < 0:
-        _ = external_call["close", Int32](fd)
-        raise String("connect failed: errno ", Int(get_errno()))
-    return Socket(OwnedHandle(raw=fd))
+    """Create a blocking TCP client already connected to 127.0.0.1:port.
 
+    Args:
+        port: The listener's port, in host byte order.
 
-def _make_client_socket() raises -> Socket:
-    """Create a non-blocking, unconnected TCP client socket."""
-    var fd = external_call["socket", Int32](
-        Int32(2), Int32(1 | 2048 | 524288), Int32(6)
-    )
-    if fd < 0:
-        raise String("socket failed: errno ", Int(get_errno()))
-    return Socket(OwnedHandle(raw=fd))
+    Returns:
+        The connected client socket.
+    """
+    return Socket.tcp_connect(SocketAddrV4(127, 0, 0, 1, port=port))
 
 
 def _lowest_free_fd() raises -> Int32:
@@ -135,15 +85,6 @@ def _fd_is_open(fd: Int32) -> Bool:
     return external_call["fcntl", Int32](fd, Int32(F_GETFL)) >= 0
 
 
-def _send_all(fd: Int32, ref data: String) raises:
-    """Send the whole string on fd via send(2), raising on short sends."""
-    var sent = external_call["send", Int64](
-        fd, data.unsafe_ptr(), UInt64(data.byte_length()), Int32(0)
-    )
-    if Int(sent) != data.byte_length():
-        raise String("send failed: errno ", Int(get_errno()))
-
-
 def _assert_loop_still_usable(mut loop: WatchLoop) raises:
     """A fresh timer on the loop must resolve; proves the loop survived."""
     var timer_f = loop.timeout(1)
@@ -158,18 +99,12 @@ def test_recv_dropped_before_run_completes_safely() raises:
     var writer = Socket(OwnedHandle(raw=fds[1]))
     var loop = WatchLoop()
 
-    var recv_buf = InlineArray[UInt8, 16](fill=UInt8(0))
-    var recv_span = Span[UInt8, MutAnyOrigin](
-        unsafe_ptr=Pointer[UInt8, MutAnyOrigin](
-            unsafe_from_address=Int(Pointer(to=recv_buf))
-        ),
-        length=16,
-    )
-    var recv_f = loop.recv(reader, recv_span)
+    var recv_f = loop.recv(reader, List[UInt8](length=16, fill=0))
     _ = recv_f^  # Dropped while the recv is still in flight.
 
     var msg = String("data")
-    _send_all(fds[1], msg)
+    var sent = writer.send(msg.as_bytes())
+    assert_equal(sent, 4, "the peer should accept the whole message")
 
     loop.run()
     assert_equal(loop._pending, 0, "run() should drain the orphaned recv")
@@ -186,9 +121,8 @@ def test_send_dropped_before_run_completes_safely() raises:
     var reader = Socket(OwnedHandle(raw=fds[1]))
     var loop = WatchLoop()
 
-    # The buffer must outlive run(); only the future is dropped early.
-    var msg = String("data")
-    var send_f = loop.send(writer, msg.as_bytes())
+    var msg = List[UInt8](length=4, fill=100)
+    var send_f = loop.send(writer, msg^)
     _ = send_f^  # Dropped while the send is still in flight.
 
     loop.run()
@@ -214,8 +148,8 @@ def test_timer_dropped_before_run_completes_safely() raises:
 def test_connect_dropped_before_run_completes_safely() raises:
     """A ConnectFuture dropped before run() still completes without corruption."""
     var server = _make_tcp_listener()
-    var port = _get_port(server)
-    var client = _make_client_socket()
+    var port = server.local_addr_v4().port
+    var client = Socket.tcp_v4()
     var target = SocketAddrV4(127, 0, 0, 1, port=port)
     var loop = WatchLoop()
 
@@ -240,7 +174,7 @@ def test_accept_dropped_before_run_closes_accepted_fd() raises:
     fails with EBADF).
     """
     var server = _make_tcp_listener()
-    var port = _get_port(server)
+    var port = server.local_addr_v4().port
     var client = _make_blocking_client(port)
     var loop = WatchLoop()
 
@@ -268,8 +202,8 @@ def test_connect_with_timeout_dropped_before_run_completes_safely() raises:
     tracked and the loop must remain usable.
     """
     var server = _make_tcp_listener()
-    var port = _get_port(server)
-    var client = _make_client_socket()
+    var port = server.local_addr_v4().port
+    var client = Socket.tcp_v4()
     var target = SocketAddrV4(127, 0, 0, 1, port=port)
     var loop = WatchLoop()
 

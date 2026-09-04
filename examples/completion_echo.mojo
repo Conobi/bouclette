@@ -10,6 +10,9 @@ WatchLoop wraps the platform completion backend (io_uring when
 available, epoll otherwise) behind asyncio-style Futures.
 Submit operations, call run(), extract results.
 
+send() and recv() take the buffer by value: it belongs to the loop until
+the operation completes, and result() hands it back with the byte count.
+
 Run:
     uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 """
@@ -18,7 +21,6 @@ from boucle.watch import WatchLoop
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
-from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 
@@ -35,7 +37,7 @@ def main() raises:
     var target = SocketAddrV4(127, 0, 0, 1, port=port)
 
     # Phase 1: async accept + connect.
-    var loop = WatchLoop(sq_entries=8)
+    var loop = WatchLoop(capacity=8)
     var accept_f = loop.accept(server)
     var connect_f = loop.connect(client, target)
     loop.run()
@@ -44,20 +46,21 @@ def main() raises:
     var accepted = accept_f.result()
 
     # Phase 2: send "ping" from client, recv on accepted socket.
+    # Each buffer is handed to the loop and comes back from result(),
+    # so nothing else can touch it while the kernel does.
     var msg = String("ping")
-    var recv_buf = InlineArray[UInt8, 16](fill=UInt8(0))
-    var recv_span = Span[UInt8, MutAnyOrigin](
-        unsafe_ptr=Pointer[UInt8, MutAnyOrigin](
-            unsafe_from_address=Int(Pointer(to=recv_buf))
-        ),
-        length=16,
-    )
-    var send_f = loop.send(client, msg.as_bytes())
-    var recv_f = loop.recv(accepted, recv_span)
+    var out_buf = List[UInt8]()
+    for c in msg.as_bytes():
+        out_buf.append(c)
+    var send_f = loop.send(client, out_buf^)
+    var recv_f = loop.recv(accepted, List[UInt8](length=16, fill=0))
     loop.run()
 
-    assert_equal(send_f.result(), 4)
-    assert_equal(recv_f.result(), 4)
+    var sent = send_f^.result()
+    var received = recv_f^.result()
+    assert_equal(sent.count, 4)
+    assert_equal(received.count, 4)
+    assert_equal(String(from_utf8=received.transferred()), msg)
 
     accepted.close()
     client.close()

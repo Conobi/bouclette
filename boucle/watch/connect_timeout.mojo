@@ -25,13 +25,13 @@ completion, not whether the other two have arrived.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.drivers.auto import AutoDriver
+from boucle.drivers import _WatchDriver
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
 from boucle.watch._callback import _InFlightState
 from boucle.watch.outcome import ConnectOutcome
-from boucle.socle.linux.raw import ECANCELED
+from boucle.socle.platform import ECANCELED
 
 
 # ===----------------------------------------------------------------------=== #
@@ -174,7 +174,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
             )
             self.done = True
 
-    def flush_cancel(mut self, mut driver: AutoDriver) raises -> Int:
+    def flush_cancel(mut self, mut driver: _WatchDriver) raises -> Int:
         """Submit the deferred cancel operation if a callback requested one.
 
         Must be called after each tick() to ensure cancel operations
@@ -230,8 +230,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring completion result.
-            flags: The io_uring completion flags.
+            result: The completion result reported by the backend.
+            flags: The completion flags reported by the backend.
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
@@ -270,8 +270,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring completion result.
-            flags: The io_uring completion flags.
+            result: The completion result reported by the backend.
+            flags: The completion flags reported by the backend.
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
@@ -310,8 +310,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring completion result (ignored).
-            flags: The io_uring completion flags (ignored).
+            result: The completion result reported by the backend (ignored).
+            flags: The completion flags reported by the backend (ignored).
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
@@ -391,9 +391,10 @@ struct ConnectWithTimeoutFuture(Movable):
             NETWORK_UNREACHABLE, or ERROR.
 
         Raises:
-            If the result was already consumed, the loop was destroyed
-            before all completions arrived, or not all completions have
-            arrived yet.
+            A plain message if the result was already consumed, the loop
+            was destroyed before all completions arrived, or not all
+            completions have arrived yet. A failed connect is not an
+            exception here — it comes back as a ConnectOutcome.
         """
         if self._state[].consumed:
             raise "result already consumed"

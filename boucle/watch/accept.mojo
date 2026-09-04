@@ -16,10 +16,11 @@ and result() reports the destroyed loop.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
+from boucle.error import IOError
 from boucle.handle import OwnedHandle
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
-from boucle.socle.linux.fd import close_unchecked
+from boucle.socle.platform import close_unchecked
 from boucle.watch._callback import _FutureCallback, _dispatch
 
 
@@ -37,7 +38,8 @@ struct _AcceptFutureState(_FutureCallback):
     points back to the enclosing _AcceptFutureState.
 
     Fields:
-        completion: The io_uring completion token (fn ptr + context ptr).
+        completion: The per-operation completion token (fn ptr + context
+                    ptr) whose address the driver holds.
         _socket_fd: The accepted socket fd (-1 = not yet set).
         _error_code: The errno on failure (0 = no error).
         done: True once the completion callback has fired.
@@ -91,7 +93,8 @@ struct _AcceptFutureState(_FutureCallback):
         On failure (result < 0), stores the negated errno.
 
         Args:
-            result: The io_uring completion result (accepted fd or negative errno).
+            result: The completion result reported by the backend
+                    (accepted fd, or negative errno on failure).
         """
         if result >= 0:
             self._socket_fd = Int32(result)
@@ -201,13 +204,18 @@ struct AcceptFuture(Movable):
         Consumes the result — a second call raises. The returned Socket
         owns the accepted fd; the AcceptFuture no longer closes it on drop.
 
+        Two shapes of failure come out of here. A failed accept raises an
+        `IOError` carrying the errno, the same type every boucle I/O call
+        raises. Misusing the handle raises a plain message instead — no
+        syscall failed, so there is no errno to report.
+
         Returns:
             The accepted Socket wrapping an OwnedHandle.
 
         Raises:
-            If the result was already consumed, the loop was destroyed
-            before the operation completed, the operation has not
-            completed, or the accept syscall returned an error.
+            IOError if the accept syscall failed. A plain message if the
+            result was already consumed, the loop was destroyed before
+            the operation completed, or the operation has not completed.
         """
         if self._state[].consumed:
             raise "result already consumed"
@@ -217,9 +225,7 @@ struct AcceptFuture(Movable):
             raise "operation not complete"
         self._state[].consumed = True
         if self._state[]._error_code != Int32(0):
-            raise String(
-                "accept failed: errno ", Int(self._state[]._error_code)
-            )
+            raise IOError.from_errno(Int(self._state[]._error_code))
         return Socket(OwnedHandle(raw=self._state[]._socket_fd))
 
     def done(self) -> Bool:

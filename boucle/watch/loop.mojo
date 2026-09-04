@@ -15,9 +15,11 @@ registry and owns it jointly with the handle (rules in `_callback.mojo`):
 No state is ever freed by a completion callback, and nothing leaks if
 run() is never called again after a drop.
 
-Warning: recv() and send() buffers stay caller-owned. Dropping the
-RecvFuture or SendFuture does NOT release the kernel's reference to the
-buffer — it must stay valid until run() has delivered the completion.
+recv() and send() take their buffer by value and move it into that same
+per-operation state, so the loop owns the bytes the kernel touches for
+exactly as long as the operation lives. The caller gets the buffer back
+from result(); until then it cannot read it, write it or free it, and
+dropping the future simply gives it up.
 """
 
 from std.memory import Pointer
@@ -67,15 +69,20 @@ struct WatchLoop(Movable):
         Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
     ]
 
-    def __init__(out self, sq_entries: UInt32 = 64, *, backend: Backend = Backend.AUTO) raises:
-        """Create a WatchLoop with the given submission queue capacity.
+    def __init__(
+        out self, *, capacity: Int = 64, backend: Backend = Backend.AUTO
+    ) raises:
+        """Create a WatchLoop with the given capacity hint.
 
         Args:
-            sq_entries: Number of submission queue entries (default 64).
-            backend: I/O backend — AUTO probes for io_uring then falls
-                     back to epoll.
+            capacity: How many operations the loop should be ready to
+                      hold at once (default 64). A hint — the backend
+                      may round it up, and exceeding it is not an error.
+            backend: Which kernel mechanism to drive the loop with.
+                     AUTO probes for the native completion backend and
+                     falls back to the readiness one.
         """
-        self._driver = _WatchDriver(sq_entries=sq_entries, backend=backend)
+        self._driver = _WatchDriver(capacity=capacity, backend=backend)
         self._pending = 0
         self._in_flight = List[_InFlightEntry]()
         self._composites_awaiting_cancel = List[
@@ -90,27 +97,41 @@ struct WatchLoop(Movable):
         self._composites_awaiting_cancel = move._composites_awaiting_cancel^
 
     def __deinit__(deinit self):
-        """Tear down the driver, then settle every operation still in flight.
+        """Abandon in-flight buffers, tear the driver down, settle the registry.
 
-        The driver goes first so that no completion callback can run
+        The first pass asks every unfinished operation to give up the
+        memory the kernel may still be reading or writing. Closing the
+        submission handle asks the kernel to cancel those requests, but
+        cancellation is not instantaneous and nothing here waits for it,
+        so an abandoned recv/send buffer is leaked on purpose instead of
+        being returned to the allocator — see `abandon_buffer` in
+        `_callback.mojo`. Waiting instead is not an option: a loop
+        destroyed with a ten-second timer armed must not block for ten
+        seconds.
+
+        The driver goes second so that no completion callback can run
         while the registry is being settled. Once it is gone nothing
         references the Completion inside any state anymore:
 
-        - io_uring: operations are only pushed to the kernel from tick(),
-          so operations never run through run() were never submitted at
-          all; for the ones that were, closing the ring cancels them
-          kernel-side and their completions land in a completion queue
-          nobody reads. The kernel copies the timespec and sockaddr at
-          submission, so freeing `_ts` / `_addr_stor` is safe too.
-        - epoll: destroying the driver closes the epoll fd and frees its
-          op pool and timer heap, so no callback can fire either.
+        - Completion backend: operations are only pushed to the kernel
+          from tick(), so operations never run through run() were never
+          submitted at all; for the ones that were, closing the
+          submission handle cancels them kernel-side and their
+          completions land in a queue nobody reads. The kernel copies
+          the timespec and sockaddr at submission, so freeing `_ts` /
+          `_addr_stor` is safe too.
+        - Readiness backend: destroying the driver closes the poll
+          descriptor and frees its op pool and timer heap, so no
+          callback can fire either.
 
         Every remaining registry entry is then detached: orphaned states
         are freed here, states still owned by a live handle are marked
-        `loop_gone`. The caller-owned recv/send buffers are not covered
-        by this — the kernel may still touch them while it finishes
-        cancelling an io_uring request.
+        `loop_gone`. Freeing a state is safe at that point because its
+        buffer has already been abandoned, so nothing the kernel may
+        still touch goes back to the allocator.
         """
+        for entry in self._in_flight:
+            entry.abandon(entry.state)
         self._driver^.__deinit__()
         for entry in self._in_flight:
             entry.detach(entry.state)
@@ -297,29 +318,35 @@ struct WatchLoop(Movable):
         return ConnectWithTimeoutFuture(state_ptr)
 
     def recv(
-        mut self,
-        ref socket: Socket,
-        buf: Span[UInt8, MutAnyOrigin],
+        mut self, ref socket: Socket, var buf: List[UInt8]
     ) raises -> RecvFuture:
         """Submit an async recv on a socket into the given buffer.
 
-        Returns a RecvFuture that resolves to the number of bytes read
-        after run() completes.
+        The buffer moves into the loop for the duration of the
+        operation, so the caller cannot read it, write it or free it
+        while the kernel writes into it. `RecvFuture.result()` hands it
+        back together with the number of bytes received; dropping the
+        future instead gives the buffer up, and the loop frees it once
+        the completion has arrived.
 
-        Warning: The buffer is NOT owned by the future. The caller must
-        ensure the buffer remains valid until run() completes — dropping
-        the RecvFuture early does not make the buffer safe to free; the
-        kernel may still write into it until the completion is delivered.
+        The buffer's current length is the readable window: a list of
+        length 32 asks for at most 32 bytes, whatever its capacity.
+        Receiving does not change the length — the byte count from
+        result() says how many bytes at the front are valid.
 
         Args:
             socket: The socket to receive from.
-            buf: Mutable buffer to receive into. Must outlive run().
+            buf: The buffer to receive into, moved into the operation.
 
         Returns:
-            A RecvFuture representing the in-flight recv.
+            A RecvFuture owning both the operation and the buffer.
+
+        Raises:
+            If the socket handle is invalid or the driver cannot accept
+            the operation.
         """
         var state_ptr = unsafe_alloc[_RecvFutureState](1)
-        state_ptr.unsafe_write(_RecvFutureState())
+        state_ptr.unsafe_write(_RecvFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_RecvFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
@@ -334,40 +361,44 @@ struct WatchLoop(Movable):
 
         var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
-            unsafe_from_address=Int(buf.unsafe_ptr())
+            unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
         )
-        self._driver.recv(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        var buf_len = UInt32(len(state_ptr[].buf))
+        self._driver.recv(fd, buf_ptr, buf_len, cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
         return RecvFuture(state_ptr)
 
-    def send[
-        origin: Origin
-    ](
-        mut self,
-        ref socket: Socket,
-        buf: Span[UInt8, origin],
+    def send(
+        mut self, ref socket: Socket, var buf: List[UInt8]
     ) raises -> SendFuture:
         """Submit an async send on a socket from the given buffer.
 
-        Returns a SendFuture that resolves to the number of bytes
-        written after run() completes.
+        The buffer moves into the loop for the duration of the
+        operation, so nobody can modify or free the bytes while the
+        kernel reads them. `SendFuture.result()` hands the buffer back
+        unchanged together with the number of bytes written; dropping
+        the future instead gives the buffer up, and the loop frees it
+        once the completion has arrived.
 
-        Warning: The buffer is NOT owned by the future. The caller must
-        ensure the buffer remains valid until run() completes — dropping
-        the SendFuture early does not make the buffer safe to free; the
-        kernel may still read from it until the completion is delivered.
+        The buffer's whole length is offered to the kernel. A short send
+        is not an error: compare the byte count from result() with the
+        length submitted.
 
         Args:
             socket: The socket to send on.
-            buf: Data to send. Must outlive run().
+            buf: The data to send, moved into the operation.
 
         Returns:
-            A SendFuture representing the in-flight send.
+            A SendFuture owning both the operation and the buffer.
+
+        Raises:
+            If the socket handle is invalid or the driver cannot accept
+            the operation.
         """
         var state_ptr = unsafe_alloc[_SendFutureState](1)
-        state_ptr.unsafe_write(_SendFutureState())
+        state_ptr.unsafe_write(_SendFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_SendFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[
@@ -382,28 +413,29 @@ struct WatchLoop(Movable):
 
         var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
-            unsafe_from_address=Int(buf.unsafe_ptr())
+            unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
         )
-        self._driver.send(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        var buf_len = UInt32(len(state_ptr[].buf))
+        self._driver.send(fd, buf_ptr, buf_len, cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
         return SendFuture(state_ptr)
 
-    def timeout(mut self, ms: UInt64) raises -> TimerFuture:
+    def timeout(mut self, timeout_ms: UInt64) raises -> TimerFuture:
         """Submit an async timeout (kernel timer).
 
         Returns a TimerFuture that resolves to True (expired) or False
         (cancelled) after run() completes.
 
         Args:
-            ms: Timeout in milliseconds.
+            timeout_ms: How long to wait, in milliseconds.
 
         Returns:
             A TimerFuture representing the in-flight timeout.
         """
         var state_ptr = unsafe_alloc[_TimerFutureState](1)
-        var ts = Timeout.from_ms(Int64(ms))
+        var ts = Timeout.from_ms(Int64(timeout_ms))
         state_ptr.unsafe_write(_TimerFutureState(ts))
 
         state_ptr[].completion.invoke = _dispatch[_TimerFutureState]
@@ -427,7 +459,12 @@ struct WatchLoop(Movable):
         return TimerFuture(state_ptr)
 
     def run(mut self) raises:
-        """Block until all pending completions have been dispatched.
+        """Block until every submitted operation has completed, then return.
+
+        This is the "drain" verb, and the only way to drive a WatchLoop:
+        there is nothing to run forever on a loop whose work is a set of
+        futures. `CompletionLoop` is where `run_forever()`, `run_once()`
+        and `poll()` live.
 
         _pending tracks completions in flight. tick() returns the number
         of dispatched completions; run() decrements directly. Callbacks

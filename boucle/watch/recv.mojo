@@ -1,27 +1,33 @@
 """RecvFuture — async recv via WatchLoop.
 
-_RecvFutureState holds the per-operation Completion token and the raw
-completion result (bytes read or negative errno). RecvFuture is the RAII
-handle returned to callers.
+_RecvFutureState holds the per-operation Completion token, the buffer the
+kernel writes into, and the raw completion result (bytes read or negative
+errno). RecvFuture is the RAII handle returned to callers.
+
+The buffer is owned by the operation, not by the caller: `recv` takes the
+`List[UInt8]` by value and moves it into this heap-allocated state, right
+next to the Completion whose address the driver holds. While the recv is
+in flight nobody but the kernel can reach those bytes — the caller no
+longer has the list, so it can neither read it, write it, nor free it.
+`result()` hands it back.
 
 The state is shared with the WatchLoop that submitted the recv (see
-`_callback.mojo` for the ownership rules). Dropping the RecvFuture
-before the completion arrives is safe: the loop frees the state once it
-is done or when the loop itself is destroyed. Destroying the loop before
-the completion arrives is also safe: the future frees the state on drop
-and result() reports the destroyed loop.
-
-Warning: The buffer passed to WatchLoop.recv() is NOT owned by the
-FutureState. The caller must ensure the buffer remains valid until
-run() completes. Dropping the RecvFuture early does not change this —
-the kernel may still write into the buffer until the completion arrives.
+`_callback.mojo` for the ownership rules). Dropping the RecvFuture before
+the completion arrives is safe and simply gives up the buffer: the loop
+frees the state, buffer included, once the recv is done or when the loop
+itself is destroyed. Destroying the loop before the completion arrives is
+also safe: the loop abandons the buffer first (it can no longer promise
+the kernel is finished with it), the future frees the state on drop, and
+result() reports the destroyed loop.
 """
 
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
+from boucle.error import IOError
 from boucle.proactor.completion import Completion
 from boucle.watch._callback import _FutureCallback, _dispatch
+from boucle.watch.transfer import TransferResult
 
 
 # ===----------------------------------------------------------------------=== #
@@ -37,10 +43,13 @@ struct _RecvFutureState(_FutureCallback):
     settle its ownership.
 
     Fields:
-        completion: The io_uring completion token (fn ptr + context ptr).
+        completion: The per-operation completion token (fn ptr + context
+                    ptr) whose address the driver holds.
+        buf: The buffer the kernel writes into. Owned here for the whole
+             operation; its length is the readable window and never
+             changes.
         _result: Raw completion result (bytes read >= 0, or negative errno).
         done: True once the completion callback has fired.
-        consumed: True once result() has been called.
         _owner_dropped: True if the RecvFuture was dropped before done;
                         the WatchLoop then frees this state.
         _loop_gone: True if the WatchLoop was destroyed before done;
@@ -48,22 +57,26 @@ struct _RecvFutureState(_FutureCallback):
     """
 
     var completion: Completion
+    var buf: List[UInt8]
     var _result: Int
     var done: Bool
-    var consumed: Bool
     var _owner_dropped: Bool
     var _loop_gone: Bool
 
-    def __init__(out self):
-        """Construct a _RecvFutureState.
+    def __init__(out self, var buf: List[UInt8]):
+        """Construct a _RecvFutureState owning the receive buffer.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context after heap allocation.
+
+        Args:
+            buf: The buffer to receive into, moved in for the duration
+                 of the operation.
         """
         self.completion = Completion()
+        self.buf = buf^
         self._result = 0
         self.done = False
-        self.consumed = False
         self._owner_dropped = False
         self._loop_gone = False
 
@@ -74,18 +87,42 @@ struct _RecvFutureState(_FutureCallback):
             move: The source state to move from.
         """
         self.completion = move.completion^
+        self.buf = move.buf^
         self._result = move._result
         self.done = move.done
-        self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
 
+    def take_buffer(mut self) -> List[UInt8]:
+        """Move the receive buffer out, leaving an empty list behind.
+
+        Returns:
+            The buffer the kernel wrote into.
+        """
+        var buf = self.buf^
+        self.buf = List[UInt8]()
+        return buf^
+
+    def abandon_buffer(mut self):
+        """Give up the receive buffer instead of freeing it.
+
+        Called when the WatchLoop is destroyed with this recv still in
+        flight. The kernel may not be finished with the memory, so
+        returning it to the allocator would let someone else be handed
+        a buffer the kernel still writes into. Parking it on the heap
+        and never freeing it leaks the allocation on purpose: a bounded
+        cost, paid only when a loop is destroyed mid-operation, in
+        exchange for never corrupting live memory.
+        """
+        var parked = unsafe_alloc[List[UInt8]](1)
+        parked.unsafe_write(self.take_buffer())
+
     def set_result(mut self, result: Int):
-        """Store the raw completion result from io_uring recv and mark done.
+        """Store the raw completion result of the recv and mark it done.
 
         Args:
-            result: The io_uring completion result (bytes read >= 0, or
-                    negative errno on failure).
+            result: The completion result reported by the backend (bytes
+                    read >= 0, or negative errno on failure).
         """
         self._result = result
         self.done = True
@@ -127,13 +164,15 @@ struct _RecvFutureState(_FutureCallback):
 struct RecvFuture(Movable):
     """RAII handle for an in-flight async recv operation.
 
-    Owns a heap-allocated _RecvFutureState. Call done() to check
-    completion, then result() to extract the byte count.
+    Owns a heap-allocated _RecvFutureState which in turn owns the receive
+    buffer. Call done() to check completion, then result() to get the
+    byte count and the buffer back.
 
-    The buffer is NOT owned by this future — the caller must keep it
-    alive until run() completes, even if this future is dropped first.
-    Dropping the future before completion is otherwise safe, as is
-    destroying the loop before completion (result() then raises).
+    result() consumes the future, so there is no second call to guard
+    against. Dropping the future without calling result() is safe and
+    means giving the buffer up: it is freed with the state once the
+    completion has arrived. Destroying the loop before completion is
+    also safe — result() then raises.
     """
 
     var _state: Pointer[_RecvFutureState, MutUntrackedOrigin]
@@ -162,9 +201,10 @@ struct RecvFuture(Movable):
 
         If the completion has been delivered, or the loop has already
         been destroyed, this handle is the last owner and frees the
-        state. Otherwise the loop still tracks the state, so it is
-        marked as orphaned and the loop frees it — after the completion
-        arrives during run(), or when the loop itself is destroyed.
+        state — and with it the buffer nobody asked for. Otherwise the
+        loop still tracks the state, so it is marked as orphaned and the
+        loop frees it: after the completion arrives during run(), or
+        when the loop itself is destroyed.
         """
         if self._state[].done or self._state[]._loop_gone:
             self._state.unsafe_deinit_pointee()
@@ -172,33 +212,45 @@ struct RecvFuture(Movable):
         else:
             self._state[]._owner_dropped = True
 
-    def result(mut self) raises -> Int:
-        """Extract the number of bytes received.
+    def result(deinit self) raises -> TransferResult:
+        """Take the byte count and the buffer from a completed recv.
 
-        Consumes the result — a second call raises. Returns 0 for EOF.
-        Raises on negative completion result (kernel error).
+        Consumes the future — there is nothing left to call twice. The
+        count is the number of bytes at the front of the buffer that the
+        kernel wrote (0 means end of file); the buffer's own length is
+        unchanged, it is still the window that was submitted.
+
+        Two shapes of failure come out of here. A failed recv raises an
+        `IOError` carrying the errno, the same type every boucle I/O call
+        raises. Misusing the handle raises a plain message instead — no
+        syscall failed, so there is no errno to report. The buffer is not
+        handed back on either path: raising leaves nothing to return it
+        in, so it is freed with the state.
 
         Returns:
-            The number of bytes received (0 = EOF).
+            The byte count paired with the buffer.
 
         Raises:
-            If the result was already consumed, the loop was destroyed
-            before the operation completed, the operation has not
-            completed, or the recv syscall returned an error.
+            IOError if the recv syscall failed. A plain message if the
+            loop was destroyed before the operation completed, or the
+            operation has not completed.
         """
-        if self._state[].consumed:
-            raise "result already consumed"
-        if not self._state[].done:
-            if self._state[]._loop_gone:
+        var state = self._state
+        if not state[].done:
+            if state[]._loop_gone:
+                state.unsafe_deinit_pointee()
+                state.unsafe_free()
                 raise "loop destroyed before completion"
+            state[]._owner_dropped = True
             raise "operation not complete"
-        self._state[].consumed = True
-        if self._state[]._result < 0:
-            raise String(
-                "recv failed: errno ",
-                Int(-self._state[]._result),
-            )
-        return Int(self._state[]._result)
+
+        var raw = state[]._result
+        var buf = state[].take_buffer()
+        state.unsafe_deinit_pointee()
+        state.unsafe_free()
+        if raw < 0:
+            raise IOError.from_errno(Int(raw))
+        return TransferResult(Int(raw), buf^)
 
     def done(self) -> Bool:
         """Return True if the recv operation has completed.

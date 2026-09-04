@@ -21,6 +21,12 @@ handle the caller holds and the WatchLoop that submitted the operation:
 
 The completion callback itself only records the result; it never frees.
 
+Memory the kernel reads or writes — the recv/send buffers — is a special
+case at loop destruction: the loop asks every unfinished state to
+`abandon_buffer()` first, because tearing the driver down does not prove
+the kernel has let go of those bytes. An abandoned buffer is leaked on
+purpose rather than handed back to the allocator.
+
 Not part of the public API.
 """
 
@@ -73,6 +79,21 @@ trait _InFlightState(Movable, Deinitable):
         """Record that the WatchLoop has been destroyed with this state in flight."""
         ...
 
+    def abandon_buffer(mut self):
+        """Give up any memory the kernel may still be reading or writing.
+
+        Called on every unfinished state when the WatchLoop is destroyed,
+        before the driver is torn down. Tearing the driver down does not
+        prove the kernel has stopped touching the buffers of requests it
+        is still cancelling, so a state holding such memory leaks it
+        deliberately rather than returning it to the allocator.
+
+        States that hold no kernel-visible buffer keep this default: the
+        timespec and sockaddr the other operations pass are copied by the
+        kernel at submission, so there is nothing to abandon.
+        """
+        pass
+
 
 trait _FutureCallback(_InFlightState):
     """Internal trait for simple Future states driven by one completion.
@@ -94,6 +115,7 @@ trait _FutureCallback(_InFlightState):
 # Function-pointer types stored in a WatchLoop registry entry.
 comptime _SweepFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> Bool
 comptime _DetachFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> None
+comptime _AbandonFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> None
 
 
 def _dispatch[F: _FutureCallback](
@@ -161,6 +183,21 @@ def _detach[F: _InFlightState](ctx: Pointer[NoneType, MutUntrackedOrigin]):
         state_ptr[].mark_loop_gone()
 
 
+def _abandon[F: _InFlightState](ctx: Pointer[NoneType, MutUntrackedOrigin]):
+    """Let an unfinished state give up the memory the kernel may still use.
+
+    Called for every registry entry when the loop is destroyed, before
+    the driver is torn down. A finished state has nothing to abandon —
+    its completion has already arrived, so the kernel is done with it.
+
+    Args:
+        ctx: Type-erased pointer to the heap-allocated state.
+    """
+    var state_ptr = ctx.unsafe_bitcast[F]()
+    if not state_ptr[].is_done():
+        state_ptr[].abandon_buffer()
+
+
 struct _InFlightEntry(Copyable, Movable):
     """One WatchLoop registry entry: a type-erased state plus its two hooks.
 
@@ -168,11 +205,13 @@ struct _InFlightEntry(Copyable, Movable):
         state: Type-erased pointer to the heap-allocated operation state.
         sweep: `_sweep[F]` for the state's concrete type.
         detach: `_detach[F]` for the state's concrete type.
+        abandon: `_abandon[F]` for the state's concrete type.
     """
 
     var state: Pointer[NoneType, MutUntrackedOrigin]
     var sweep: _SweepFn
     var detach: _DetachFn
+    var abandon: _AbandonFn
 
     def __init__[F: _InFlightState](
         out self, state: Pointer[F, MutUntrackedOrigin]
@@ -188,15 +227,18 @@ struct _InFlightEntry(Copyable, Movable):
         self.state = state.unsafe_bitcast[NoneType]()
         self.sweep = _sweep[F]
         self.detach = _detach[F]
+        self.abandon = _abandon[F]
 
     def __init__(out self, *, copy: Self):
         """Copy constructor."""
         self.state = copy.state
         self.sweep = copy.sweep
         self.detach = copy.detach
+        self.abandon = copy.abandon
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self.state = move.state
         self.sweep = move.sweep
         self.detach = move.detach
+        self.abandon = move.abandon

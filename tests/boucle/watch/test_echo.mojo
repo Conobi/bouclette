@@ -6,16 +6,13 @@ then async send + recv with content verification.
 Phase 1: submit accept and connect as async ops, run() to completion.
 Phase 2: send "ping" from client, recv on accepted socket, run() again.
 Verify byte counts and buffer content.
-
-Note: uses direct syscalls for server setup due to a Mojo 1.0.0
-compiler bug affecting Socket.bind() through parametric inlining.
 """
 
-from std.ffi import external_call
-from std.memory import Pointer
-from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
+from boucle.net.addr import SocketAddrV4
+from boucle.net.options import Backlog
+from boucle.net.socket import Socket
 from boucle.watch import (
     WatchLoop,
     AcceptFuture,
@@ -24,91 +21,31 @@ from boucle.watch import (
     SendFuture,
     ConnectOutcome,
 )
-from boucle.handle import OwnedHandle
-from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4
-from boucle.socle.linux.raw import sockaddr_in, socklen_t
-from boucle.socle.linux.errno import get_errno
 
 
 def _make_tcp_listener() raises -> Socket:
-    """Create a TCP v4 listener on 127.0.0.1:0 using direct syscalls.
+    """Create a TCP v4 listener on 127.0.0.1 with an ephemeral port.
 
-    Returns a non-blocking, listening socket bound to an ephemeral port.
+    Returns:
+        A non-blocking, listening socket.
     """
-    # socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC, IPPROTO_TCP)
-    var fd = external_call["socket", Int32](
-        Int32(2),  # AF_INET
-        Int32(1 | 2048 | 524288),  # SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC
-        Int32(6),  # IPPROTO_TCP
-    )
-    if fd < 0:
-        raise String("socket failed: errno ", Int(get_errno()))
-
-    # setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, 1)
-    var one = Int32(1)
-    var one_p = Pointer(to=one)
-    _ = external_call["setsockopt", Int32](
-        fd, Int32(1), Int32(2), one_p, UInt32(4)
-    )
-
-    # bind(fd, {AF_INET, port=0, 127.0.0.1}, sizeof(sockaddr_in))
-    var addr = sockaddr_in()
-    addr.sin_family = UInt16(2)  # AF_INET
-    addr.sin_port = UInt16(0)
-    addr.sin_addr_s_addr = UInt32(0x0100007F)  # 127.0.0.1 LE
-    var addr_p = Pointer(to=addr)
-    var res = external_call["bind", Int32](
-        fd, addr_p, UInt32(size_of[sockaddr_in]())
-    )
-    if res < 0:
-        _ = external_call["close", Int32](fd)
-        raise String("bind failed: errno ", Int(get_errno()))
-
-    # listen(fd, 128)
-    res = external_call["listen", Int32](fd, Int32(128))
-    if res < 0:
-        _ = external_call["close", Int32](fd)
-        raise String("listen failed: errno ", Int(get_errno()))
-
-    return Socket(OwnedHandle(raw=fd))
-
-
-def _get_port(ref server: Socket) raises -> UInt16:
-    """Get the ephemeral port assigned to a bound socket."""
-    var addr = sockaddr_in()
-    var addrlen = socklen_t(size_of[sockaddr_in]())
-    var addr_p = Pointer(to=addr)
-    var len_p = Pointer(to=addrlen)
-    var fd = server.raw()
-    var res = external_call["getsockname", Int32](fd, addr_p, len_p)
-    if res < 0:
-        raise String("getsockname failed: errno ", Int(get_errno()))
-    # sin_port is big-endian; byte-swap to host order.
-    var be = addr.sin_port
-    return ((be << 8) | (be >> 8)) & UInt16(0xFFFF)
+    var server = Socket.tcp_v4()
+    server.set_reuse_addr()
+    server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    server.listen(Backlog.DEFAULT)
+    return server^
 
 
 def test_echo() raises:
     """Full echo test: connect, accept, send, recv with content check."""
     # -- Server setup --
     var server = _make_tcp_listener()
-    var port = _get_port(server)
+    var port = server.local_addr_v4().port
     assert_true(Int(port) > 0, "ephemeral port should be > 0")
 
-    # -- Non-blocking client socket --
-    var client_fd = external_call["socket", Int32](
-        Int32(2),  # AF_INET
-        Int32(1 | 2048 | 524288),  # SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC
-        Int32(6),  # IPPROTO_TCP
-    )
-    if client_fd < 0:
-        server.close()
-        raise String("socket failed: errno ", Int(get_errno()))
-    var client = Socket(OwnedHandle(raw=client_fd))
-
+    var client = Socket.tcp_v4()
     var target_addr = SocketAddrV4(127, 0, 0, 1, port=port)
-    var loop = WatchLoop(sq_entries=8)
+    var loop = WatchLoop(capacity=8)
 
     # -- Phase 1: async accept + connect --
     var accept_f = loop.accept(server)
@@ -126,33 +63,28 @@ def test_echo() raises:
 
     # -- Phase 2: send "ping" from client, recv on accepted socket --
     var msg = String("ping")
-    var send_buf = msg.as_bytes()
-    var send_f = loop.send(client, send_buf)
-
-    var recv_buf = InlineArray[UInt8, 64](fill=UInt8(0))
-    var recv_span = Span[UInt8, MutAnyOrigin](
-        unsafe_ptr=Pointer[UInt8, MutAnyOrigin](
-            unsafe_from_address=Int(Pointer(to=recv_buf))
-        ),
-        length=64,
-    )
-    var recv_f = loop.recv(accepted, recv_span)
+    var send_buf = List[UInt8]()
+    for c in msg.as_bytes():
+        send_buf.append(c)
+    var send_f = loop.send(client, send_buf^)
+    var recv_f = loop.recv(accepted, List[UInt8](length=64, fill=0))
 
     loop.run()
 
     assert_true(send_f.done(), "send should be done after run()")
     assert_true(recv_f.done(), "recv should be done after run()")
 
-    var sent = send_f.result()
-    var received = recv_f.result()
-    assert_equal(sent, 4, "should have sent 4 bytes")
-    assert_equal(received, 4, "should have received 4 bytes")
+    var sent = send_f^.result()
+    var received = recv_f^.result()
+    assert_equal(sent.count, 4, "should have sent 4 bytes")
+    assert_equal(received.count, 4, "should have received 4 bytes")
 
     # Verify buffer content matches "ping".
-    assert_equal(recv_buf[0], UInt8(ord("p")), "byte 0 should be 'p'")
-    assert_equal(recv_buf[1], UInt8(ord("i")), "byte 1 should be 'i'")
-    assert_equal(recv_buf[2], UInt8(ord("n")), "byte 2 should be 'n'")
-    assert_equal(recv_buf[3], UInt8(ord("g")), "byte 3 should be 'g'")
+    assert_equal(
+        String(from_utf8=received.transferred()),
+        msg,
+        "received bytes should equal the sent message",
+    )
 
     # -- Cleanup --
     accepted.close()

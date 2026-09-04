@@ -10,7 +10,7 @@ from boucle.watch import WatchLoop, TimerFuture
 
 def test_timeout_expires() raises:
     """WatchLoop.timeout() expires after the given duration."""
-    var loop = WatchLoop(sq_entries=8)
+    var loop = WatchLoop(capacity=8)
     var timer_f = loop.timeout(50)  # 50ms
     loop.run()
 

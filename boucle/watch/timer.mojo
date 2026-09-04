@@ -35,7 +35,8 @@ struct _TimerFutureState(_FutureCallback):
     points to it and it must remain valid until the completion fires.
 
     Fields:
-        completion: The io_uring completion token (fn ptr + context ptr).
+        completion: The per-operation completion token (fn ptr + context
+                    ptr) whose address the driver holds.
         _ts: Timeout value (layout-identical to Timeout).
         _expired: True if the timer expired normally (completion result == -ETIME).
         done: True once the completion callback has fired.
@@ -92,7 +93,8 @@ struct _TimerFutureState(_FutureCallback):
         (e.g. 0 for cancellation) means it did not expire.
 
         Args:
-            result: The io_uring completion result (-62 = expired, 0 = cancelled).
+            result: The completion result reported by the backend
+                    (-62 = expired, 0 = cancelled).
         """
         self._expired = result == -62
         self.done = True
@@ -186,8 +188,10 @@ struct TimerFuture(Movable):
             True if the timer expired normally, False if cancelled.
 
         Raises:
-            If the result was already consumed, the loop was destroyed
-            before the timer fired, or the operation has not completed.
+            A plain message if the result was already consumed, the loop
+            was destroyed before the timer fired, or the operation has
+            not completed. A cancelled timer is not an exception here —
+            it comes back as False.
         """
         if self._state[].consumed:
             raise "result already consumed"
