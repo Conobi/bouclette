@@ -199,7 +199,7 @@ def test_multishot_recvmsg() raises:
     var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
-    driver.submit_multishot_recvmsg(
+    driver.multishot_recvmsg(
         fd=fd, msg=msghdr_ptr, buf_group=UInt16(0), c=recv_cmp_ptr
     )
 

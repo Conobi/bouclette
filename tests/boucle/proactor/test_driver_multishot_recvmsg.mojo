@@ -190,7 +190,7 @@ def test_driver_multishot_recvmsg() raises:
     )
 
     # --- 7. Submit multishot recvmsg ---
-    driver.submit_multishot_recvmsg(
+    driver.multishot_recvmsg(
         fd_recv, recv_msg_ptr, UInt16(GROUP_ID), recv_cmp_ptr
     )
     print("submitted multishot recvmsg")

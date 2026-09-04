@@ -313,7 +313,7 @@ def test_accept_multishot_produces_more_flag() raises:
     var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
-    driver.submit_accept_multishot(RawHandle(Int(listen_fd)), cmp_ptr)
+    driver.accept_multishot(RawHandle(Int(listen_fd)), cmp_ptr)
 
     # Open three clients in sequence and drain each accept CQE.
     for _ in range(3):

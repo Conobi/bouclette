@@ -142,7 +142,7 @@ def test_register_buf_ring() raises:
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[unsafe_offset=i] = UInt8(0)
 
-    # --- 5. IoUringDriver + register_buf_ring + submit_recv_multishot ---
+    # --- 5. IoUringDriver + register_buf_ring + recv_multishot ---
     var driver = IoUringDriver()
     var bring = driver.register_buf_ring(
         pool,
@@ -164,7 +164,7 @@ def test_register_buf_ring() raises:
     var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
-    driver.submit_recv_multishot(
+    driver.recv_multishot(
         fd=server_fd, buf_group=UInt16(11), c=recv_cmp_ptr
     )
 

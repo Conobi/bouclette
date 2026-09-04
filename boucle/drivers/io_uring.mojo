@@ -321,7 +321,7 @@ struct IoUringDriver(IoDriver):
             base_buf_id,
         ).user_data(UInt64(Int(c)))
 
-    def submit_recv_multishot(
+    def recv_multishot(
         mut self,
         fd: RawHandle,
         buf_group: UInt16,
@@ -350,7 +350,7 @@ struct IoUringDriver(IoDriver):
             .buf_group(buf_group)
             .user_data(UInt64(Int(c)))
 
-    def submit_accept_multishot(
+    def accept_multishot(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -372,7 +372,7 @@ struct IoUringDriver(IoDriver):
             .ioprio(IoUringAcceptFlags.MULTISHOT.value)
             .user_data(UInt64(Int(c)))
 
-    def submit_multishot_recvmsg(
+    def multishot_recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[msghdr, MutUntrackedOrigin],

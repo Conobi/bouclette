@@ -180,7 +180,7 @@ def test_multishot_recv() raises:
     for i in range(BUF_SIZE * BUF_COUNT):
         pool[unsafe_offset=i] = 0
 
-    # --- 5. IoUringDriver + provide_buffers + submit_recv_multishot ---
+    # --- 5. IoUringDriver + provide_buffers + recv_multishot ---
     var driver = IoUringDriver()
 
     # Wire provide_buffers completion.
@@ -212,7 +212,7 @@ def test_multishot_recv() raises:
     var recv_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=recv_cmp))
     )
-    driver.submit_recv_multishot(
+    driver.recv_multishot(
         fd=server_fd, buf_group=UInt16(7), c=recv_cmp_ptr
     )
 
