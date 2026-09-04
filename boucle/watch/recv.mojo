@@ -1,7 +1,7 @@
 """RecvFuture — async recv via WatchLoop.
 
 _RecvFutureState holds the per-operation Completion token and the raw
-CQE result (bytes read or negative errno). RecvFuture is the RAII
+completion result (bytes read or negative errno). RecvFuture is the RAII
 handle returned to callers.
 
 The state is shared with the WatchLoop that submitted the recv (see
@@ -14,7 +14,7 @@ and result() reports the destroyed loop.
 Warning: The buffer passed to WatchLoop.recv() is NOT owned by the
 FutureState. The caller must ensure the buffer remains valid until
 run() completes. Dropping the RecvFuture early does not change this —
-the kernel may still write into the buffer until the CQE arrives.
+the kernel may still write into the buffer until the completion arrives.
 """
 
 from std.memory import Pointer
@@ -33,13 +33,13 @@ struct _RecvFutureState(_FutureCallback):
     """Internal state for a single async recv operation.
 
     Implements _FutureCallback so the generic _dispatch can deliver
-    CQE results into this struct and the WatchLoop registry can settle
-    its ownership.
+    completion results into this struct and the WatchLoop registry can
+    settle its ownership.
 
     Fields:
         completion: The io_uring completion token (fn ptr + context ptr).
-        _cqe_result: Raw CQE result (bytes read >= 0, or negative errno).
-        done: True once the CQE callback has fired.
+        _result: Raw completion result (bytes read >= 0, or negative errno).
+        done: True once the completion callback has fired.
         consumed: True once result() has been called.
         _owner_dropped: True if the RecvFuture was dropped before done;
                         the WatchLoop then frees this state.
@@ -48,7 +48,7 @@ struct _RecvFutureState(_FutureCallback):
     """
 
     var completion: Completion
-    var _cqe_result: Int
+    var _result: Int
     var done: Bool
     var consumed: Bool
     var _owner_dropped: Bool
@@ -61,7 +61,7 @@ struct _RecvFutureState(_FutureCallback):
         must wire invoke and context after heap allocation.
         """
         self.completion = Completion()
-        self._cqe_result = 0
+        self._result = 0
         self.done = False
         self.consumed = False
         self._owner_dropped = False
@@ -74,24 +74,24 @@ struct _RecvFutureState(_FutureCallback):
             move: The source state to move from.
         """
         self.completion = move.completion^
-        self._cqe_result = move._cqe_result
+        self._result = move._result
         self.done = move.done
         self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
 
     def set_result(mut self, result: Int):
-        """Store the raw CQE result from io_uring recv and mark done.
+        """Store the raw completion result from io_uring recv and mark done.
 
         Args:
-            result: The io_uring CQE result (bytes read >= 0, or
+            result: The io_uring completion result (bytes read >= 0, or
                     negative errno on failure).
         """
-        self._cqe_result = result
+        self._result = result
         self.done = True
 
     def is_done(self) -> Bool:
-        """Return True once the CQE callback has fired.
+        """Return True once the completion callback has fired.
 
         Returns:
             True if no callback will write this state again.
@@ -163,8 +163,8 @@ struct RecvFuture(Movable):
         If the completion has been delivered, or the loop has already
         been destroyed, this handle is the last owner and frees the
         state. Otherwise the loop still tracks the state, so it is
-        marked as orphaned and the loop frees it — after the CQE arrives
-        during run(), or when the loop itself is destroyed.
+        marked as orphaned and the loop frees it — after the completion
+        arrives during run(), or when the loop itself is destroyed.
         """
         if self._state[].done or self._state[]._loop_gone:
             self._state.unsafe_deinit_pointee()
@@ -176,7 +176,7 @@ struct RecvFuture(Movable):
         """Extract the number of bytes received.
 
         Consumes the result — a second call raises. Returns 0 for EOF.
-        Raises on negative CQE result (kernel error).
+        Raises on negative completion result (kernel error).
 
         Returns:
             The number of bytes received (0 = EOF).
@@ -193,12 +193,12 @@ struct RecvFuture(Movable):
                 raise "loop destroyed before completion"
             raise "operation not complete"
         self._state[].consumed = True
-        if self._state[]._cqe_result < 0:
+        if self._state[]._result < 0:
             raise String(
                 "recv failed: errno ",
-                Int(-self._state[]._cqe_result),
+                Int(-self._state[]._result),
             )
-        return Int(self._state[]._cqe_result)
+        return Int(self._state[]._result)
 
     def done(self) -> Bool:
         """Return True if the recv operation has completed.
@@ -207,6 +207,7 @@ struct RecvFuture(Movable):
         then raises with the reason.
 
         Returns:
-            True once the CQE callback has fired (success or failure).
+            True once the completion callback has fired (success or
+            failure).
         """
         return self._state[].done

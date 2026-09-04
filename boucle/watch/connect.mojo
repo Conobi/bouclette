@@ -1,8 +1,8 @@
 """ConnectFuture — async connect via WatchLoop.
 
 _ConnectFutureState holds the per-operation Completion token, a copy of
-the target address storage (for pointer stability), and the raw CQE
-result. ConnectFuture is the RAII handle returned to callers — it owns
+the target address storage (for pointer stability), and the raw
+completion result. ConnectFuture is the RAII handle returned to callers — it owns
 the heap-allocated state and decodes the result into a ConnectOutcome.
 
 The state is shared with the WatchLoop that submitted the connect (see
@@ -31,19 +31,20 @@ struct _ConnectFutureState(_FutureCallback):
     """Internal state for a single async connect operation.
 
     Implements _FutureCallback so the generic _dispatch can deliver
-    CQE results into this struct and the WatchLoop registry can settle
-    its ownership. Stored on the heap; the Completion's context pointer
-    points back to the enclosing _ConnectFutureState.
+    completion results into this struct and the WatchLoop registry can
+    settle its ownership. Stored on the heap; the Completion's context
+    pointer points back to the enclosing _ConnectFutureState.
 
     The address storage is copied into this struct so that the pointer
-    passed to io_uring remains valid until the CQE fires, regardless of
-    the caller's stack lifetime.
+    passed to io_uring remains valid until the completion fires,
+    regardless of the caller's stack lifetime.
 
     Fields:
         completion: The io_uring completion token (fn ptr + context ptr).
         _addr_stor: Copy of the target address for pointer stability.
-        _cqe_result: Raw CQE result (0 on success, negative errno on failure).
-        done: True once the CQE callback has fired.
+        _result: Raw completion result (0 on success, negative errno on
+                 failure).
+        done: True once the completion callback has fired.
         consumed: True once result() has been called.
         _owner_dropped: True if the ConnectFuture was dropped before done;
                         the WatchLoop then frees this state.
@@ -53,7 +54,7 @@ struct _ConnectFutureState(_FutureCallback):
 
     var completion: Completion
     var _addr_stor: SocketAddrStorV4
-    var _cqe_result: Int
+    var _result: Int
     var done: Bool
     var consumed: Bool
     var _owner_dropped: Bool
@@ -70,7 +71,7 @@ struct _ConnectFutureState(_FutureCallback):
         """
         self.completion = Completion()
         self._addr_stor = addr_stor
-        self._cqe_result = 0
+        self._result = 0
         self.done = False
         self.consumed = False
         self._owner_dropped = False
@@ -84,27 +85,27 @@ struct _ConnectFutureState(_FutureCallback):
         """
         self.completion = move.completion^
         self._addr_stor = move._addr_stor
-        self._cqe_result = move._cqe_result
+        self._result = move._result
         self.done = move.done
         self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
 
     def set_result(mut self, result: Int):
-        """Store the raw CQE result from io_uring connect and mark done.
+        """Store the raw completion result from io_uring connect and mark done.
 
         Does not decode the result — ConnectFuture.result() handles that
         via ConnectOutcome.from_result().
 
         Args:
-            result: The io_uring CQE result (0 on success, negative errno
-                    on failure).
+            result: The io_uring completion result (0 on success, negative
+                    errno on failure).
         """
-        self._cqe_result = result
+        self._result = result
         self.done = True
 
     def is_done(self) -> Bool:
-        """Return True once the CQE callback has fired.
+        """Return True once the completion callback has fired.
 
         Returns:
             True if no callback will write this state again.
@@ -175,10 +176,11 @@ struct ConnectFuture(Movable):
 
         If the completion has been delivered, or the loop has already
         been destroyed, this handle is the last owner and frees the
-        state. Otherwise the loop still tracks the state (and the SQE
-        may still point at the copied address storage), so it is marked
-        as orphaned and the loop frees it — after the CQE arrives during
-        run(), or when the loop itself is destroyed.
+        state. Otherwise the loop still tracks the state (and the
+        operation may still point at the copied address storage), so it
+        is marked as orphaned and the loop frees it — after the
+        completion arrives during run(), or when the loop itself is
+        destroyed.
 
         No fd cleanup needed — connect does not produce a new fd.
         """
@@ -189,7 +191,7 @@ struct ConnectFuture(Movable):
             self._state[]._owner_dropped = True
 
     def result(mut self) raises -> ConnectOutcome:
-        """Decode the CQE result into a ConnectOutcome.
+        """Decode the completion result into a ConnectOutcome.
 
         Consumes the result — a second call raises. Does NOT raise on
         REFUSED/TIMEOUT — those are valid ConnectOutcome variants.
@@ -210,7 +212,7 @@ struct ConnectFuture(Movable):
                 raise "loop destroyed before completion"
             raise "operation not complete"
         self._state[].consumed = True
-        return ConnectOutcome.from_result(self._state[]._cqe_result)
+        return ConnectOutcome.from_result(self._state[]._result)
 
     def done(self) -> Bool:
         """Return True if the connect operation has completed.
@@ -219,6 +221,7 @@ struct ConnectFuture(Movable):
         then raises with the reason.
 
         Returns:
-            True once the CQE callback has fired (success or failure).
+            True once the completion callback has fired (success or
+            failure).
         """
         return self._state[].done

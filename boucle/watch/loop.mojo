@@ -1,6 +1,6 @@
 """WatchLoop — ergonomic completion-based I/O loop.
 
-Every submit_* method heap-allocates a per-operation state whose
+Every operation method heap-allocates a per-operation state whose
 Completion address is handed to the driver, and returns a Future handle
 owning that state. The loop records every such state in an in-flight
 registry and owns it jointly with the handle (rules in `_callback.mojo`):
@@ -46,16 +46,16 @@ struct WatchLoop(Movable):
     """Opaque event loop for completion-based I/O with Future dispatch.
 
     The driver is hidden behind a comptime alias. Users never see IoUringDriver.
-    _pending tracks CQEs in flight — each SQE adds 1, each dispatched CQE
-    subtracts 1, managed entirely by run().
+    _pending tracks completions in flight — each operation adds 1, each
+    dispatched completion subtracts 1, managed entirely by run().
 
     _in_flight is the registry of every operation state not yet settled,
     simple and composite alike; it is what lets the loop free orphaned
     states and inform surviving handles when the loop is destroyed.
 
     _composites_awaiting_cancel additionally lists the composite states,
-    because only they need the loop to submit a deferred cancel SQE
-    after each tick. It never owns anything: a composite is dropped
+    because only they need the loop to submit a deferred cancel
+    operation after each tick. It never owns anything: a composite is dropped
     from it as soon as it is done, and the registry alone decides who
     frees the state.
     """
@@ -96,11 +96,11 @@ struct WatchLoop(Movable):
         while the registry is being settled. Once it is gone nothing
         references the Completion inside any state anymore:
 
-        - io_uring: SQEs are only pushed to the kernel from tick(), so
-          operations never run through run() were never submitted at
+        - io_uring: operations are only pushed to the kernel from tick(),
+          so operations never run through run() were never submitted at
           all; for the ones that were, closing the ring cancels them
-          kernel-side and their CQEs land in a completion queue nobody
-          reads. The kernel copies the timespec and sockaddr at
+          kernel-side and their completions land in a completion queue
+          nobody reads. The kernel copies the timespec and sockaddr at
           submission, so freeing `_ts` / `_addr_stor` is safe too.
         - epoll: destroying the driver closes the epoll fd and frees its
           op pool and timer heap, so no callback can fire either.
@@ -173,7 +173,7 @@ struct WatchLoop(Movable):
         )
 
         var fd = socket.raw()
-        self._driver.submit_accept(fd, cmp_ptr)
+        self._driver.accept(fd, cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
@@ -213,7 +213,7 @@ struct WatchLoop(Movable):
         var fd = socket.raw()
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
-        self._driver.submit_connect(fd, addr_ptr, addr_len, cmp_ptr)
+        self._driver.connect(fd, addr_ptr, addr_len, cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
@@ -227,8 +227,8 @@ struct WatchLoop(Movable):
     ) raises -> ConnectWithTimeoutFuture:
         """Submit a connect with a kernel-level timeout.
 
-        Submits both a connect SQE and a timeout SQE. The first to
-        complete resolves the operation; the other is cancelled.
+        Submits both a connect operation and a timeout operation. The
+        first to complete resolves the operation; the other is cancelled.
         Returns a ConnectWithTimeoutFuture that resolves to a
         ConnectOutcome after run() completes.
 
@@ -277,7 +277,7 @@ struct WatchLoop(Movable):
         )
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
-        self._driver.submit_connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
+        self._driver.connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
 
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(
@@ -287,9 +287,9 @@ struct WatchLoop(Movable):
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
-        self._driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
+        self._driver.timeout(ts_ptr, timeout_cmp_ptr)
 
-        # 2 SQEs submitted → 2 CQEs expected.
+        # 2 operations submitted → 2 completions expected.
         self._pending += 2
         self._in_flight.append(_InFlightEntry(state_ptr))
         self._composites_awaiting_cancel.append(state_ptr)
@@ -336,7 +336,7 @@ struct WatchLoop(Movable):
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf.unsafe_ptr())
         )
-        self._driver.submit_recv(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        self._driver.recv(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
@@ -384,7 +384,7 @@ struct WatchLoop(Movable):
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf.unsafe_ptr())
         )
-        self._driver.submit_send(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
+        self._driver.send(fd, buf_ptr, UInt32(len(buf)), cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
@@ -420,23 +420,24 @@ struct WatchLoop(Movable):
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
-        self._driver.submit_timeout(ts_ptr, cmp_ptr)
+        self._driver.timeout(ts_ptr, cmp_ptr)
         self._pending += 1
         self._in_flight.append(_InFlightEntry(state_ptr))
 
         return TimerFuture(state_ptr)
 
     def run(mut self) raises:
-        """Block until all pending CQEs have been dispatched.
+        """Block until all pending completions have been dispatched.
 
-        _pending tracks CQEs in flight. tick() returns the number of
-        dispatched CQEs; run() decrements directly. Callbacks never
-        touch the counter — they only set result state.
+        _pending tracks completions in flight. tick() returns the number
+        of dispatched completions; run() decrements directly. Callbacks
+        never touch the counter — they only set result state.
 
-        After each tick, first flushes deferred cancel SQEs for composite
-        operations (each cancel adds 1 to _pending for its own CQE) and
-        forgets the composites whose three CQEs have all arrived, then
-        sweeps the in-flight registry: every state that is done leaves
+        After each tick, first flushes deferred cancel operations for
+        composite operations (each cancel adds 1 to _pending for its own
+        completion) and forgets the composites whose three completions
+        have all arrived, then sweeps the in-flight registry: every
+        state that is done leaves
         it, and the ones whose handle was dropped early are freed there.
         The cancel list is trimmed before the sweep so it never keeps a
         pointer to a state the sweep is about to free.
@@ -451,7 +452,7 @@ struct WatchLoop(Movable):
             self._sweep_in_flight()
 
     def _flush_composite_cancels(mut self) raises:
-        """Submit deferred cancel SQEs and forget finished composites.
+        """Submit deferred cancel operations and forget finished composites.
 
         Called after each tick, before the registry sweep. Only
         composites need this step; the registry handles their ownership.

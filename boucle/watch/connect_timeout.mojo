@@ -2,11 +2,11 @@
 
 _ConnectWithTimeoutState manages 3 Completions (connect, timeout, cancel)
 with dedicated static callbacks. Unlike simple Futures, this does NOT use
-the generic _dispatch because each CQE has different semantics.
+the generic _dispatch because each completion has different semantics.
 
 The state machine resolves the operation once the first non-ECANCELED
 result arrives on either connect or timeout, then cancels the other and
-waits for all 3 CQEs before declaring done.
+waits for all 3 completions before declaring done.
 
 Cancel submission is deferred: callbacks set a flag, and WatchLoop.run()
 calls flush_cancel() after each tick.
@@ -14,12 +14,12 @@ calls flush_cancel() after each tick.
 The state is shared with the WatchLoop that submitted it and follows the
 ownership rules in `_callback.mojo`: it joins the loop's in-flight
 registry as an _InFlightState. Dropping the ConnectWithTimeoutFuture
-before all 3 CQEs have arrived is safe: the handle marks the state as
-orphaned and the loop frees it once done, or when the loop itself is
+before all 3 completions have arrived is safe: the handle marks the state
+as orphaned and the loop frees it once done, or when the loop itself is
 destroyed. Destroying the loop first is also safe: the future frees the
 state on drop and result() reports the destroyed loop. The static
-callbacks never free the state — each one only knows about its own CQE,
-not whether the other two have arrived.
+callbacks never free the state — each one only knows about its own
+completion, not whether the other two have arrived.
 """
 
 from std.memory import Pointer
@@ -43,8 +43,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
     """State machine for a composite connect+timeout+cancel lifecycle.
 
     Owns 3 Completion tokens (connect, timeout, cancel) and resolves
-    the operation when the first non-ECANCELED CQE arrives on connect
-    or timeout. The other operation is then cancelled via deferred
+    the operation when the first non-ECANCELED completion arrives on
+    connect or timeout. The other operation is then cancelled via deferred
     flush_cancel(). Implements _InFlightState so the WatchLoop registry
     can settle its ownership like any simple state.
 
@@ -53,14 +53,16 @@ struct _ConnectWithTimeoutState(_InFlightState):
         _timeout_cmp: Completion token for the timeout operation.
         _cancel_cmp: Completion token for the cancel operation.
         _addr_stor: Copy of the target address for pointer stability.
-        _ts: Timeout duration for SQE pointer stability.
-        _cqe_result: Raw CQE result from the resolving callback.
-        _result_set: True once a non-ECANCELED CQE resolves the operation.
+        _ts: Timeout duration for operation pointer stability.
+        _result: Raw completion result from the resolving callback.
+        _result_set: True once a non-ECANCELED completion resolves the
+                     operation.
         _resolved_by: 0=connect, 1=timeout.
         _cancel_target: 0=none, 1=cancel-timeout, 2=cancel-connect.
         _cancel_submitted: Whether cancel has been flagged.
-        _total_cqes: Number of CQEs received so far (done when 3).
-        done: True when all 3 CQEs have been received.
+        _total_completions: Number of completions received so far (done
+                            when 3).
+        done: True when all 3 completions have been received.
         consumed: True after result() has been called.
         _owner_dropped: True if the ConnectWithTimeoutFuture was dropped
                         before done; the WatchLoop then frees this state.
@@ -73,12 +75,12 @@ struct _ConnectWithTimeoutState(_InFlightState):
     var _cancel_cmp: Completion
     var _addr_stor: SocketAddrStorV4
     var _ts: Timeout
-    var _cqe_result: Int
+    var _result: Int
     var _result_set: Bool
     var _resolved_by: UInt8
     var _cancel_target: UInt8
     var _cancel_submitted: Bool
-    var _total_cqes: Int
+    var _total_completions: Int
     var done: Bool
     var consumed: Bool
     var _owner_dropped: Bool
@@ -103,12 +105,12 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._cancel_cmp = Completion()
         self._addr_stor = addr_stor
         self._ts = ts
-        self._cqe_result = 0
+        self._result = 0
         self._result_set = False
         self._resolved_by = UInt8(0)
         self._cancel_target = UInt8(0)
         self._cancel_submitted = False
-        self._total_cqes = 0
+        self._total_completions = 0
         self.done = False
         self.consumed = False
         self._owner_dropped = False
@@ -125,19 +127,19 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._cancel_cmp = move._cancel_cmp^
         self._addr_stor = move._addr_stor
         self._ts = move._ts
-        self._cqe_result = move._cqe_result
+        self._result = move._result
         self._result_set = move._result_set
         self._resolved_by = move._resolved_by
         self._cancel_target = move._cancel_target
         self._cancel_submitted = move._cancel_submitted
-        self._total_cqes = move._total_cqes
+        self._total_completions = move._total_completions
         self.done = move.done
         self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
 
     def is_done(self) -> Bool:
-        """Return True once all 3 CQEs have arrived.
+        """Return True once all 3 completions have arrived.
 
         Returns:
             True if no callback will write this state again.
@@ -165,22 +167,24 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._loop_gone = True
 
     def _check_done(mut self):
-        """Mark operation as done when all 3 CQEs have arrived."""
-        if self._total_cqes >= 3:
-            debug_assert(self._total_cqes == 3, "CQE count exceeded 3")
+        """Mark operation as done when all 3 completions have arrived."""
+        if self._total_completions >= 3:
+            debug_assert(
+                self._total_completions == 3, "completion count exceeded 3"
+            )
             self.done = True
 
     def flush_cancel(mut self, mut driver: AutoDriver) raises -> Int:
-        """Submit the deferred cancel SQE if a callback requested one.
+        """Submit the deferred cancel operation if a callback requested one.
 
         Must be called after each tick() to ensure cancel operations
-        are submitted outside of CQE processing.
+        are submitted outside of completion processing.
 
         Args:
-            driver: The completion driver to submit the cancel SQE on.
+            driver: The completion driver to submit the cancel operation on.
 
         Returns:
-            Number of cancel SQEs submitted (0 or 1).
+            Number of cancel operations submitted (0 or 1).
         """
         if self._cancel_target == UInt8(0):
             return 0
@@ -196,7 +200,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
                     Pointer(to=self._cancel_cmp)
                 )
             )
-            driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+            driver.cancel(target_cmp_ptr, cancel_cmp_ptr)
         elif self._cancel_target == UInt8(2):
             var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(
@@ -208,7 +212,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
                     Pointer(to=self._cancel_cmp)
                 )
             )
-            driver.submit_cancel(target_cmp_ptr, cancel_cmp_ptr)
+            driver.cancel(target_cmp_ptr, cancel_cmp_ptr)
 
         self._cancel_target = UInt8(0)
         return 1
@@ -226,13 +230,13 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring CQE result.
-            flags: The io_uring CQE flags.
+            result: The io_uring completion result.
+            flags: The io_uring completion flags.
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
-        self_ptr[]._total_cqes += 1
+        self_ptr[]._total_completions += 1
 
         if result == -Int(ECANCELED):
             self_ptr[]._check_done()
@@ -242,7 +246,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
             self_ptr[]._check_done()
             return
 
-        self_ptr[]._cqe_result = result
+        self_ptr[]._result = result
         self_ptr[]._result_set = True
         self_ptr[]._resolved_by = UInt8(0)
 
@@ -266,13 +270,13 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring CQE result.
-            flags: The io_uring CQE flags.
+            result: The io_uring completion result.
+            flags: The io_uring completion flags.
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
-        self_ptr[]._total_cqes += 1
+        self_ptr[]._total_completions += 1
 
         if result == -Int(ECANCELED):
             self_ptr[]._check_done()
@@ -282,7 +286,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
             self_ptr[]._check_done()
             return
 
-        self_ptr[]._cqe_result = result
+        self_ptr[]._result = result
         self_ptr[]._result_set = True
         self_ptr[]._resolved_by = UInt8(1)
 
@@ -301,18 +305,18 @@ struct _ConnectWithTimeoutState(_InFlightState):
     ):
         """Static callback for the cancel completion.
 
-        Just counts the CQE and checks done. The result value is
+        Just counts the completion and checks done. The result value is
         irrelevant — -ENOENT, 0, -EALREADY are all acceptable.
 
         Args:
             ctx: Pointer to the owning _ConnectWithTimeoutState.
-            result: The io_uring CQE result (ignored).
-            flags: The io_uring CQE flags (ignored).
+            result: The io_uring completion result (ignored).
+            flags: The io_uring completion flags (ignored).
         """
         var self_ptr = Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin](
             unsafe_from_address=Int(ctx)
         )
-        self_ptr[]._total_cqes += 1
+        self_ptr[]._total_completions += 1
         self_ptr[]._check_done()
 
 
@@ -364,8 +368,8 @@ struct ConnectWithTimeoutFuture(Movable):
         already been destroyed, this handle is the last owner and frees
         the state. Otherwise the loop still tracks the composite, so the
         state is marked as orphaned and the loop frees it — once the
-        last CQE has arrived during run(), or when the loop itself is
-        destroyed.
+        last completion has arrived during run(), or when the loop itself
+        is destroyed.
         """
         if self._state[].done or self._state[]._loop_gone:
             self._state.unsafe_deinit_pointee()
@@ -388,7 +392,8 @@ struct ConnectWithTimeoutFuture(Movable):
 
         Raises:
             If the result was already consumed, the loop was destroyed
-            before all CQEs arrived, or not all CQEs have arrived yet.
+            before all completions arrived, or not all completions have
+            arrived yet.
         """
         if self._state[].consumed:
             raise "result already consumed"
@@ -399,10 +404,10 @@ struct ConnectWithTimeoutFuture(Movable):
         self._state[].consumed = True
         if self._state[]._resolved_by == UInt8(1):
             return ConnectOutcome.TIMEOUT
-        return ConnectOutcome.from_result(self._state[]._cqe_result)
+        return ConnectOutcome.from_result(self._state[]._result)
 
     def done(self) -> Bool:
-        """Return True when all 3 CQEs have been received.
+        """Return True when all 3 completions have been received.
 
         Stays False forever if the loop was destroyed first; result()
         then raises with the reason.
