@@ -5,6 +5,8 @@ does not import raw kernel values directly.
 
 Constants are defined as literals rather than importing from
 boucle.socle.linux.raw to keep this module free of platform imports.
+The one exception is a compile-time-only import at the end of this
+file, used solely to assert the literals match the Linux backend.
 """
 
 
@@ -229,3 +231,29 @@ struct Shutdown(TrivialRegisterPassable, Equatable):
     def __ne__(self, other: Self) -> Bool:
         """Returns True if the values represent different shutdown directions."""
         return self.value != other.value
+
+
+# ── Compile-time platform value verification ─────────────────────────
+# When a non-Linux platform arrives, mismatched values fire at compile
+# time, forcing the constants to be updated.
+
+from boucle.socle.linux.raw import (
+    AF_UNSPEC as _AF_UNSPEC,
+    AF_UNIX as _AF_UNIX,
+    AF_INET as _AF_INET,
+    AF_INET6 as _AF_INET6,
+    SOCK_STREAM as _SOCK_STREAM,
+    SOCK_DGRAM as _SOCK_DGRAM,
+)
+
+def _verify_platform_values():
+    """Assert hardcoded portable constants match the Linux backend values."""
+    comptime assert AddrFamily.UNSPEC.id == UInt16(_AF_UNSPEC), "AF_UNSPEC mismatch"
+    comptime assert AddrFamily.UNIX.id == UInt16(_AF_UNIX), "AF_UNIX mismatch"
+    comptime assert AddrFamily.INET.id == UInt16(_AF_INET), "AF_INET mismatch"
+    comptime assert AddrFamily.INET6.id == UInt16(_AF_INET6), "AF_INET6 mismatch"
+    comptime assert SocketType.STREAM.id == Int32(_SOCK_STREAM), "SOCK_STREAM mismatch"
+    comptime assert SocketType.DGRAM.id == Int32(_SOCK_DGRAM), "SOCK_DGRAM mismatch"
+
+
+comptime _VERIFIED_PLATFORM_VALUES: None = _verify_platform_values()

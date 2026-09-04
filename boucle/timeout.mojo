@@ -2,12 +2,11 @@
 
 
 struct Timeout(TrivialRegisterPassable):
-    """Duration for I/O timeouts, replacing platform-specific __kernel_timespec.
+    """Duration for I/O timeouts.
 
-    Layout is deliberately identical to Linux's __kernel_timespec
-    (two Int64 fields: seconds + nanoseconds) so that on Linux, a
-    pointer to Timeout can be bitcast to __kernel_timespec without
-    copying. On other platforms, the driver converts as needed.
+    Two Int64 fields: seconds + nanoseconds. On Linux, the driver
+    may bitcast a pointer to this struct for zero-copy submission.
+    On other platforms, the driver converts as needed.
     """
 
     var seconds: Int64
