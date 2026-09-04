@@ -1,4 +1,4 @@
-"""Test submit_connect on CompletionLoop by connecting to a loopback
+"""Test connect on CompletionLoop by connecting to a loopback
 TCP listener and verifying the completion reports success.
 """
 
@@ -88,7 +88,7 @@ def test_completion_connect() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    loop.submit_connect(client.raw(), addr_ptr, addr_len, cmp_ptr)
+    loop.connect(client.raw(), addr_ptr, addr_len, cmp_ptr)
     _ = loop.tick(wait=True)
 
     assert_true(slot.fired, "connect completion did not fire")

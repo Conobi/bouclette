@@ -55,7 +55,7 @@ def test_nop_fires_with_zero() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    driver.submit_nop(cmp_ptr)
+    driver.nop(cmp_ptr)
     var dispatched = driver.tick(wait=False)
 
     assert_true(slot.fired, "nop callback did not fire")
@@ -82,7 +82,7 @@ def test_timeout_fires_with_etime() raises:
     var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
-    driver.submit_timeout(ts_ptr, cmp_ptr)
+    driver.timeout(ts_ptr, cmp_ptr)
 
     # Tick with wait=True should block until the timer fires.
     var ticks = 0

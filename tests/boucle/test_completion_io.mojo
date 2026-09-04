@@ -1,4 +1,4 @@
-"""Test submit_send and submit_recv on CompletionLoop via a socketpair.
+"""Test send and recv on CompletionLoop via a socketpair.
 
 Replaces the legacy read/write pipe test with the portable
 socket send/recv API.
@@ -67,7 +67,7 @@ def test_completion_io() raises:
     var msg_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(msg.unsafe_ptr())
     )
-    loop.submit_send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
+    loop.send(fd_a, msg_ptr, UInt32(5), send_cmp_ptr)
     _ = loop.tick(wait=True)
 
     assert_true(send_slot.fired, "send completion did not fire")
@@ -88,7 +88,7 @@ def test_completion_io() raises:
     var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
-    loop.submit_recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)
+    loop.recv(fd_b, buf_ptr, UInt32(16), recv_cmp_ptr)
     _ = loop.tick(wait=True)
 
     assert_true(recv_slot.fired, "recv completion did not fire")

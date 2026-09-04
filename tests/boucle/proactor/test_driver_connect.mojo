@@ -93,7 +93,7 @@ def test_driver_connect(backend: Backend) raises:
 
     # Submit connect and tick until completion fires.
     var client = Socket.tcp_v4()
-    driver.submit_connect(client.raw(), addr_ptr, addr_len, cmp_ptr)
+    driver.connect(client.raw(), addr_ptr, addr_len, cmp_ptr)
 
     var ticks = 0
     while not tracker.fired:
@@ -128,7 +128,7 @@ def test_driver_connect(backend: Backend) raises:
     var addr2_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     var client2 = Socket.tcp_v4()
-    driver.submit_connect(client2.raw(), addr2_ptr, addr2_len, cmp2_ptr)
+    driver.connect(client2.raw(), addr2_ptr, addr2_len, cmp2_ptr)
 
     var ticks2 = 0
     while not tracker2.fired:

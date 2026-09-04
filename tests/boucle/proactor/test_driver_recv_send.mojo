@@ -1,4 +1,4 @@
-"""Integration test: submit_recv and submit_send via completion driver."""
+"""Integration test: recv and send via completion driver."""
 
 from std.ffi import external_call
 from std.memory import Pointer
@@ -112,8 +112,8 @@ def test_driver_recv_send(backend: Backend) raises:
     )
 
     # Submit send on fd_a, recv on fd_b.
-    driver.submit_send(fd_a, send_buf_ptr, UInt32(5), send_cmp_ptr)
-    driver.submit_recv(fd_b, recv_buf_ptr, UInt32(16), recv_cmp_ptr)
+    driver.send(fd_a, send_buf_ptr, UInt32(5), send_cmp_ptr)
+    driver.recv(fd_b, recv_buf_ptr, UInt32(16), recv_cmp_ptr)
 
     # Tick until both completions fire.
     var ticks = 0

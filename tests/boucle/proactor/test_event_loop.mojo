@@ -50,7 +50,7 @@ def test_event_loop() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    loop.driver.submit_nop(cmp_ptr)
+    loop.driver.nop(cmp_ptr)
     loop.run_once()
 
     assert_equal(tracker.count, 1)

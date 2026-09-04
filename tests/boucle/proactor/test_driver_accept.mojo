@@ -106,10 +106,10 @@ def test_driver_accept(backend: Backend) raises:
     )
 
     # Submit accept on the server socket first, then connect from client.
-    driver.submit_accept(server.raw(), accept_cmp_ptr)
+    driver.accept(server.raw(), accept_cmp_ptr)
 
     var client = Socket.tcp_v4()
-    driver.submit_connect(client.raw(), addr_ptr, addr_len, connect_cmp_ptr)
+    driver.connect(client.raw(), addr_ptr, addr_len, connect_cmp_ptr)
 
     # Tick until both completions fire.
     var ticks = 0

@@ -103,7 +103,7 @@ def test_stale_fd_spurious_dispatch() raises:
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
 
-    loop.submit_recv(fd_a, buf_ptr, UInt32(16), cmp_ptr)
+    loop.recv(fd_a, buf_ptr, UInt32(16), cmp_ptr)
     var msg = UInt8(0xCC)
     _ = syscall[__NR_write, Scalar[DType.int64]](
         fd_b, Pointer(to=msg), UInt64(1)
@@ -170,7 +170,7 @@ def test_ecanceled_constant() raises:
     var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
-    loop.submit_recv(fd_a, buf_ptr, UInt32(16), recv_cmp_ptr)
+    loop.recv(fd_a, buf_ptr, UInt32(16), recv_cmp_ptr)
 
     # Submit cancel targeting the recv.
     var cancel_slot = IOSlot()
@@ -182,7 +182,7 @@ def test_ecanceled_constant() raises:
     var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cancel_cmp))
     )
-    loop.submit_cancel(recv_cmp_ptr, cancel_cmp_ptr)
+    loop.cancel(recv_cmp_ptr, cancel_cmp_ptr)
 
     _ = loop.tick(wait=False)
 

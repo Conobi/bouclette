@@ -116,7 +116,7 @@ def test_coro_with_completion_loop() raises:
     assert_true(not coro_heap[].is_done(), "coro must not be done yet")
 
     # Submit nop; completion callback will resume the coroutine
-    loop.submit_nop(cmp_ptr)
+    loop.nop(cmp_ptr)
     _ = loop.tick(wait=True)
 
     # After tick() the callback has fired and resumed the coro to completion

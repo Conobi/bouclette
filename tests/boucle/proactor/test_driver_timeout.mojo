@@ -85,10 +85,10 @@ def test_driver_timeout() raises:
     var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
-    driver.submit_timeout(ts_ptr, timeout_cmp_ptr)
+    driver.timeout(ts_ptr, timeout_cmp_ptr)
 
     # Immediately submit a cancel targeting the timeout's completion.
-    driver.submit_cancel(timeout_cmp_ptr, cancel_cmp_ptr)
+    driver.cancel(timeout_cmp_ptr, cancel_cmp_ptr)
 
     # Poll until both completions have fired.
     var ticks = 0

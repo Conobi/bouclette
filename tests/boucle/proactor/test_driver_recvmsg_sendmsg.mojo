@@ -1,4 +1,4 @@
-"""Integration test: submit_recvmsg and submit_sendmsg via completion driver."""
+"""Integration test: recvmsg and sendmsg via completion driver."""
 
 from std.ffi import external_call
 from std.memory import Pointer
@@ -214,8 +214,8 @@ def test_driver_recvmsg_sendmsg(backend: Backend) raises:
         unsafe_from_address=Int(recv_mhdr)
     )
 
-    driver.submit_sendmsg(fd_a, send_msg_ptr, send_cmp_ptr)
-    driver.submit_recvmsg(fd_b, recv_msg_ptr, recv_cmp_ptr)
+    driver.sendmsg(fd_a, send_msg_ptr, send_cmp_ptr)
+    driver.recvmsg(fd_b, recv_msg_ptr, recv_cmp_ptr)
     print("submitted sendmsg + recvmsg")
 
     # --- 9. Tick until both fire ---

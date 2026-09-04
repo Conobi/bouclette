@@ -76,7 +76,7 @@ def test_epoll_nop() raises:
     var loop = CompletionLoop(sq_entries=4, backend=Backend.EPOLL)
     assert_true(loop.backend() is Backend.EPOLL)
 
-    loop.submit_nop(cmp_ptr)
+    loop.nop(cmp_ptr)
     var dispatched = loop.tick(wait=False)
     assert_equal(dispatched, 1, "nop should dispatch on tick")
     assert_true(slot.fired, "nop callback should have fired")
@@ -103,7 +103,7 @@ def test_epoll_timeout() raises:
     var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=ts))
     )
-    loop.submit_timeout(ts_ptr, cmp_ptr)
+    loop.timeout(ts_ptr, cmp_ptr)
 
     # Tick with wait=True should block until the timer fires.
     var ticks = 0

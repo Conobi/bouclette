@@ -47,7 +47,7 @@ def test_driver_nop() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    driver.submit_nop(cmp_ptr)
+    driver.nop(cmp_ptr)
     _ = driver.tick(wait=True)
 
     assert_equal(tracker.count, 1)

@@ -157,9 +157,9 @@ struct SubmitOnFire:
             return
         try:
             if Int(self_ptr[].cancel_target) == 0:
-                self_ptr[].driver[].submit_nop(self_ptr[].next)
+                self_ptr[].driver[].nop(self_ptr[].next)
             else:
-                self_ptr[].driver[].submit_cancel(
+                self_ptr[].driver[].cancel(
                     self_ptr[].cancel_target, self_ptr[].next
                 )
         except:
@@ -278,12 +278,12 @@ def test_nop_submitted_from_callback_fires_on_next_tick() raises:
     var first = SubmitOnFire(_driver_ptr(driver), _completion_ptr(second_cmp))
     var first_cmp = _submit_on_fire_completion(first)
 
-    driver.submit_nop(_completion_ptr(first_cmp))
+    driver.nop(_completion_ptr(first_cmp))
     var dispatched = driver.tick(wait=False)
     dispatched += driver.tick(wait=False)
 
     assert_equal(first.fire_count, 1, "first nop must fire exactly once")
-    assert_true(not first.submit_failed, "submit_nop from callback raised")
+    assert_true(not first.submit_failed, "nop from callback raised")
     assert_true(second.fired, "nop submitted from callback was dropped")
     assert_equal(second.fire_count, 1)
     assert_equal(dispatched, 2, "both nops must be counted as dispatched")
@@ -299,7 +299,7 @@ def test_nop_submitted_from_callback_fires_on_next_tick() raises:
 def test_callback_cancelling_its_own_completion_does_not_double_free() raises:
     """A recv callback that cancels its own completion must see ENOENT.
 
-    The slot was still active while the callback ran, so submit_cancel
+    The slot was still active while the callback ran, so cancel
     found it, freed it and re-enqueued the target; _dispatch_op then
     freed the slot a second time and the target fired twice.
     """
@@ -307,7 +307,6 @@ def test_callback_cancelling_its_own_completion_does_not_double_free() raises:
     var fd_a: RawHandle = sv[0]
     var fd_b: RawHandle = sv[1]
     var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
-    var idle_space = driver.sq_space()
 
     var cancel_slot = IOSlot()
     var cancel_cmp = _slot_completion(cancel_slot)
@@ -319,7 +318,7 @@ def test_callback_cancelling_its_own_completion_does_not_double_free() raises:
     var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
-    driver.submit_recv(fd_a, buf_ptr, UInt32(16), _completion_ptr(recv_cmp))
+    driver.recv(fd_a, buf_ptr, UInt32(16), _completion_ptr(recv_cmp))
     _write_one_byte(fd_b)
 
     _ = driver.tick(wait=True)
@@ -328,17 +327,12 @@ def test_callback_cancelling_its_own_completion_does_not_double_free() raises:
 
     assert_equal(recv.fire_count, 1, "recv must fire exactly once")
     assert_equal(recv.result, 1, "recv must report the byte received")
-    assert_true(not recv.submit_failed, "submit_cancel from callback raised")
+    assert_true(not recv.submit_failed, "cancel from callback raised")
     assert_true(cancel_slot.fired, "cancel completion did not fire")
     assert_equal(
         cancel_slot.result,
         -Int(ENOENT),
         "cancel of a completed op must report -ENOENT",
-    )
-    assert_equal(
-        driver.sq_space(),
-        idle_space,
-        "pool must be back to its idle free count (no double free)",
     )
 
     _ = external_call["close", Int32](fd_a)
@@ -362,7 +356,6 @@ def test_op_cancelled_by_earlier_callback_in_same_batch_fires_once() raises:
     var sv_a = _make_socketpair()
     var sv_b = _make_socketpair()
     var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
-    var idle_space = driver.sq_space()
 
     var cancel_a_slot = IOSlot()
     var cancel_a_cmp = _slot_completion(cancel_a_slot)
@@ -383,7 +376,7 @@ def test_op_cancelled_by_earlier_callback_in_same_batch_fires_once() raises:
 
     var buf_a = List[UInt8](length=16, fill=0)
     var buf_b = List[UInt8](length=16, fill=0)
-    driver.submit_recv(
+    driver.recv(
         sv_a[0],
         Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf_a.unsafe_ptr())
@@ -391,7 +384,7 @@ def test_op_cancelled_by_earlier_callback_in_same_batch_fires_once() raises:
         UInt32(16),
         _completion_ptr(recv_a_cmp),
     )
-    driver.submit_recv(
+    driver.recv(
         sv_b[0],
         Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(buf_b.unsafe_ptr())
@@ -417,11 +410,6 @@ def test_op_cancelled_by_earlier_callback_in_same_batch_fires_once() raises:
     assert_true(
         completed_then_cancelled or cancelled_then_completed,
         "one recv must complete with 1 byte and the other with -ECANCELED",
-    )
-    assert_equal(
-        driver.sq_space(),
-        idle_space,
-        "pool must be back to its idle free count (no double free)",
     )
 
     for i in range(2):
@@ -460,11 +448,11 @@ def test_second_accept_on_same_listener_stays_pending_on_eagain() raises:
     var connect_slot = IOSlot()
     var connect_cmp = _slot_completion(connect_slot)
 
-    driver.submit_accept(server.raw(), _completion_ptr(accept_1_cmp))
-    driver.submit_accept(server.raw(), _completion_ptr(accept_2_cmp))
+    driver.accept(server.raw(), _completion_ptr(accept_1_cmp))
+    driver.accept(server.raw(), _completion_ptr(accept_2_cmp))
 
     var client = Socket.tcp_v4()
-    driver.submit_connect(
+    driver.connect(
         client.raw(),
         target_stor.addr_unsafe_ptr(),
         UInt64(SocketAddrStorV4.ADDR_LEN),
@@ -511,7 +499,6 @@ def test_failed_epoll_registration_releases_pool_slot() raises:
     active, permanently shrinking the pool by one per failed submit.
     """
     var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
-    var idle_space = driver.sq_space()
 
     # "/dev/null\0" as a NUL-terminated byte array.
     var path = Array[UInt8, 10](fill=0)
@@ -532,16 +519,11 @@ def test_failed_epoll_registration_releases_pool_slot() raises:
 
     var raised = False
     try:
-        driver.submit_recv(dev_null, buf_ptr, UInt32(16), _completion_ptr(cmp))
+        driver.recv(dev_null, buf_ptr, UInt32(16), _completion_ptr(cmp))
     except:
         raised = True
 
-    assert_true(raised, "submit_recv on /dev/null must raise")
-    assert_equal(
-        driver.sq_space(),
-        idle_space,
-        "failed registration must return its slot to the pool",
-    )
+    assert_true(raised, "recv on /dev/null must raise")
     assert_true(not slot.fired, "no completion may fire for a failed submit")
 
     _ = external_call["close", Int32](dev_null)
@@ -550,14 +532,14 @@ def test_failed_epoll_registration_releases_pool_slot() raises:
     _ = cmp
 
 
-# ── Bug 6: submit_connect blocks on a blocking socket ────────────────────────
+# ── Bug 6: connect blocks on a blocking socket ────────────────────────
 
 
 def test_connect_on_blocking_socket_does_not_block_submit() raises:
-    """Connecting a blocking socket must not stall submit_connect.
+    """Connecting a blocking socket must not stall connect.
 
     The listener's accept queue is filled so further SYNs are dropped;
-    a blocking connect(2) would then stall inside submit_connect until
+    a blocking connect(2) would then stall inside connect until
     the SYN retries time out (minutes). io_uring connects asynchronously
     regardless of O_NONBLOCK, so the epoll driver must too -- and must
     restore the socket's original flags afterwards.
@@ -581,7 +563,6 @@ def test_connect_on_blocking_socket_does_not_block_submit() raises:
         fillers.append(filler^)
 
     var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
-    var idle_space = driver.sq_space()
     var connect_slot = IOSlot()
     var connect_cmp = _slot_completion(connect_slot)
     var cancel_slot = IOSlot()
@@ -595,24 +576,24 @@ def test_connect_on_blocking_socket_does_not_block_submit() raises:
     )
 
     var start_ns = perf_counter_ns()
-    driver.submit_connect(
+    driver.connect(
         client.raw(), addr_ptr, addr_len, _completion_ptr(connect_cmp)
     )
     var elapsed_ms = (perf_counter_ns() - start_ns) // 1_000_000
 
     assert_true(
         elapsed_ms < 1000,
-        "submit_connect blocked for " + String(elapsed_ms) + "ms",
+        "connect blocked for " + String(elapsed_ms) + "ms",
     )
     assert_equal(
         _fd_flags(client.raw()),
         flags_before,
-        "submit_connect must restore the socket's original flags",
+        "connect must restore the socket's original flags",
     )
     assert_true(not connect_slot.fired, "no callback may fire during submit")
 
     # Tear down the pending connect so the driver holds no dangling op.
-    driver.submit_cancel(
+    driver.cancel(
         _completion_ptr(connect_cmp), _completion_ptr(cancel_cmp)
     )
     _ = driver.tick(wait=False)
@@ -621,7 +602,6 @@ def test_connect_on_blocking_socket_does_not_block_submit() raises:
         connect_slot.result == -Int(ECANCELED) or connect_slot.result == 0,
         "connect must report -ECANCELED (pending) or 0 (raced to success)",
     )
-    assert_equal(driver.sq_space(), idle_space)
 
     _ = connect_cmp
     _ = cancel_cmp
@@ -646,7 +626,7 @@ def test_cancel_of_unknown_target_reports_enoent() raises:
     var cancel_slot = IOSlot()
     var cancel_cmp = _slot_completion(cancel_slot)
 
-    driver.submit_cancel(
+    driver.cancel(
         _completion_ptr(never_submitted), _completion_ptr(cancel_cmp)
     )
     var dispatched = driver.tick(wait=False)
@@ -669,14 +649,13 @@ def test_cancel_of_unknown_target_reports_enoent() raises:
 def test_more_in_flight_ops_than_max_events_all_complete() raises:
     """200 recvs in flight on a max_events=8 driver must all complete.
 
-    The op pool was sized from max_events and submit_* raised "op pool
+    The op pool was sized from max_events and recv() raised "op pool
     exhausted" once every slot was taken. io_uring has no such limit
     (the kernel holds in-flight ops), so the pool must grow on demand
     and max_events must only size the epoll_wait event array. The
     extra submit past the 200 also proves growth is not a one-off.
     """
     var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
-    var idle_space = driver.sq_space()
     var total = IN_FLIGHT_BEYOND_POOL + 1
     var counter = FireCounter()
 
@@ -690,7 +669,7 @@ def test_more_in_flight_ops_than_max_events_all_complete() raises:
         completions.unsafe_offset(i).unsafe_write(_counter_completion(counter))
 
     for i in range(IN_FLIGHT_BEYOND_POOL):
-        driver.submit_recv(
+        driver.recv(
             fds[2 * i],
             Pointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(buffers.unsafe_ptr()) + i * 16
@@ -702,7 +681,7 @@ def test_more_in_flight_ops_than_max_events_all_complete() raises:
     var last = IN_FLIGHT_BEYOND_POOL
     var raised = False
     try:
-        driver.submit_recv(
+        driver.recv(
             fds[2 * last],
             Pointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(buffers.unsafe_ptr()) + last * 16
@@ -713,10 +692,6 @@ def test_more_in_flight_ops_than_max_events_all_complete() raises:
     except:
         raised = True
     assert_true(not raised, "submit past the initial pool capacity raised")
-    assert_true(
-        driver.sq_space() >= 2,
-        "sq_space must never report exhaustion while the pool can grow",
-    )
 
     for i in range(total):
         _write_one_byte(fds[2 * i + 1])
@@ -730,11 +705,6 @@ def test_more_in_flight_ops_than_max_events_all_complete() raises:
 
     assert_equal(counter.count, total, "every in-flight recv must fire once")
     assert_equal(counter.unexpected_results, 0, "every recv must read 1 byte")
-    # The pool keeps its grown size (it never shrinks), so compare free
-    # slots against capacity rather than against the idle sq_space.
-    assert_true(
-        driver.sq_space() > idle_space, "the pool must have grown"
-    )
     assert_equal(
         driver._state[].pool.free_count(),
         driver._state[].pool.capacity(),

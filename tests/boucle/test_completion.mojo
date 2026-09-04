@@ -83,7 +83,7 @@ def test_nop_single() raises:
     var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))
     )
-    loop.submit_nop(cmp_ptr)
+    loop.nop(cmp_ptr)
     _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 1)
@@ -104,7 +104,7 @@ def test_nop_multiple() raises:
         cmps.unsafe_offset(i).unsafe_write(Completion(invoke=Counter.on_complete, context=ctx))
 
     for i in range(5):
-        loop.submit_nop(cmps.unsafe_offset(i))
+        loop.nop(cmps.unsafe_offset(i))
     _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 5)
@@ -129,7 +129,7 @@ def test_nop_batched() raises:
     for i in range(12):
         if i > 0 and i % 4 == 0:
             _ = loop.tick(wait=True)
-        loop.submit_nop(cmps.unsafe_offset(i))
+        loop.nop(cmps.unsafe_offset(i))
 
     # Drain remaining completions.
     while tracker.count < 12:
@@ -186,10 +186,10 @@ def test_submit_cancel_cancels_pending_recv() raises:
     var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(buf.unsafe_ptr())
     )
-    loop.submit_recv(read_fd, buf_ptr, UInt32(16), recv_cmp_ptr)
+    loop.recv(read_fd, buf_ptr, UInt32(16), recv_cmp_ptr)
 
     # Cancel it by Completion pointer.
-    loop.submit_cancel(recv_cmp_ptr, cancel_cmp_ptr)
+    loop.cancel(recv_cmp_ptr, cancel_cmp_ptr)
 
     # Drain until both CQEs arrive.
     var ticks = 0

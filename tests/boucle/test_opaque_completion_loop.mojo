@@ -50,7 +50,7 @@ def test_nop_single() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    loop.submit_nop(cmp_ptr)
+    loop.nop(cmp_ptr)
     _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 1)
@@ -80,9 +80,9 @@ def test_nop_multiple() raises:
         unsafe_from_address=Int(Pointer(to=cmp3))
     )
 
-    loop.submit_nop(p1)
-    loop.submit_nop(p2)
-    loop.submit_nop(p3)
+    loop.nop(p1)
+    loop.nop(p2)
+    loop.nop(p3)
     _ = loop.tick(wait=True)
 
     assert_equal(tracker.count, 3)
@@ -103,7 +103,7 @@ def test_run_once() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    loop.submit_nop(cmp_ptr)
+    loop.nop(cmp_ptr)
     loop.run_once()
 
     assert_equal(tracker.count, 1)
