@@ -25,7 +25,7 @@ not whether the other two have arrived.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
@@ -170,7 +170,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
             debug_assert(self._total_cqes == 3, "CQE count exceeded 3")
             self.done = True
 
-    def flush_cancel(mut self, mut driver: ProbeCompletionDriver) raises -> Int:
+    def flush_cancel(mut self, mut driver: AutoDriver) raises -> Int:
         """Submit the deferred cancel SQE if a callback requested one.
 
         Must be called after each tick() to ensure cancel operations
