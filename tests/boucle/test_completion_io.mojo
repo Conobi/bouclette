@@ -4,7 +4,7 @@ Replaces the legacy read/write pipe test with the portable
 socket send/recv API.
 """
 
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from std.ffi import external_call
@@ -50,7 +50,7 @@ def test_completion_io() raises:
     var fd_a: RawHandle = sv[0]
     var fd_b: RawHandle = sv[1]
 
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
 
     # ── Send "hello" through CompletionLoop ──────────────────────────────
 

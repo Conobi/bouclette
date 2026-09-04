@@ -5,7 +5,7 @@ and be resumed by the callback once the kernel signals done.
 """
 
 from boucle.coroutine import Coroutine as CoroHandle, Yielder as CoroYielder
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.proactor.completion import Completion
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
@@ -101,7 +101,7 @@ def test_coro_with_completion_loop() raises:
         unsafe_from_address=Int(coro_heap)
     )
 
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
     var cmp = Completion(invoke=_on_io_complete, context=cb_ctx)
     var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=cmp))

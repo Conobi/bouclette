@@ -6,7 +6,7 @@ a regression in a fragile invariant.
 All tests force Backend.EPOLL to exercise the epoll-specific code paths.
 """
 
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.drivers.backend import Backend
 from boucle.handle import RawHandle
@@ -86,7 +86,7 @@ def test_stale_fd_spurious_dispatch() raises:
     var sv = _make_socketpair()
     var fd_a: RawHandle = sv[0]
     var fd_b: RawHandle = sv[1]
-    var loop = CompletionLoop(sq_entries=8, backend=Backend.EPOLL)
+    var loop = CompletionLoop(capacity=8, backend=Backend.EPOLL)
 
     # Submit and complete a recv.
     var slot = IOSlot()
@@ -154,7 +154,7 @@ def test_ecanceled_constant() raises:
     var sv = _make_socketpair()
     var fd_a: RawHandle = sv[0]
     var fd_b: RawHandle = sv[1]
-    var loop = CompletionLoop(sq_entries=8, backend=Backend.EPOLL)
+    var loop = CompletionLoop(capacity=8, backend=Backend.EPOLL)
 
     # Submit recv (will block — no data sent).
     var recv_slot = IOSlot()

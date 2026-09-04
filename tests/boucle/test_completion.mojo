@@ -4,7 +4,7 @@ Covers basic nop operations (single, multiple, batched), async cancel,
 and multishot accept (io_uring-specific, skipped when unavailable).
 """
 
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.socle.linux.raw import IORING_CQE_F_MORE
@@ -74,7 +74,7 @@ struct ResultSlot:
 
 def test_nop_single() raises:
     """Submit a single NOP and verify the callback fires."""
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
     var tracker = Counter()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -93,7 +93,7 @@ def test_nop_single() raises:
 
 def test_nop_multiple() raises:
     """Submit five NOPs and verify all callbacks fire."""
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
     var tracker = Counter()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -116,7 +116,7 @@ def test_nop_multiple() raises:
 
 def test_nop_batched() raises:
     """Submit 12 NOPs through a 4-entry SQ, ticking between batches."""
-    var loop = CompletionLoop(sq_entries=4)
+    var loop = CompletionLoop(capacity=4)
     var tracker = Counter()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -159,7 +159,7 @@ def test_submit_cancel_cancels_pending_recv() raises:
     var read_fd: RawHandle = sv[0]
     var write_fd: RawHandle = sv[1]
 
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
 
     # Wire recv completion.
     var recv_slot = ResultSlot()
@@ -221,7 +221,7 @@ def test_submit_cancel_cancels_pending_recv() raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring syscalls are available on this kernel."""
     try:
-        var d = IoUringDriver(sq_entries=4)
+        var d = IoUringDriver(capacity=4)
         _ = d^
         return True
     except:
@@ -302,7 +302,7 @@ def test_accept_multishot_produces_more_flag() raises:
     var port_lo = bound[3]
 
     # Wire the multishot accept completion via IoUringDriver.
-    var driver = IoUringDriver(sq_entries=8)
+    var driver = IoUringDriver(capacity=8)
     var tracker = MultishotTracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

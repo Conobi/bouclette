@@ -4,7 +4,7 @@ Forces Backend.EPOLL and exercises nop and timeout to confirm
 the completion-over-epoll path is functional.
 """
 
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.drivers.backend import Backend
 from boucle.proactor.completion import Completion
 from boucle.socle.linux.raw import __kernel_timespec, ETIME
@@ -73,7 +73,7 @@ def test_epoll_nop() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    var loop = CompletionLoop(sq_entries=4, backend=Backend.EPOLL)
+    var loop = CompletionLoop(capacity=4, backend=Backend.EPOLL)
     assert_true(loop.backend() is Backend.EPOLL)
 
     loop.nop(cmp_ptr)
@@ -96,7 +96,7 @@ def test_epoll_timeout() raises:
         unsafe_from_address=Int(Pointer(to=cmp))
     )
 
-    var loop = CompletionLoop(sq_entries=4, backend=Backend.EPOLL)
+    var loop = CompletionLoop(capacity=4, backend=Backend.EPOLL)
 
     # 50ms timeout via __kernel_timespec (layout matches Timeout).
     var ts = __kernel_timespec(0, 50_000_000)

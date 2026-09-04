@@ -7,7 +7,7 @@ a Completion callback, and dispatch the callback via tick().
 from std.memory import Pointer
 from std.testing import assert_equal
 
-from boucle.completion import CompletionLoop, Completion
+from boucle.proactor.completion_loop import CompletionLoop, Completion
 
 
 struct Tracker:
@@ -40,7 +40,7 @@ struct Tracker:
 
 def test_nop_single() raises:
     """Submit a single NOP and verify the callback fires."""
-    var loop = CompletionLoop(sq_entries=16)
+    var loop = CompletionLoop(capacity=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -60,7 +60,7 @@ def test_nop_single() raises:
 
 def test_nop_multiple() raises:
     """Submit three NOPs and verify all callbacks fire."""
-    var loop = CompletionLoop(sq_entries=16)
+    var loop = CompletionLoop(capacity=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -93,7 +93,7 @@ def test_nop_multiple() raises:
 
 def test_run_once() raises:
     """Verify run_once() blocks until a completion fires."""
-    var loop = CompletionLoop(sq_entries=16)
+    var loop = CompletionLoop(capacity=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

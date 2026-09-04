@@ -2,7 +2,7 @@
 TCP listener and verifying the completion reports success.
 """
 
-from boucle.completion import CompletionLoop
+from boucle.proactor.completion_loop import CompletionLoop
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from boucle.net.socket import Socket
@@ -76,7 +76,7 @@ def test_completion_connect() raises:
 
     # Create the client socket and submit the connect.
     var client = Socket.tcp_v4()
-    var loop = CompletionLoop(sq_entries=8)
+    var loop = CompletionLoop(capacity=8)
 
     # Wire completion callback.
     var slot = ConnectResult()

@@ -1,14 +1,13 @@
-"""Completion-based I/O — submit work, get notified when done.
+"""Raw completion loop — the escape hatch under `WatchLoop`.
 
-Best for:
-  - Bulk data transfer (file serving, streaming)
-  - Batching many operations (database engines, storage)
-  - Workloads where cancellation is rare
+The kernel performs I/O on your behalf: you hand over a buffer and a
+caller-owned `Completion` and get them back when the operation is done.
 
-The kernel performs I/O on your behalf. You hand over buffer
-ownership and get it back on completion.
-
-See `boucle.readiness` for the alternative model.
+This is the driver interface, not the user-facing model. Every method
+takes raw pointers and none of them returns a typed result, so keeping
+the operation state alive until its completion fires is entirely on the
+caller. Reach for `boucle.WatchLoop` instead; use this only when you
+need an operation the futures do not expose yet.
 """
 
 from boucle.handle import RawHandle
@@ -33,17 +32,21 @@ struct CompletionLoop(Movable):
 
     var _inner: EventLoop[_CompletionDriver]
 
-    def __init__(out self, sq_entries: UInt32 = 64, *, backend: Backend = Backend.AUTO) raises:
-        """Construct a CompletionLoop with the given SQ capacity.
+    def __init__(
+        out self, *, capacity: Int = 64, backend: Backend = Backend.AUTO
+    ) raises:
+        """Construct a CompletionLoop with the given capacity hint.
 
         Args:
-            sq_entries: Number of submission queue entries (default 64).
+            capacity: How many operations the loop should be ready to
+                      hold at once (default 64). A hint — the backend
+                      may round it up, and exceeding it is not an error.
             backend: I/O backend — AUTO probes for io_uring then falls
                      back to epoll. IO_URING requires io_uring. EPOLL
                      forces epoll even when io_uring is available.
         """
         self._inner = EventLoop[_CompletionDriver](
-            _CompletionDriver(sq_entries=sq_entries, backend=backend)
+            _CompletionDriver(capacity=capacity, backend=backend)
         )
 
     def __init__(out self, *, deinit move: Self):
@@ -207,16 +210,31 @@ struct CompletionLoop(Movable):
     # ── EventLoop convenience methods ─────────────────────────────────────
 
     def run_once(mut self) raises:
-        """Block until at least one completion fires, then dispatch all ready."""
+        """Run one blocking tick.
+
+        Waits for at least one completion, then dispatches every
+        completion that is ready by the time it wakes up. There is no
+        timeout: the driver can only be told to wait or not to wait, so
+        a bounded wait is expressed by submitting a timeout operation.
+        """
         self._inner.run_once()
 
-    def try_poll(mut self) raises:
-        """Non-blocking: dispatch any ready completions, return immediately."""
-        self._inner.try_poll()
+    def poll(mut self) raises:
+        """Run one non-blocking tick.
 
-    def run(mut self) raises:
-        """Run until stop() is called."""
-        self._inner.run()
+        Dispatches the completions that are already available and
+        returns, even when there are none.
+        """
+        self._inner.poll()
+
+    def run_forever(mut self) raises:
+        """Run blocking ticks until stop() is called.
+
+        Unlike `WatchLoop.run()`, this does not return when the loop
+        runs out of work — a callback (or another thread) must call
+        `stop()`.
+        """
+        self._inner.run_forever()
 
     def stop(mut self):
         """Signal the loop to exit after the current tick."""
