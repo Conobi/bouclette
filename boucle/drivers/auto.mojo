@@ -15,6 +15,7 @@ from boucle.drivers.driver import IoDriver
 from boucle.drivers.backend import Backend
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.drivers.epoll_completion import EpollCompletionDriver
+from boucle.socle import is_linux
 
 
 struct AutoDriver(IoDriver):
@@ -54,6 +55,10 @@ struct AutoDriver(IoDriver):
                      requires io_uring or raises; Backend.EPOLL
                      skips probing entirely.
         """
+        comptime if not is_linux:
+            if backend is Backend.IO_URING or backend is Backend.EPOLL:
+                raise "Backend.IO_URING and Backend.EPOLL require Linux"
+
         if backend is not Backend.EPOLL:
             try:
                 self._uring = IoUringDriver(sq_entries=sq_entries)
