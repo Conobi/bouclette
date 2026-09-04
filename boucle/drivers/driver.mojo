@@ -1,7 +1,7 @@
 """Platform-agnostic I/O driver trait.
 
 Defines the interface that platform-specific I/O backends must
-implement. Each method either submits work to the kernel or
+implement. Each method either queues operations for the kernel or
 dispatches completed operations via their Completion callbacks.
 
 All pointer parameters use opaque types (NoneType) so the trait
@@ -32,7 +32,7 @@ trait IoDriver(Movable):
         ...
 
     def tick(mut self, wait: Bool) raises -> Int:
-        """Submit pending SQEs and dispatch completed operations.
+        """Submit pending operations and dispatch completed operations.
 
         Args:
             wait: If True, block until at least one completion arrives.
@@ -40,22 +40,22 @@ trait IoDriver(Movable):
                   already-available completions.
 
         Returns:
-            The number of dispatched CQEs.
+            The number of completed operations.
         """
         ...
 
-    def submit_nop(
+    def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation.
 
         Args:
             c: Pointer to the caller-owned Completion token. Stored as
-               SQE user_data; fired on CQE arrival.
+               operation user_data; fired on completion arrival.
         """
         ...
 
-    def submit_connect(
+    def connect(
         mut self,
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
@@ -73,7 +73,7 @@ trait IoDriver(Movable):
         """
         ...
 
-    def submit_timeout(
+    def timeout(
         mut self,
         ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -88,7 +88,7 @@ trait IoDriver(Movable):
         """
         ...
 
-    def submit_cancel(
+    def cancel(
         mut self,
         target: Pointer[Completion, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -96,9 +96,9 @@ trait IoDriver(Movable):
         """Cancel a previously submitted operation.
 
         Matches the target by its Completion pointer (stored as
-        user_data in the original SQE). The cancel itself produces
-        a CQE on `c`; the cancelled target also produces a CQE with
-        result == -ECANCELED if it was still in flight.
+        user_data in the original operation). The cancel itself produces
+        a completion on `c`; the cancelled target also produces a completion
+        with result == -ECANCELED if it was still in flight.
 
         Args:
             target: Pointer to the Completion of the operation to cancel.
@@ -107,14 +107,14 @@ trait IoDriver(Movable):
         """
         ...
 
-    def submit_accept(
+    def accept(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
     ) raises:
         """Queue an accept on listening socket `fd`.
 
-        The CQE result is the accepted file descriptor (>= 0) on
+        The completion result is the accepted file descriptor (>= 0) on
         success, or a negative errno on failure.
 
         Args:
@@ -123,7 +123,7 @@ trait IoDriver(Movable):
         """
         ...
 
-    def submit_recv(
+    def recv(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -134,13 +134,13 @@ trait IoDriver(Movable):
 
         Args:
             fd: The socket file descriptor.
-            buf: Buffer to receive into. Must remain valid until CQE fires.
+            buf: Buffer to receive into. Must remain valid until completion fires.
             len: Maximum bytes to receive.
             c: Pointer to the caller-owned Completion token.
         """
         ...
 
-    def submit_send(
+    def send(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -150,17 +150,17 @@ trait IoDriver(Movable):
         """Queue a send on socket `fd` from `buf`.
 
         Caller guarantees `buf` remains valid and unmodified until
-        the corresponding CQE fires.
+        the corresponding completion fires.
 
         Args:
             fd: The socket file descriptor.
-            buf: Data to send. Must remain valid until CQE fires.
+            buf: Data to send. Must remain valid until completion fires.
             len: Number of bytes to send.
             c: Pointer to the caller-owned Completion token.
         """
         ...
 
-    def submit_recvmsg(
+    def recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -171,13 +171,13 @@ trait IoDriver(Movable):
         Args:
             fd: The socket file descriptor.
             msg: Opaque pointer to a platform-specific message header
-                 (e.g. msghdr on Linux). Must remain valid until CQE
+                 (e.g. msghdr on Linux). Must remain valid until completion
                  fires.
             c: Pointer to the caller-owned Completion token.
         """
         ...
 
-    def submit_sendmsg(
+    def sendmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -186,25 +186,13 @@ trait IoDriver(Movable):
         """Queue a sendmsg on socket `fd`.
 
         Caller guarantees `msg` and all referenced buffers remain valid
-        and unmodified until the corresponding CQE fires.
+        and unmodified until the corresponding completion fires.
 
         Args:
             fd: The socket file descriptor.
             msg: Opaque pointer to a platform-specific message header
                  (e.g. msghdr on Linux).
             c: Pointer to the caller-owned Completion token.
-        """
-        ...
-
-    def sq_space(mut self) -> Int:
-        """Return the number of available submission queue slots.
-
-        Callers use this to verify sufficient capacity before
-        submitting multi-SQE atomic operations (e.g. connect +
-        timeout that must both fit or neither is queued).
-
-        Returns:
-            The number of SQ entries currently available for submission.
         """
         ...
 

@@ -57,7 +57,7 @@ struct CompletionLoop(Movable):
     # ── IoDriver delegation ───────────────────────────────────────────────
 
     def tick(mut self, wait: Bool) raises -> Int:
-        """Submit pending SQEs and dispatch completed operations.
+        """Submit pending operations and dispatch completed operations.
 
         Args:
             wait: If True, block until at least one completion arrives.
@@ -65,11 +65,11 @@ struct CompletionLoop(Movable):
                   already-available completions.
 
         Returns:
-            The number of dispatched CQEs.
+            The number of completed operations.
         """
         return self._inner.driver.tick(wait)
 
-    def submit_nop(
+    def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation.
@@ -77,9 +77,9 @@ struct CompletionLoop(Movable):
         Args:
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_nop(c)
+        self._inner.driver.nop(c)
 
-    def submit_connect(
+    def connect(
         mut self,
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
@@ -94,9 +94,9 @@ struct CompletionLoop(Movable):
             addr_len: Size in bytes of the sockaddr structure.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_connect(fd, addr, addr_len, c)
+        self._inner.driver.connect(fd, addr, addr_len, c)
 
-    def submit_timeout(
+    def timeout(
         mut self,
         ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -108,9 +108,9 @@ struct CompletionLoop(Movable):
                 must keep it alive until the completion fires.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_timeout(ts, c)
+        self._inner.driver.timeout(ts, c)
 
-    def submit_cancel(
+    def cancel(
         mut self,
         target: Pointer[Completion, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -121,9 +121,9 @@ struct CompletionLoop(Movable):
             target: Pointer to the Completion of the op to cancel.
             c: Pointer to the Completion token for the cancel itself.
         """
-        self._inner.driver.submit_cancel(target, c)
+        self._inner.driver.cancel(target, c)
 
-    def submit_accept(
+    def accept(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -134,9 +134,9 @@ struct CompletionLoop(Movable):
             fd: The listening socket file descriptor.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_accept(fd, c)
+        self._inner.driver.accept(fd, c)
 
-    def submit_recv(
+    def recv(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -151,9 +151,9 @@ struct CompletionLoop(Movable):
             len: Maximum bytes to receive.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_recv(fd, buf, len, c)
+        self._inner.driver.recv(fd, buf, len, c)
 
-    def submit_send(
+    def send(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -168,9 +168,9 @@ struct CompletionLoop(Movable):
             len: Number of bytes to send.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_send(fd, buf, len, c)
+        self._inner.driver.send(fd, buf, len, c)
 
-    def submit_recvmsg(
+    def recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -183,9 +183,9 @@ struct CompletionLoop(Movable):
             msg: Opaque pointer to a platform-specific message header.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_recvmsg(fd, msg, c)
+        self._inner.driver.recvmsg(fd, msg, c)
 
-    def submit_sendmsg(
+    def sendmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -198,15 +198,7 @@ struct CompletionLoop(Movable):
             msg: Opaque pointer to a platform-specific message header.
             c: Pointer to the caller-owned Completion token.
         """
-        self._inner.driver.submit_sendmsg(fd, msg, c)
-
-    def sq_space(mut self) -> Int:
-        """Return the number of available submission queue slots.
-
-        Returns:
-            The number of SQ entries currently available for submission.
-        """
-        return self._inner.driver.sq_space()
+        self._inner.driver.sendmsg(fd, msg, c)
 
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism is active."""

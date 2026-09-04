@@ -98,7 +98,7 @@ struct AutoDriver(IoDriver):
             return self._uring.value().tick(wait)
         return self._epoll.value().tick(wait)
 
-    def submit_nop(
+    def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation.
@@ -107,10 +107,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_nop(c)
-        return self._epoll.value().submit_nop(c)
+            return self._uring.value().nop(c)
+        return self._epoll.value().nop(c)
 
-    def submit_connect(
+    def connect(
         mut self,
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
@@ -126,10 +126,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_connect(fd, addr, addr_len, c)
-        return self._epoll.value().submit_connect(fd, addr, addr_len, c)
+            return self._uring.value().connect(fd, addr, addr_len, c)
+        return self._epoll.value().connect(fd, addr, addr_len, c)
 
-    def submit_timeout(
+    def timeout(
         mut self,
         ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -142,10 +142,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_timeout(ts, c)
-        return self._epoll.value().submit_timeout(ts, c)
+            return self._uring.value().timeout(ts, c)
+        return self._epoll.value().timeout(ts, c)
 
-    def submit_cancel(
+    def cancel(
         mut self,
         target: Pointer[Completion, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -157,10 +157,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the Completion token for the cancel itself.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_cancel(target, c)
-        return self._epoll.value().submit_cancel(target, c)
+            return self._uring.value().cancel(target, c)
+        return self._epoll.value().cancel(target, c)
 
-    def submit_accept(
+    def accept(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -172,10 +172,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_accept(fd, c)
-        return self._epoll.value().submit_accept(fd, c)
+            return self._uring.value().accept(fd, c)
+        return self._epoll.value().accept(fd, c)
 
-    def submit_recv(
+    def recv(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -191,10 +191,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_recv(fd, buf, len, c)
-        return self._epoll.value().submit_recv(fd, buf, len, c)
+            return self._uring.value().recv(fd, buf, len, c)
+        return self._epoll.value().recv(fd, buf, len, c)
 
-    def submit_send(
+    def send(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -210,10 +210,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_send(fd, buf, len, c)
-        return self._epoll.value().submit_send(fd, buf, len, c)
+            return self._uring.value().send(fd, buf, len, c)
+        return self._epoll.value().send(fd, buf, len, c)
 
-    def submit_recvmsg(
+    def recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -227,10 +227,10 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_recvmsg(fd, msg, c)
-        return self._epoll.value().submit_recvmsg(fd, msg, c)
+            return self._uring.value().recvmsg(fd, msg, c)
+        return self._epoll.value().recvmsg(fd, msg, c)
 
-    def submit_sendmsg(
+    def sendmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -244,18 +244,8 @@ struct AutoDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().submit_sendmsg(fd, msg, c)
-        return self._epoll.value().submit_sendmsg(fd, msg, c)
-
-    def sq_space(mut self) -> Int:
-        """Return the number of available submission queue slots.
-
-        Returns:
-            The number of SQ entries currently available for submission.
-        """
-        if self._backend is Backend.IO_URING:
-            return self._uring.value().sq_space()
-        return self._epoll.value().sq_space()
+            return self._uring.value().sendmsg(fd, msg, c)
+        return self._epoll.value().sendmsg(fd, msg, c)
 
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism this driver uses."""

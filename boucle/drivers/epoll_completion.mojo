@@ -1,7 +1,7 @@
 """Linux epoll-based completion driver for the IoDriver trait.
 
 Emulates io_uring-style completion semantics over epoll: each
-submit_* registers interest with epoll and stores a per-operation
+operation method registers interest with epoll and stores a per-operation
 wrapper (_EpollOp) in a slab pool. The slot index and a per-slot
 generation counter are packed into epoll_event.data. When epoll_wait
 fires, the slot is recovered, checked for staleness, the non-blocking
@@ -354,9 +354,9 @@ struct _OpPool(Movable):
     allocate: tick() re-derives the pointer from the event's index for
     every event, _dispatch_op and the timer path copy what they need
     and free the slot BEFORE firing the callback (the only place user
-    code, and hence a nested submit_*, can run), submit_cancel scans
-    without allocating, and each submit_* fills its freshly allocated
-    slot and registers it without allocating again. Everything that
+    code, and hence a nested operation method, can run), cancel scans
+    without allocating, and each operation method fills its freshly
+    allocated slot and registers it without allocating again. Everything that
     outlives a call refers to slots by index (timer heap, epoll data),
     never by address.
     """
@@ -481,7 +481,7 @@ struct _DriverState(Movable):
     """All driver state that a Completion callback may mutate.
 
     Callbacks run inside tick(), which holds `mut self` on the driver,
-    yet they may legally call submit_* on that same driver through a
+    yet they may legally call operation methods on that same driver through a
     raw pointer. Because `mut` grants exclusive access, the compiler
     may keep the driver's inline fields (e.g. a List length) in
     registers across the callback call and never observe the
@@ -517,9 +517,9 @@ struct _DriverState(Movable):
 struct EpollCompletionDriver(IoDriver):
     """IoDriver that emulates completion semantics over Linux epoll.
 
-    Each submit_* allocates an _EpollOp from a slab pool, stores the
-    operation kind, buffer pointers, and Completion pointer. The slot
-    index and generation go into epoll_event.data. On tick(),
+    Each operation method allocates an _EpollOp from a slab pool,
+    stores the operation kind, buffer pointers, and Completion pointer.
+    The slot index and generation go into epoll_event.data. On tick(),
     epoll_wait() fires, the op is recovered and validated, the
     non-blocking I/O is performed, and the Completion callback is
     invoked.
@@ -527,10 +527,11 @@ struct EpollCompletionDriver(IoDriver):
     Operations that complete without epoll (nop, cancel, immediate
     connect result) enqueue a _ReadyEntry. At the start of tick(),
     the ready queue is drained before calling epoll_wait(). ALL
-    callbacks fire during tick() -- never during submit_*.
+    callbacks fire during tick() -- never during operation methods.
 
-    Callbacks may call submit_* on this driver; see _DriverState for
-    why the mutable state is heap-boxed to make that sound.
+    Callbacks may call operation methods on this driver; see
+    _DriverState for why the mutable state is heap-boxed to make
+    that sound.
     """
 
     var _epfd: Int32
@@ -588,13 +589,13 @@ struct EpollCompletionDriver(IoDriver):
     def tick(mut self, wait: Bool) raises -> Int:
         """Drain ready queue, poll epoll, fire expired timers.
 
-        All Completion callbacks fire here -- never during submit_*.
+        All Completion callbacks fire here -- never during operation methods.
 
-        Callbacks may themselves call submit_* on this driver. Ready
-        entries they append (nop, cancel, immediate connect) are kept
-        and fire on the NEXT tick, mirroring io_uring where an SQE
-        queued from a callback is not entered until the following
-        tick. Only the entries present when the drain started fire in
+        Callbacks may themselves call operation methods on this driver.
+        Ready entries they append (nop, cancel, immediate connect) are
+        kept and fire on the NEXT tick, mirroring io_uring where an
+        operation queued from a callback is not entered until the
+        following tick. Only the entries present when the drain started fire in
         this tick, so a callback that re-submits on every completion
         cannot spin the drain forever. Epoll events whose op was
         cancelled or completed by an earlier callback in the same
@@ -716,7 +717,7 @@ struct EpollCompletionDriver(IoDriver):
 
         Called from tick() when epoll_wait returns a live event for this
         _EpollOp. The actual I/O syscall happens here (not during
-        submit_*). If the syscall reports EAGAIN (spurious wake-up, or
+        operation methods). If the syscall reports EAGAIN (spurious wake-up, or
         another op on a dup of the same fd consumed the readiness), the
         op stays registered and nothing fires.
 
@@ -911,9 +912,9 @@ struct EpollCompletionDriver(IoDriver):
         else:
             _check_for_errors(res)
 
-    # ── Submit methods ────────────────────────────────────────────────────
+    # ── Operation methods ─────────────────────────────────────────────────
 
-    def submit_nop(
+    def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op. Fires with result 0 during the next tick().
@@ -923,7 +924,7 @@ struct EpollCompletionDriver(IoDriver):
         """
         self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
 
-    def submit_connect(
+    def connect(
         mut self,
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
@@ -986,7 +987,7 @@ struct EpollCompletionDriver(IoDriver):
             self._state[].pool.free(op[].pool_index)
             self._state[].ready.append(_ReadyEntry(c, Int(res), UInt32(0)))
 
-    def submit_timeout(
+    def timeout(
         mut self,
         ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -1017,7 +1018,7 @@ struct EpollCompletionDriver(IoDriver):
             )
         )
 
-    def submit_cancel(
+    def cancel(
         mut self,
         target: Pointer[Completion, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -1065,7 +1066,7 @@ struct EpollCompletionDriver(IoDriver):
             _ReadyEntry(c, -Int(ENOENT), UInt32(0))
         )
 
-    def submit_accept(
+    def accept(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -1083,7 +1084,7 @@ struct EpollCompletionDriver(IoDriver):
         op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
-    def submit_recv(
+    def recv(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -1108,7 +1109,7 @@ struct EpollCompletionDriver(IoDriver):
         op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
-    def submit_send(
+    def send(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -1132,7 +1133,7 @@ struct EpollCompletionDriver(IoDriver):
         op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
 
-    def submit_recvmsg(
+    def recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -1154,7 +1155,7 @@ struct EpollCompletionDriver(IoDriver):
         op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
-    def submit_sendmsg(
+    def sendmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -1176,21 +1177,3 @@ struct EpollCompletionDriver(IoDriver):
         op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
 
-    def sq_space(mut self) -> Int:
-        """Return a lower bound on submissions that cannot raise for space.
-
-        io_uring reports its free SQ ring entries. This driver's op pool
-        grows on demand, so the honest counterpart is the free slots
-        plus the slots the next doubling adds: at least that many
-        submit_* calls will succeed. The value decreases as ops are
-        submitted and recovers as they complete or are cancelled, and
-        it never reaches 0 below the 2^32-slot ceiling, so callers
-        that gate a multi-op submit (connect + timeout) on this are
-        never refused spuriously.
-
-        Returns:
-            Free slots plus the slots one growth step would add.
-        """
-        return (
-            self._state[].pool.free_count() + self._state[].pool.capacity()
-        )

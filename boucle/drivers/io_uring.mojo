@@ -1,8 +1,8 @@
 """Linux io_uring backend for the proactor IoDriver trait.
 
-Wraps boucle's IoUring type and implements tick() (CQE dispatch via
-Completion pointer recovery) and submit methods (nop, connect,
-timeout, cancel).
+Wraps boucle's IoUring type and implements tick() (completion dispatch via
+Completion pointer recovery) and operation methods (nop, connect,
+timeout, cancel, accept, recv, send, recvmsg, sendmsg).
 """
 
 from std.memory import Pointer
@@ -26,9 +26,9 @@ from boucle.drivers.driver import IoDriver
 struct IoUringDriver(IoDriver):
     """IoDriver backed by Linux io_uring.
 
-    Each submitted operation stores its Completion pointer as the SQE
-    user_data. On CQE arrival, tick() recovers the pointer and fires
-    the callback with the kernel result and flags.
+    Each submitted operation stores its Completion pointer as the
+    operation user_data. On completion arrival, tick() recovers the
+    pointer and fires the callback with the kernel result and flags.
     """
 
     var _ring: IoUring[]
@@ -46,18 +46,18 @@ struct IoUringDriver(IoDriver):
         self._ring = move._ring^
 
     def tick(mut self, wait: Bool) raises -> Int:
-        """Submit pending SQEs and dispatch completed operations.
+        """Submit pending operations and dispatch completed operations.
 
-        Recovers the Completion pointer from each CQE's user_data field
-        and invokes the callback. Skips CQEs with user_data == 0 (e.g.
-        internal kernel notifications).
+        Recovers the Completion pointer from each completion's user_data
+        field and invokes the callback. Skips completions with
+        user_data == 0 (e.g. internal kernel notifications).
 
         Args:
             wait: If True, block until at least one completion arrives.
                   If False, dispatch only already-available completions.
 
         Returns:
-            The number of dispatched CQEs (excludes skipped user_data==0).
+            The number of completed operations (excludes skipped user_data==0).
         """
         var wait_nr = UInt32(1) if wait else UInt32(0)
         _ = self._ring.submit_and_wait(wait_nr=wait_nr)
@@ -75,7 +75,7 @@ struct IoUringDriver(IoDriver):
         cq^.__deinit__()
         return dispatched
 
-    def submit_nop(
+    def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]
     ) raises:
         """Queue a no-op operation with the given Completion token.
@@ -84,11 +84,13 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         _ = Nop(sq.__next__()).user_data(UInt64(Int(c)))
 
-    def submit_connect(
+    def connect(
         mut self,
         fd: RawHandle,
         addr: Pointer[UInt8, ImmStaticOrigin],
@@ -104,7 +106,9 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var addr_cv = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(addr)
@@ -113,7 +117,7 @@ struct IoUringDriver(IoDriver):
             UInt64(Int(c))
         )
 
-    def submit_timeout(
+    def timeout(
         mut self,
         ts: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -126,14 +130,16 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var ts_cv = Pointer[c_void, MutUntrackedOrigin](
             unsafe_from_address=Int(ts)
         )
         _ = Timeout(sq.__next__(), ts_cv).user_data(UInt64(Int(c)))
 
-    def submit_cancel(
+    def cancel(
         mut self,
         target: Pointer[Completion, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -141,20 +147,22 @@ struct IoUringDriver(IoDriver):
         """Cancel a previously submitted operation.
 
         Matches the target by its Completion pointer (the user_data
-        stored in the original SQE).
+        stored in the original operation).
 
         Args:
             target: Pointer to the Completion of the op to cancel.
             c: Pointer to the Completion token for the cancel itself.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         _ = AsyncCancel(sq.__next__(), UInt64(Int(target))).user_data(
             UInt64(Int(c))
         )
 
-    def submit_accept(
+    def accept(
         mut self,
         fd: RawHandle,
         c: Pointer[Completion, MutUntrackedOrigin],
@@ -166,11 +174,13 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd).user_data(UInt64(Int(c)))
 
-    def submit_recv(
+    def recv(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -181,12 +191,14 @@ struct IoUringDriver(IoDriver):
 
         Args:
             fd: The socket file descriptor.
-            buf: Buffer to receive into. Must remain valid until CQE fires.
+            buf: Buffer to receive into. Must remain valid until completion fires.
             len: Maximum bytes to receive.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
@@ -195,7 +207,7 @@ struct IoUringDriver(IoDriver):
             UInt64(Int(c))
         )
 
-    def submit_send(
+    def send(
         mut self,
         fd: RawHandle,
         buf: Pointer[UInt8, MutUntrackedOrigin],
@@ -206,12 +218,14 @@ struct IoUringDriver(IoDriver):
 
         Args:
             fd: The socket file descriptor.
-            buf: Data to send. Must remain valid until CQE fires.
+            buf: Data to send. Must remain valid until completion fires.
             len: Number of bytes to send.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
@@ -220,7 +234,7 @@ struct IoUringDriver(IoDriver):
             UInt64(Int(c))
         )
 
-    def submit_recvmsg(
+    def recvmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -231,18 +245,20 @@ struct IoUringDriver(IoDriver):
         Args:
             fd: The socket file descriptor.
             msg: Opaque pointer to msghdr (and all referenced buffers).
-                 Must remain valid until CQE fires.
+                 Must remain valid until completion fires.
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
         _ = RecvMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
 
-    def submit_sendmsg(
+    def sendmsg(
         mut self,
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
@@ -251,7 +267,7 @@ struct IoUringDriver(IoDriver):
         """Queue a sendmsg on socket `fd`.
 
         Caller guarantees `msg` and all referenced buffers remain valid
-        and unmodified until the corresponding CQE fires.
+        and unmodified until the corresponding completion fires.
 
         Args:
             fd: The socket file descriptor.
@@ -259,7 +275,9 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
         var sq = self._ring.unsynced_sq()
         var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
@@ -312,10 +330,10 @@ struct IoUringDriver(IoDriver):
         """Queue a multishot recv with provided buffer selection (TCP).
 
         The kernel selects a buffer from `buf_group` per arrival and
-        produces one CQE per chunk. The payload begins at offset 0 of
+        produces one completion per chunk. The payload begins at offset 0 of
         the chosen buffer (no io_uring_recvmsg_out header). The buffer
-        ID is in CQE flags bits 16-31 when IORING_CQE_F_BUFFER is set.
-        Re-arm when CQE flags lack IORING_CQE_F_MORE.
+        ID is in completion flags bits 16-31 when IORING_CQE_F_BUFFER is set.
+        Re-arm when completion flags lack IORING_CQE_F_MORE.
 
         Args:
             fd: The socket file descriptor.
@@ -339,8 +357,8 @@ struct IoUringDriver(IoDriver):
     ) raises:
         """Queue a multishot accept on listening socket `fd`.
 
-        Produces one CQE per accepted connection. The CQE result is the
-        accepted file descriptor (>= 0) on success. Re-arm when CQE
+        Produces one completion per accepted connection. The completion result is the
+        accepted file descriptor (>= 0) on success. Re-arm when completion
         flags lack IORING_CQE_F_MORE. Requires kernel >= 5.19.
 
         Args:
@@ -363,10 +381,10 @@ struct IoUringDriver(IoDriver):
     ) raises:
         """Queue a multishot recvmsg with provided buffer selection.
 
-        Produces one CQE per received message. The buffer ID is in
-        CQE flags bits 16-31 when IORING_CQE_F_BUFFER is set. The
+        Produces one completion per received message. The buffer ID is in
+        completion flags bits 16-31 when IORING_CQE_F_BUFFER is set. The
         same Completion fires multiple times until the multishot ends
-        (CQE without IORING_CQE_F_MORE flag). Caller must re-arm if
+        (completion without IORING_CQE_F_MORE flag). Caller must re-arm if
         desired.
 
         Args:

@@ -1,8 +1,9 @@
 """Per-operation completion token for callback-based I/O dispatch.
 
-Each io_uring operation carries a caller-owned Completion whose pointer
-is stored as the SQE user_data. On CQE arrival, the event loop recovers
-the Completion pointer and invokes its callback with the result.
+Each I/O operation carries a caller-owned Completion whose pointer
+is stored as the operation user_data. On completion arrival, the event
+loop recovers the Completion pointer and invokes its callback with
+the result.
 """
 
 from std.memory import Pointer
@@ -10,7 +11,7 @@ from boucle.socle.ptr import null_ptr
 
 
 # Function-pointer type for completion callbacks.
-# Signature: (context_ptr, cqe_result, cqe_flags) -> None
+# Signature: (context_ptr, result, flags) -> None
 comptime CompletionFn = def (Pointer[NoneType, MutUntrackedOrigin], Int, UInt32) thin -> None
 
 
@@ -53,8 +54,8 @@ struct Completion(Movable):
         """Dispatch this completion's callback.
 
         Args:
-            result: The io_uring CQE result (syscall return value).
-            flags: The io_uring CQE flags.
+            result: The operation result (syscall return value).
+            flags: The operation flags.
         """
         self.invoke(self.context, result, flags)
 
