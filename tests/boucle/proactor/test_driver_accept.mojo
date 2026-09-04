@@ -79,7 +79,7 @@ def test_driver_accept(backend: Backend) raises:
     var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     # Set up driver.
-    var driver = AutoDriver(sq_entries=16, backend=backend)
+    var driver = AutoDriver(capacity=16, backend=backend)
 
     # Set up accept completion.
     var accept_tracker = AcceptTracker()
@@ -144,7 +144,7 @@ def test_driver_accept(backend: Backend) raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
-        var d = AutoDriver(sq_entries=4, backend=Backend.IO_URING)
+        var d = AutoDriver(capacity=4, backend=Backend.IO_URING)
         _ = d^
         return True
     except:

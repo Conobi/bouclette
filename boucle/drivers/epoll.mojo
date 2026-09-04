@@ -79,16 +79,17 @@ struct EpollDriver(ReadinessDriver):
     var _events: Pointer[epoll_event, MutUntrackedOrigin]
     var _max_events: Int32
 
-    def __init__(out self, *, max_events: Int32 = 64) raises:
+    def __init__(out self, *, capacity: Int = 64) raises:
         """Create an epoll driver with the given event buffer capacity.
 
         Args:
-            max_events: Maximum events returned per poll() call
-                        (default 64).
+            capacity: How many events one poll() call may return
+                      (default 64). A hint: events beyond it are simply
+                      reported by the next call.
         """
         self._epfd = epoll_create()
-        self._max_events = max_events
-        self._events = unsafe_alloc[epoll_event](Int(max_events))
+        self._max_events = Int32(capacity)
+        self._events = unsafe_alloc[epoll_event](capacity)
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""

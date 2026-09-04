@@ -102,7 +102,7 @@ def test_driver_recvmsg_sendmsg(backend: Backend) raises:
     assert_true(port > 0, "ephemeral port is 0")
 
     # --- 4. Set up driver ---
-    var driver = AutoDriver(sq_entries=16, backend=backend)
+    var driver = AutoDriver(capacity=16, backend=backend)
 
     # --- 5. Prepare sendmsg (all heap-allocated for io_uring safety) ---
     # msghdr layout on x86_64 (56 bytes):
@@ -268,7 +268,7 @@ def test_driver_recvmsg_sendmsg(backend: Backend) raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
-        var d = AutoDriver(sq_entries=4, backend=Backend.IO_URING)
+        var d = AutoDriver(capacity=4, backend=Backend.IO_URING)
         _ = d^
         return True
     except:

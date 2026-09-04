@@ -37,7 +37,7 @@ struct Tracker:
 
 def test_driver_nop() raises:
     """Submit a NOP through the completion driver, tick, and verify dispatch."""
-    var driver = AutoDriver(sq_entries=16)
+    var driver = AutoDriver(capacity=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

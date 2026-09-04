@@ -38,7 +38,7 @@ struct Tracker:
 
 def test_event_loop() raises:
     """Wrap completion driver in EventLoop, submit NOP, and run_once."""
-    var driver = AutoDriver(sq_entries=16)
+    var driver = AutoDriver(capacity=16)
     var loop = EventLoop(driver^)
 
     var tracker = Tracker()

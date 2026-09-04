@@ -42,10 +42,10 @@ from boucle.socle.ptr import null_ptr
 
 # Size of the epoll_wait event array. Deliberately small so that tests
 # with more in-flight ops than this prove the two are independent.
-comptime MAX_EVENTS = 8
+comptime CAPACITY = 8
 
 # In-flight ops for the pool growth test: well past the initial pool
-# capacity (64) and MAX_EVENTS, yet only 402 fds (ulimit -n is >= 1024).
+# pool size (64) and CAPACITY, yet only 402 fds (ulimit -n is >= 1024).
 comptime IN_FLIGHT_BEYOND_POOL = 200
 
 
@@ -271,7 +271,7 @@ def test_nop_submitted_from_callback_fires_on_next_tick() raises:
     The drain loop fixed its bound before firing, then cleared the
     whole queue -- discarding whatever the callbacks appended.
     """
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     var second = IOSlot()
     var second_cmp = _slot_completion(second)
@@ -306,7 +306,7 @@ def test_callback_cancelling_its_own_completion_does_not_double_free() raises:
     var sv = _make_socketpair()
     var fd_a: RawHandle = sv[0]
     var fd_b: RawHandle = sv[1]
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     var cancel_slot = IOSlot()
     var cancel_cmp = _slot_completion(cancel_slot)
@@ -355,7 +355,7 @@ def test_op_cancelled_by_earlier_callback_in_same_batch_fires_once() raises:
     """
     var sv_a = _make_socketpair()
     var sv_b = _make_socketpair()
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     var cancel_a_slot = IOSlot()
     var cancel_a_cmp = _slot_completion(cancel_a_slot)
@@ -439,7 +439,7 @@ def test_second_accept_on_same_listener_stays_pending_on_eagain() raises:
     var port = _loopback_listener_port(server)
     var target_stor = SocketAddrV4(127, 0, 0, 1, port=port).addr_stor()
 
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     var accept_1 = IOSlot()
     var accept_1_cmp = _slot_completion(accept_1)
@@ -498,7 +498,7 @@ def test_failed_epoll_registration_releases_pool_slot() raises:
     The exception propagated while the freshly allocated slot stayed
     active, permanently shrinking the pool by one per failed submit.
     """
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     # "/dev/null\0" as a NUL-terminated byte array.
     var path = Array[UInt8, 10](fill=0)
@@ -562,7 +562,7 @@ def test_connect_on_blocking_socket_does_not_block_submit() raises:
         )
         fillers.append(filler^)
 
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
     var connect_slot = IOSlot()
     var connect_cmp = _slot_completion(connect_slot)
     var cancel_slot = IOSlot()
@@ -620,7 +620,7 @@ def test_cancel_of_unknown_target_reports_enoent() raises:
     io_uring reports -ENOENT when the target is not found; the epoll
     driver reported 0 as if a cancellation had happened.
     """
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
 
     var never_submitted = Completion()
     var cancel_slot = IOSlot()
@@ -643,19 +643,19 @@ def test_cancel_of_unknown_target_reports_enoent() raises:
     _ = cancel_cmp
 
 
-# ── Bug 8: op pool sized from max_events caps in-flight ops ──────────────────
+# ── Bug 8: op pool sized from capacity caps in-flight ops ──────────────────
 
 
-def test_more_in_flight_ops_than_max_events_all_complete() raises:
-    """200 recvs in flight on a max_events=8 driver must all complete.
+def test_more_in_flight_ops_than_capacity_all_complete() raises:
+    """200 recvs in flight on a capacity=8 driver must all complete.
 
-    The op pool was sized from max_events and recv() raised "op pool
+    The op pool was sized from capacity and recv() raised "op pool
     exhausted" once every slot was taken. io_uring has no such limit
     (the kernel holds in-flight ops), so the pool must grow on demand
-    and max_events must only size the epoll_wait event array. The
+    and capacity must only size the epoll_wait event array. The
     extra submit past the 200 also proves growth is not a one-off.
     """
-    var driver = EpollCompletionDriver(max_events=MAX_EVENTS)
+    var driver = EpollCompletionDriver(capacity=CAPACITY)
     var total = IN_FLIGHT_BEYOND_POOL + 1
     var counter = FireCounter()
 
@@ -810,8 +810,8 @@ def main() raises:
         test_connect_on_blocking_socket_does_not_block_submit()
     if _selected("test_cancel_of_unknown_target_reports_enoent"):
         test_cancel_of_unknown_target_reports_enoent()
-    if _selected("test_more_in_flight_ops_than_max_events_all_complete"):
-        test_more_in_flight_ops_than_max_events_all_complete()
+    if _selected("test_more_in_flight_ops_than_capacity_all_complete"):
+        test_more_in_flight_ops_than_capacity_all_complete()
     if _selected("test_far_future_timer_does_not_block_forever"):
         test_far_future_timer_does_not_block_forever()
     if _selected("test_epoll_wait_timeout_without_deadline"):

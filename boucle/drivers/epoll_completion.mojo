@@ -539,22 +539,22 @@ struct EpollCompletionDriver(IoDriver):
     var _max_events: Int32
     var _state: Pointer[_DriverState, MutUntrackedOrigin]
 
-    def __init__(out self, *, max_events: Int32 = 64) raises:
-        """Create an epoll completion driver.
+    def __init__(out self, *, capacity: Int = 64) raises:
+        """Create an epoll completion driver with the given capacity hint.
 
-        The op pool is independent of `max_events`: it starts with 64
+        The op pool is independent of `capacity`: it starts with 64
         slots and doubles whenever a submit finds none free, so the
         number of in-flight ops is unbounded (up to the 2^32 slots the
-        epoll event data can index), as with io_uring. `max_events`
+        epoll event data can index), as with io_uring. `capacity`
         only bounds how many events one epoll_wait call, and so one
         tick(), can dispatch.
 
         Args:
-            max_events: Maximum events per epoll_wait call (default 64).
+            capacity: Maximum events per epoll_wait call (default 64).
         """
         self._epfd = epoll_create()
-        self._max_events = max_events
-        self._events = unsafe_alloc[epoll_event](Int(max_events))
+        self._max_events = Int32(capacity)
+        self._events = unsafe_alloc[epoll_event](capacity)
         self._state = unsafe_alloc[_DriverState](1)
         self._state.unsafe_write(
             _DriverState(capacity=_INITIAL_POOL_CAPACITY)

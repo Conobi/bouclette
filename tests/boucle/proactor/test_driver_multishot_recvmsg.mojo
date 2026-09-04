@@ -33,7 +33,7 @@ comptime AF_INET = 2
 def _has_io_uring() -> Bool:
     """Probe whether io_uring syscalls are available on this kernel."""
     try:
-        var d = IoUringDriver(sq_entries=4)
+        var d = IoUringDriver(capacity=4)
         _ = d^
         return True
     except:
@@ -130,7 +130,7 @@ def test_driver_multishot_recvmsg() raises:
     assert_true(port > 0, "ephemeral port is 0")
 
     # --- 4. Create driver and register BufRing ---
-    var driver = IoUringDriver(sq_entries=64)
+    var driver = IoUringDriver(capacity=64)
 
     # Allocate data buffer pool (NUM_BUFS * BUF_SIZE bytes)
     var buf_base = Pointer[UInt8, MutUntrackedOrigin](unsafe_from_address=Int(_heap_alloc[UInt8](NUM_BUFS * BUF_SIZE)))

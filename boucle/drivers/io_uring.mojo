@@ -33,13 +33,16 @@ struct IoUringDriver(IoDriver):
 
     var _ring: IoUring[]
 
-    def __init__(out self, sq_entries: UInt32 = 64) raises:
-        """Construct an IoUringDriver with the given SQ capacity.
+    def __init__(out self, *, capacity: Int = 64) raises:
+        """Construct an IoUringDriver with the given capacity hint.
 
         Args:
-            sq_entries: Number of submission queue entries (default 64).
+            capacity: How many operations the driver should be ready to
+                      hold at once (default 64). Becomes the io_uring
+                      submission queue size, which the kernel rounds up
+                      to a power of two.
         """
-        self._ring = IoUring[](sq_entries=sq_entries)
+        self._ring = IoUring[](sq_entries=UInt32(capacity))
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""

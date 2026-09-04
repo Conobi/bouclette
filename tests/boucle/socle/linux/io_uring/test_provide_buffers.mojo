@@ -14,7 +14,7 @@ from std.testing import assert_equal, assert_true
 def _has_io_uring() -> Bool:
     """Probe whether io_uring syscalls are available on this kernel."""
     try:
-        var d = IoUringDriver(sq_entries=4)
+        var d = IoUringDriver(capacity=4)
         _ = d^
         return True
     except:

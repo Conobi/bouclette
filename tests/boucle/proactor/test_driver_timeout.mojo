@@ -58,7 +58,7 @@ struct TimeoutTracker:
 
 def test_driver_timeout() raises:
     """Submit a 5s timeout, cancel it immediately, verify both CQEs."""
-    var driver = AutoDriver(sq_entries=16)
+    var driver = AutoDriver(capacity=16)
     var tracker = TimeoutTracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

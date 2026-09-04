@@ -13,14 +13,14 @@ def main() raises:
     var s = Socket.tcp_v4()
 
     # Set recv timeout to 500ms — should not raise.
-    s.set_recv_timeout(UInt64(500))
+    s.set_recv_timeout(timeout_ms=500)
 
     # Set send timeout to 1000ms — should not raise.
-    s.set_send_timeout(UInt64(1000))
+    s.set_send_timeout(timeout_ms=1000)
 
     # Disable both by setting to 0 — should not raise.
-    s.set_recv_timeout(UInt64(0))
-    s.set_send_timeout(UInt64(0))
+    s.set_recv_timeout(timeout_ms=0)
+    s.set_send_timeout(timeout_ms=0)
 
     s.close()
     print("PASS: Socket.set_recv_timeout() and set_send_timeout()")

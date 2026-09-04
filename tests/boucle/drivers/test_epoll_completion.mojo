@@ -45,7 +45,7 @@ struct ResultSlot:
 
 def test_nop_fires_with_zero() raises:
     """Nop enqueues to the ready queue; tick dispatches with result 0."""
-    var driver = EpollCompletionDriver(max_events=8)
+    var driver = EpollCompletionDriver(capacity=8)
     var slot = ResultSlot()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=slot))
@@ -67,7 +67,7 @@ def test_nop_fires_with_zero() raises:
 
 def test_timeout_fires_with_etime() raises:
     """Timeout fires with -ETIME after the deadline passes."""
-    var driver = EpollCompletionDriver(max_events=8)
+    var driver = EpollCompletionDriver(capacity=8)
     var slot = ResultSlot()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=slot))

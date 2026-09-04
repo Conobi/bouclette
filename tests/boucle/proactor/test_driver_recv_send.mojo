@@ -64,7 +64,7 @@ def test_driver_recv_send(backend: Backend) raises:
     fds.unsafe_free()
 
     # Set up driver.
-    var driver = AutoDriver(sq_entries=16, backend=backend)
+    var driver = AutoDriver(capacity=16, backend=backend)
 
     # Prepare send buffer: "hello" (5 bytes).
     var send_buf = unsafe_alloc[UInt8](5)
@@ -157,7 +157,7 @@ def test_driver_recv_send(backend: Backend) raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
-        var d = AutoDriver(sq_entries=4, backend=Backend.IO_URING)
+        var d = AutoDriver(capacity=4, backend=Backend.IO_URING)
         _ = d^
         return True
     except:

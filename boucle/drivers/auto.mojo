@@ -40,16 +40,16 @@ struct AutoDriver(IoDriver):
 
     def __init__(
         out self,
-        sq_entries: UInt32 = 64,
         *,
+        capacity: Int = 64,
         backend: Backend = Backend.AUTO,
     ) raises:
         """Probe for io_uring and construct the appropriate backend.
 
         Args:
-            sq_entries: Number of submission queue entries (default 64).
-                        Passed as sq_entries to IoUringDriver or as
-                        max_events to EpollCompletionDriver.
+            capacity: How many operations the driver should be ready to
+                      hold at once (default 64). A hint, forwarded to
+                      whichever backend wins the probe.
             backend: Force a specific backend. Backend.AUTO (default)
                      probes for io_uring first; Backend.IO_URING
                      requires io_uring or raises; Backend.EPOLL
@@ -61,7 +61,7 @@ struct AutoDriver(IoDriver):
 
         if backend is not Backend.EPOLL:
             try:
-                self._uring = IoUringDriver(sq_entries=sq_entries)
+                self._uring = IoUringDriver(capacity=capacity)
                 self._epoll = None
                 self._backend = Backend.IO_URING
                 return
@@ -69,7 +69,7 @@ struct AutoDriver(IoDriver):
                 if backend is Backend.IO_URING:
                     raise "io_uring unavailable (ENOSYS)"
         self._uring = None
-        self._epoll = EpollCompletionDriver(max_events=Int32(sq_entries))
+        self._epoll = EpollCompletionDriver(capacity=capacity)
         self._backend = Backend.EPOLL
 
     def __init__(out self, *, deinit move: Self):
