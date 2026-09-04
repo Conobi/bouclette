@@ -9,8 +9,10 @@ from boucle.socle.linux.raw import (
     ECONNREFUSED,
     ECONNRESET,
     EEXIST,
+    EHOSTUNREACH,
     EINTR,
     EINVAL,
+    ENETUNREACH,
     ENOENT,
     ENOMEM,
     ENOSYS,
@@ -52,8 +54,10 @@ struct Errno(TrivialRegisterPassable, Writable):
     comptime ECONNREFUSED = Self(errno=ECONNREFUSED)
     comptime ECONNRESET = Self(errno=ECONNRESET)
     comptime EEXIST = Self(errno=EEXIST)
+    comptime EHOSTUNREACH = Self(errno=EHOSTUNREACH)
     comptime EINTR = Self(errno=EINTR)
     comptime EINVAL = Self(errno=EINVAL)
+    comptime ENETUNREACH = Self(errno=ENETUNREACH)
     comptime ENOENT = Self(errno=ENOENT)
     comptime ENOMEM = Self(errno=ENOMEM)
     comptime ENOSYS = Self(errno=ENOSYS)
