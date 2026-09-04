@@ -5,7 +5,7 @@ from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 from boucle.drivers.backend import Backend
 from boucle.net.socket import Socket
 from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
@@ -81,7 +81,7 @@ def test_driver_connect(backend: Backend) raises:
     var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
 
     # Set up driver and completion.
-    var driver = ProbeCompletionDriver(sq_entries=16, backend=backend)
+    var driver = AutoDriver(sq_entries=16, backend=backend)
     var tracker = ConnectTracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))
@@ -148,7 +148,7 @@ def test_driver_connect(backend: Backend) raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
-        var d = ProbeCompletionDriver(sq_entries=4, backend=Backend.IO_URING)
+        var d = AutoDriver(sq_entries=4, backend=Backend.IO_URING)
         _ = d^
         return True
     except:

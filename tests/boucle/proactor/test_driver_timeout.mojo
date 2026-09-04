@@ -4,7 +4,7 @@ from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 from boucle.socle.linux.raw import __kernel_timespec
 
 
@@ -58,7 +58,7 @@ struct TimeoutTracker:
 
 def test_driver_timeout() raises:
     """Submit a 5s timeout, cancel it immediately, verify both CQEs."""
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = AutoDriver(sq_entries=16)
     var tracker = TimeoutTracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

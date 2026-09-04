@@ -4,7 +4,7 @@ from std.memory import Pointer
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 from boucle.socle.linux.raw import __kernel_timespec
 
 
@@ -32,7 +32,7 @@ struct SpaceTracker:
 
 def test_driver_sq_space() raises:
     """Verify that sq_space decreases after submission and recovers after tick."""
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = AutoDriver(sq_entries=16)
 
     # Fresh driver should have space.
     var space = driver.sq_space()

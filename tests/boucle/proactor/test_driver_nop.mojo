@@ -4,7 +4,7 @@ from std.memory import Pointer
 from std.testing import assert_equal
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 
 
 struct Tracker:
@@ -37,7 +37,7 @@ struct Tracker:
 
 def test_driver_nop() raises:
     """Submit a NOP through the completion driver, tick, and verify dispatch."""
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = AutoDriver(sq_entries=16)
     var tracker = Tracker()
     var ctx = Pointer[NoneType, MutUntrackedOrigin](
         unsafe_from_address=Int(Pointer(to=tracker))

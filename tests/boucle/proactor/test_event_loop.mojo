@@ -5,7 +5,7 @@ from std.testing import assert_equal
 
 from boucle.proactor.completion import Completion
 from boucle.proactor.loop import EventLoop
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 
 
 struct Tracker:
@@ -38,7 +38,7 @@ struct Tracker:
 
 def test_event_loop() raises:
     """Wrap completion driver in EventLoop, submit NOP, and run_once."""
-    var driver = ProbeCompletionDriver(sq_entries=16)
+    var driver = AutoDriver(sq_entries=16)
     var loop = EventLoop(driver^)
 
     var tracker = Tracker()

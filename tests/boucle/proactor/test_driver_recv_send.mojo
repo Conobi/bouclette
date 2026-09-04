@@ -6,7 +6,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true
 
 from boucle.proactor.completion import Completion
-from boucle.drivers.probe import ProbeCompletionDriver
+from boucle.drivers.auto import AutoDriver
 from boucle.drivers.backend import Backend
 from boucle.handle import RawHandle
 
@@ -64,7 +64,7 @@ def test_driver_recv_send(backend: Backend) raises:
     fds.unsafe_free()
 
     # Set up driver.
-    var driver = ProbeCompletionDriver(sq_entries=16, backend=backend)
+    var driver = AutoDriver(sq_entries=16, backend=backend)
 
     # Prepare send buffer: "hello" (5 bytes).
     var send_buf = unsafe_alloc[UInt8](5)
@@ -157,7 +157,7 @@ def test_driver_recv_send(backend: Backend) raises:
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
-        var d = ProbeCompletionDriver(sq_entries=4, backend=Backend.IO_URING)
+        var d = AutoDriver(sq_entries=4, backend=Backend.IO_URING)
         _ = d^
         return True
     except:
