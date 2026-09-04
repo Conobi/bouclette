@@ -377,7 +377,7 @@ struct ConnectWithTimeoutFuture(Movable):
         """Decode the operation result into a ConnectOutcome.
 
         Timeout resolution uses ConnectOutcome.TIMEOUT directly.
-        Connect resolution uses ConnectOutcome.from_cqe_result().
+        Connect resolution uses ConnectOutcome.from_result().
 
         Consumes the result — a second call raises. Does NOT raise
         on REFUSED/TIMEOUT — those are valid ConnectOutcome variants.
@@ -399,7 +399,7 @@ struct ConnectWithTimeoutFuture(Movable):
         self._state[].consumed = True
         if self._state[]._resolved_by == UInt8(1):
             return ConnectOutcome.TIMEOUT
-        return ConnectOutcome.from_cqe_result(self._state[]._cqe_result)
+        return ConnectOutcome.from_result(self._state[]._cqe_result)
 
     def done(self) -> Bool:
         """Return True when all 3 CQEs have been received.

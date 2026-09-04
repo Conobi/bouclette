@@ -1,38 +1,32 @@
 """Portable outcome types for completion-based I/O operations.
 
-Decodes io_uring CQE result codes into portable, domain-specific outcomes.
+Decodes operation result codes into portable, domain-specific outcomes.
 Each outcome type maps raw kernel results to a small set of discriminated
 states that higher-level code can pattern-match on.
 """
 
 from boucle.error import IOError
 from boucle.socle.linux.errno import Errno
-from boucle.socle.linux.raw import (
-    ECONNREFUSED,
-    ETIMEDOUT,
-    ENETUNREACH,
-    EHOSTUNREACH,
-)
 
 
 struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
-    """Decodes a connect(2) CQE result into a portable outcome.
+    """Decodes a connect(2) result into a portable outcome.
 
     Discriminates five states via a UInt8 tag:
-    - CONNECTED: connect succeeded (CQE result == 0).
+    - CONNECTED: connect succeeded (connect result == 0).
     - REFUSED: peer actively rejected (ECONNREFUSED).
     - TIMEOUT: connect timed out (ETIMEDOUT).
     - NETWORK_UNREACHABLE: no route to host/network (ENETUNREACH, EHOSTUNREACH).
     - ERROR: any other failure.
 
-    The raw CQE result is preserved for ERROR cases where callers need
+    The raw operation result is preserved for ERROR cases where callers need
     the specific errno.
     """
 
     comptime CONNECTED = Self(tag=0, raw=0)
-    comptime REFUSED = Self(tag=1, raw=-Int(ECONNREFUSED))
-    comptime TIMEOUT = Self(tag=2, raw=-Int(ETIMEDOUT))
-    comptime NETWORK_UNREACHABLE = Self(tag=3, raw=-Int(ENETUNREACH))
+    comptime REFUSED = Self(tag=1, raw=-Int(Errno.ECONNREFUSED.id))
+    comptime TIMEOUT = Self(tag=2, raw=-Int(Errno.ETIMEDOUT.id))
+    comptime NETWORK_UNREACHABLE = Self(tag=3, raw=-Int(Errno.ENETUNREACH.id))
     comptime ERROR = Self(tag=4, raw=-1)
 
     var _tag: UInt8
@@ -40,25 +34,25 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
 
     @always_inline("nodebug")
     def __init__(out self, *, tag: UInt8, raw: Int):
-        """Construct a ConnectOutcome from a tag and raw CQE result.
+        """Construct a ConnectOutcome from a tag and raw operation result.
 
         Args:
             tag: Discriminant (0=CONNECTED .. 4=ERROR).
-            raw: The original CQE result code.
+            raw: The original operation result code.
         """
         self._tag = tag
         self._raw = raw
 
     @staticmethod
     @always_inline
-    def from_cqe_result(result: Int) -> Self:
-        """Decode a connect(2) CQE result into a ConnectOutcome.
+    def from_result(result: Int) -> Self:
+        """Decode a connect(2) operation result into a ConnectOutcome.
 
         Maps common errno values to specific outcome variants.
         Anything not explicitly matched becomes ERROR.
 
         Args:
-            result: The io_uring CQE res field (0 on success,
+            result: The operation result (0 on success,
                     negative errno on failure).
 
         Returns:
@@ -66,11 +60,13 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
         """
         if result == 0:
             return Self(tag=0, raw=result)
-        if result == -Int(ECONNREFUSED):
+        if result == Int(Errno.ECONNREFUSED.id):
             return Self(tag=1, raw=result)
-        if result == -Int(ETIMEDOUT):
+        if result == Int(Errno.ETIMEDOUT.id):
             return Self(tag=2, raw=result)
-        if result == -Int(ENETUNREACH) or result == -Int(EHOSTUNREACH):
+        if result == Int(Errno.ENETUNREACH.id) or result == Int(
+            Errno.EHOSTUNREACH.id
+        ):
             return Self(tag=3, raw=result)
         return Self(tag=4, raw=result)
 
@@ -121,12 +117,12 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Writable):
 
     @always_inline("nodebug")
     def raw_result(self) -> Int:
-        """Return the raw CQE result code.
+        """Return the raw operation result code.
 
         Useful for ERROR outcomes where the caller needs the specific errno.
 
         Returns:
-            The original io_uring CQE res field.
+            The original operation result.
         """
         return self._raw
 

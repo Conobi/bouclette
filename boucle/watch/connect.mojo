@@ -94,7 +94,7 @@ struct _ConnectFutureState(_FutureCallback):
         """Store the raw CQE result from io_uring connect and mark done.
 
         Does not decode the result — ConnectFuture.result() handles that
-        via ConnectOutcome.from_cqe_result().
+        via ConnectOutcome.from_result().
 
         Args:
             result: The io_uring CQE result (0 on success, negative errno
@@ -210,7 +210,7 @@ struct ConnectFuture(Movable):
                 raise "loop destroyed before completion"
             raise "operation not complete"
         self._state[].consumed = True
-        return ConnectOutcome.from_cqe_result(self._state[]._cqe_result)
+        return ConnectOutcome.from_result(self._state[]._cqe_result)
 
     def done(self) -> Bool:
         """Return True if the connect operation has completed.
