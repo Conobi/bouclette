@@ -7,6 +7,13 @@ CLOEXEC flags by default, with one exception: `tcp_connect` and
 contract is "connect and hand back a usable blocking client." Set
 non-blocking manually if you need to thread the result into a
 CompletionLoop or ReadinessLoop.
+
+Because the sockets are non-blocking, `Socket.connect` normally *starts* a
+connect rather than completing it: it reports EINPROGRESS and the outcome is
+collected later through a loop or `take_error`.
+
+Every operation here raises `IOError` and nothing else, so one `except`
+handles the whole surface.
 """
 
 from std.memory import Pointer
@@ -14,7 +21,6 @@ from std.sys.info import size_of
 
 from boucle.handle import RawHandle, OwnedHandle
 from boucle.error import IOError
-from boucle.socle.linux.fd import close as _fd_close
 from boucle.net.addr import (
     SocketAddr, SocketAddrStor, SocketAddrV4, SocketAddrV6,
     SocketAddrStorV4, SocketAddrStorV6,
@@ -28,7 +34,8 @@ from boucle.net.options import (
     Backlog,
     Shutdown,
 )
-from boucle.socle.linux.net.syscalls import (
+from boucle.socle.platform import (
+    close as _fd_close,
     _socket,
     _bind,
     _listen,
@@ -46,14 +53,13 @@ from boucle.socle.linux.net.syscalls import (
     _getsockopt_int,
     _getsockname as _raw_getsockname,
     _getpeername as _raw_getpeername,
-)
-from boucle.socle.linux.errno import _check_for_errors, Errno
-from boucle.socle.linux.raw import (
     sockaddr_in,
     sockaddr_in6,
     socklen_t,
     AF_INET,
     AF_INET6,
+    EAFNOSUPPORT,
+    EBADF,
     SOL_SOCKET,
     SO_REUSEADDR,
     SO_REUSEPORT,
@@ -66,12 +72,35 @@ from boucle.socle.linux.raw import (
     O_CLOEXEC,
     MSG_NOSIGNAL,
 )
-from boucle.socle.linux.raw.utils import _to_be
 
 
 # ===----------------------------------------------------------------------=== #
 # Private typed helpers — bridge portable option types to raw syscalls
+#
+# This is also boucle's error boundary: the socle layer reports failures as an
+# Error whose text is a negated errno, and every helper below re-raises that as
+# an `IOError`. Because the whole public Socket API is built on these helpers,
+# it can declare `raises IOError` and callers get one error type to handle.
 # ===----------------------------------------------------------------------=== #
+
+
+@always_inline
+def _own(fd: RawHandle) raises IOError -> OwnedHandle:
+    """Take ownership of a file descriptor returned by a syscall.
+
+    Args:
+        fd: The descriptor to own.
+
+    Returns:
+        An OwnedHandle that closes `fd` on destruction.
+
+    Raises:
+        IOError wrapping EBADF if `fd` is negative.
+    """
+    try:
+        return OwnedHandle(raw=fd)
+    except:
+        raise IOError.from_errno(EBADF)
 
 
 @always_inline
@@ -80,33 +109,289 @@ def _sys_socket(
     type: SocketType,
     flags: SocketFlags,
     protocol: Protocol,
-) raises -> OwnedHandle:
-    """Create a socket from typed options, returning an OwnedHandle."""
+) raises IOError -> OwnedHandle:
+    """Create a socket from typed options, returning an OwnedHandle.
+
+    Args:
+        domain: Address family.
+        type: Socket type.
+        flags: Creation flags (NONBLOCK, CLOEXEC).
+        protocol: Transport protocol.
+
+    Returns:
+        An OwnedHandle owning the new socket.
+
+    Raises:
+        IOError on syscall failure.
+    """
     var type_flags = type.id | Int32(flags.value)
-    return OwnedHandle(raw=_socket(Int32(domain.id), type_flags, Int32(protocol.id)))
+    var fd: Int32
+    try:
+        fd = _socket(Int32(domain.id), type_flags, Int32(protocol.id))
+    except e:
+        raise IOError.from_error(e)
+    return _own(fd)
 
 
 @always_inline
-def _sys_bind[Addr: SocketAddrStor](ref handle: OwnedHandle, ref addr: Addr) raises:
-    """Bind a socket to a SocketAddrStor address."""
+def _sys_bind[
+    Addr: SocketAddrStor
+](ref handle: OwnedHandle, ref addr: Addr) raises IOError:
+    """Bind a socket to a SocketAddrStor address.
+
+    Args:
+        handle: The socket to bind.
+        addr: The address to bind to.
+
+    Raises:
+        IOError on syscall failure.
+    """
     var stor = addr.addr_stor()
     var ptr = Pointer(to=stor).unsafe_bitcast[UInt8]()
-    var fd = handle.raw()
-    _bind(fd, ptr, Int32(Addr.AddrStorType.ADDR_LEN))
+    try:
+        _bind(handle._raw, ptr, Int32(Addr.AddrStorType.ADDR_LEN))
+    except e:
+        raise IOError.from_error(e)
 
 
 @always_inline
-def _sys_listen(ref handle: OwnedHandle, backlog: Backlog) raises:
-    """Listen on a socket with typed Backlog."""
-    _listen(handle.raw(), backlog.value)
+def _sys_listen(ref handle: OwnedHandle, backlog: Backlog) raises IOError:
+    """Listen on a socket with typed Backlog.
+
+    Args:
+        handle: The socket to mark passive.
+        backlog: Maximum pending connection queue length.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _listen(handle._raw, backlog.value)
+    except e:
+        raise IOError.from_error(e)
 
 
 @always_inline
-def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) raises:
-    """Connect a socket to a SocketAddr (storage variant)."""
+def _sys_connect[
+    Addr: SocketAddr
+](ref handle: OwnedHandle, ref addr: Addr) raises IOError:
+    """Connect a socket to a SocketAddr (storage variant).
+
+    Args:
+        handle: The socket to connect.
+        addr: The peer address.
+
+    Raises:
+        IOError on syscall failure. On a non-blocking socket the connect is
+        still running when the errno is EINPROGRESS.
+    """
     var ptr = Pointer(to=addr).unsafe_bitcast[UInt8]()
-    var fd = handle.raw()
-    _connect(fd, ptr, Int32(Addr.ADDR_LEN))
+    try:
+        _connect(handle._raw, ptr, Int32(Addr.ADDR_LEN))
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_accept4(ref handle: OwnedHandle, flags: Int32) raises IOError -> Int32:
+    """Accept a connection via accept4(2).
+
+    Args:
+        handle: The listening socket.
+        flags: accept4 flags applied to the accepted socket.
+
+    Returns:
+        The accepted descriptor.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        return _raw_accept4(handle._raw, flags)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_setsockopt(
+    ref handle: OwnedHandle, level: Int32, optname: Int32, value: Int32
+) raises IOError:
+    """Set an integer socket option.
+
+    Args:
+        handle: The socket to configure.
+        level: Protocol level (e.g. SOL_SOCKET).
+        optname: Option name.
+        value: Integer option value.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _setsockopt(handle._raw, level, optname, value)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_setsockopt_timeval(
+    ref handle: OwnedHandle, level: Int32, optname: Int32, ms: UInt64
+) raises IOError:
+    """Set a `struct timeval` socket option from a millisecond count.
+
+    Args:
+        handle: The socket to configure.
+        level: Protocol level (e.g. SOL_SOCKET).
+        optname: Option name (SO_RCVTIMEO, SO_SNDTIMEO).
+        ms: Timeout in milliseconds; 0 disables the timeout.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _setsockopt_timeval(handle._raw, level, optname, ms)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_getsockopt_int(
+    ref handle: OwnedHandle, level: Int32, optname: Int32
+) raises IOError -> Int32:
+    """Read an integer socket option.
+
+    Args:
+        handle: The socket to query.
+        level: Protocol level (e.g. SOL_SOCKET).
+        optname: Option name.
+
+    Returns:
+        The option value.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        return _getsockopt_int(handle._raw, level, optname)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_getfl(ref handle: OwnedHandle) raises IOError -> Int32:
+    """Read the file status flags of a socket.
+
+    Args:
+        handle: The socket to query.
+
+    Returns:
+        The current `F_GETFL` flags.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        return _fcntl_getfl(handle._raw)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_setfl(ref handle: OwnedHandle, flags: Int32) raises IOError:
+    """Replace the file status flags of a socket.
+
+    Args:
+        handle: The socket to configure.
+        flags: The new `F_SETFL` flags.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _fcntl_setfl(handle._raw, flags)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_shutdown(ref handle: OwnedHandle, how: Int32) raises IOError:
+    """Shut down one or both directions of a connection.
+
+    Args:
+        handle: The socket to shut down.
+        how: SHUT_RD, SHUT_WR, or SHUT_RDWR.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _shutdown(handle._raw, how)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_getsockname[
+    addr_origin: MutOrigin, len_origin: MutOrigin
+](
+    ref handle: OwnedHandle,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    len_ptr: Pointer[UInt8, len_origin],
+) raises IOError:
+    """Fill `addr_ptr` with the socket's local address.
+
+    Args:
+        handle: The socket to query.
+        addr_ptr: Pointer to a sockaddr to fill.
+        len_ptr: Pointer to the sockaddr length (in/out).
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _raw_getsockname(handle._raw, addr_ptr, len_ptr)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_getpeername[
+    addr_origin: MutOrigin, len_origin: MutOrigin
+](
+    fd: RawHandle,
+    addr_ptr: Pointer[UInt8, addr_origin],
+    len_ptr: Pointer[UInt8, len_origin],
+) raises IOError:
+    """Fill `addr_ptr` with the address of the connected peer.
+
+    Args:
+        fd: The connected socket.
+        addr_ptr: Pointer to a sockaddr to fill.
+        len_ptr: Pointer to the sockaddr length (in/out).
+
+    Raises:
+        IOError on syscall failure, e.g. ENOTCONN when not connected.
+    """
+    try:
+        _raw_getpeername(fd, addr_ptr, len_ptr)
+    except e:
+        raise IOError.from_error(e)
+
+
+@always_inline
+def _sys_close(fd: RawHandle) raises IOError:
+    """Close a file descriptor.
+
+    Args:
+        fd: The descriptor to close.
+
+    Raises:
+        IOError on syscall failure.
+    """
+    try:
+        _fd_close(unsafe_fd=fd)
+    except e:
+        raise IOError.from_error(e)
 
 
 # ===----------------------------------------------------------------------=== #
@@ -114,20 +399,26 @@ def _sys_connect[Addr: SocketAddr](ref handle: OwnedHandle, ref addr: Addr) rais
 # ===----------------------------------------------------------------------=== #
 
 
-def _getpeername(fd: RawHandle) raises -> String:
+def _getpeername(fd: RawHandle) raises IOError -> String:
     """Return the peer IP address of a connected socket as a string.
 
     Calls getpeername(2) on *fd* and parses the returned sockaddr into a
     human-readable IP string (e.g. ``"192.168.1.1"`` for IPv4 or
     ``"0:0:0:0:0:0:0:1"`` for IPv6).
 
-    Raises on syscall failure (e.g. ENOTCONN for an unconnected socket).
+    Returns:
+        The peer's IP address in its textual form.
+
+    Raises:
+        IOError on syscall failure (e.g. ENOTCONN for an unconnected socket),
+        or wrapping EAFNOSUPPORT when the peer's address family is neither
+        IPv4 nor IPv6.
     """
     var stor = sockaddr_in6()
     var addrlen = socklen_t(size_of[sockaddr_in6]())
     var stor_p = Pointer(to=stor)
     var len_p = Pointer(to=addrlen)
-    _raw_getpeername(
+    _sys_getpeername(
         fd,
         stor_p.unsafe_bitcast[UInt8](),
         len_p.unsafe_bitcast[UInt8](),
@@ -158,7 +449,7 @@ def _getpeername(fd: RawHandle) raises -> String:
         )
         return String(ip)
     else:
-        raise t"unsupported address family: {Int(family)}"
+        raise IOError.from_errno(EAFNOSUPPORT)
 
 
 # ===----------------------------------------------------------------------=== #
@@ -185,7 +476,7 @@ struct Socket(Movable):
         self._handle = move._handle^
 
     @staticmethod
-    def tcp_v4() raises -> Self:
+    def tcp_v4() raises IOError -> Self:
         """Creates a non-blocking TCP IPv4 socket."""
         return Self(
             _sys_socket(
@@ -197,7 +488,7 @@ struct Socket(Movable):
         )
 
     @staticmethod
-    def tcp_v6() raises -> Self:
+    def tcp_v6() raises IOError -> Self:
         """Creates a non-blocking TCP IPv6 socket."""
         return Self(
             _sys_socket(
@@ -209,7 +500,7 @@ struct Socket(Movable):
         )
 
     @staticmethod
-    def udp_v4() raises -> Self:
+    def udp_v4() raises IOError -> Self:
         """Creates a non-blocking UDP IPv4 socket."""
         return Self(
             _sys_socket(
@@ -221,7 +512,7 @@ struct Socket(Movable):
         )
 
     @staticmethod
-    def udp_v6() raises -> Self:
+    def udp_v6() raises IOError -> Self:
         """Creates a non-blocking UDP IPv6 socket."""
         return Self(
             _sys_socket(
@@ -233,11 +524,23 @@ struct Socket(Movable):
         )
 
     @staticmethod
-    def tcp_listener_v6(port: UInt16, *, backlog: Int32 = 1024) raises -> Self:
+    def tcp_listener_v6(
+        port: UInt16, *, backlog: Int32 = 1024
+    ) raises IOError -> Self:
         """Creates a dual-stack TCP listener bound to `[::]:port`.
 
         Sets `SO_REUSEADDR`, `SO_REUSEPORT`, and clears `IPV6_V6ONLY` so
         the listener accepts both IPv6 and IPv4-mapped connections.
+
+        Args:
+            port: The TCP port to bind to.
+            backlog: Maximum pending connection queue length.
+
+        Returns:
+            A listening, non-blocking Socket.
+
+        Raises:
+            IOError on syscall failure.
         """
         var handle = _sys_socket(
             AddrFamily.INET6,
@@ -245,20 +548,35 @@ struct Socket(Movable):
             SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
             Protocol.TCP,
         )
-        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
-        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
-        _setsockopt(handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
+        _sys_setsockopt(
+            handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1)
+        )
+        _sys_setsockopt(
+            handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1)
+        )
+        _sys_setsockopt(
+            handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0)
+        )
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
         _sys_listen(handle, Backlog(backlog))
         return Self(handle^)
 
     @staticmethod
-    def udp_listener_v6(port: UInt16) raises -> Self:
+    def udp_listener_v6(port: UInt16) raises IOError -> Self:
         """Creates a dual-stack UDP listener bound to `[::]:port`.
 
         Sets `SO_REUSEADDR`, `SO_REUSEPORT`, and clears `IPV6_V6ONLY` so
         the socket receives both IPv6 and IPv4-mapped datagrams.
+
+        Args:
+            port: The UDP port to bind to.
+
+        Returns:
+            A bound, non-blocking Socket.
+
+        Raises:
+            IOError on syscall failure.
         """
         var handle = _sys_socket(
             AddrFamily.INET6,
@@ -266,78 +584,179 @@ struct Socket(Movable):
             SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
             Protocol.UDP,
         )
-        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1))
-        _setsockopt(handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1))
-        _setsockopt(handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0))
+        _sys_setsockopt(
+            handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR), Int32(1)
+        )
+        _sys_setsockopt(
+            handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT), Int32(1)
+        )
+        _sys_setsockopt(
+            handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY), Int32(0)
+        )
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
         return Self(handle^)
 
-    def bind[Addr: SocketAddrStor](self, ref addr: Addr) raises:
-        """Binds the socket to the given address."""
+    def bind[Addr: SocketAddrStor](self, ref addr: Addr) raises IOError:
+        """Binds the socket to the given address.
+
+        Args:
+            addr: The local address to bind to.
+
+        Raises:
+            IOError on syscall failure (e.g. EADDRINUSE).
+        """
         _sys_bind(self._handle, addr)
 
-    def listen(self, backlog: Backlog) raises:
-        """Marks the socket as passive for accepting connections."""
+    def listen(self, backlog: Backlog) raises IOError:
+        """Marks the socket as passive for accepting connections.
+
+        Args:
+            backlog: Maximum pending connection queue length.
+
+        Raises:
+            IOError on syscall failure.
+        """
         _sys_listen(self._handle, backlog)
 
-    def accept(self) raises -> Self:
+    def accept(self) raises IOError -> Self:
         """Accept a connection via accept4(2).
 
         Returns a new non-blocking, close-on-exec Socket for the
         accepted connection. Blocks on a blocking listening socket
         until a connection arrives.
+
+        Returns:
+            A Socket for the accepted connection.
+
+        Raises:
+            IOError on syscall failure. On a non-blocking listener with no
+            pending connection the errno is EAGAIN.
         """
         var flags = Int32(O_NONBLOCK) | Int32(O_CLOEXEC)
-        var fd = _raw_accept4(self._handle.raw(), flags)
-        return Self(OwnedHandle(raw=fd))
+        return Self(_own(_sys_accept4(self._handle, flags)))
 
-    def set_reuse_addr(self, value: Bool = True) raises:
-        """Sets `SO_REUSEADDR` on the socket."""
-        _setsockopt(
-            self._handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEADDR),
+    def set_reuse_addr(self, value: Bool = True) raises IOError:
+        """Sets `SO_REUSEADDR` on the socket.
+
+        Args:
+            value: True to enable address reuse.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_REUSEADDR),
             Int32(1) if value else Int32(0),
         )
 
-    def set_reuse_port(self, value: Bool = True) raises:
-        """Sets `SO_REUSEPORT` on the socket."""
-        _setsockopt(
-            self._handle.raw(), Int32(SOL_SOCKET), Int32(SO_REUSEPORT),
+    def set_reuse_port(self, value: Bool = True) raises IOError:
+        """Sets `SO_REUSEPORT` on the socket.
+
+        Args:
+            value: True to enable port reuse.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_REUSEPORT),
             Int32(1) if value else Int32(0),
         )
 
-    def set_v6only(self, value: Bool) raises:
-        """Sets `IPV6_V6ONLY` on an IPv6 socket. `False` enables dual-stack."""
-        _setsockopt(
-            self._handle.raw(), Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY),
+    def set_v6only(self, value: Bool) raises IOError:
+        """Sets `IPV6_V6ONLY` on an IPv6 socket. `False` enables dual-stack.
+
+        Args:
+            value: True to restrict the socket to IPv6.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(IPPROTO_IPV6), Int32(IPV6_V6ONLY),
             Int32(1) if value else Int32(0),
         )
 
-    def set_recv_timeout(self, ms: UInt64) raises:
-        """Set receive timeout (SO_RCVTIMEO). ms=0 disables."""
-        _setsockopt_timeval(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_RCVTIMEO), ms)
+    def set_recv_timeout(self, timeout_ms: UInt64) raises IOError:
+        """Set receive timeout (SO_RCVTIMEO). 0 disables.
 
-    def set_send_timeout(self, ms: UInt64) raises:
-        """Set send timeout (SO_SNDTIMEO). ms=0 disables."""
-        _setsockopt_timeval(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_SNDTIMEO), ms)
+        Args:
+            timeout_ms: Timeout in milliseconds; 0 disables the timeout.
 
-    def set_blocking(self, blocking: Bool) raises:
-        """Toggle blocking mode. True = blocking, False = non-blocking."""
-        var flags = _fcntl_getfl(self._handle._raw)
+        Raises:
+            IOError on syscall failure.
+        """
+        _sys_setsockopt_timeval(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_RCVTIMEO), timeout_ms
+        )
+
+    def set_send_timeout(self, timeout_ms: UInt64) raises IOError:
+        """Set send timeout (SO_SNDTIMEO). 0 disables.
+
+        Args:
+            timeout_ms: Timeout in milliseconds; 0 disables the timeout.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        _sys_setsockopt_timeval(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_SNDTIMEO), timeout_ms
+        )
+
+    def set_blocking(self, blocking: Bool) raises IOError:
+        """Toggle blocking mode. True = blocking, False = non-blocking.
+
+        Args:
+            blocking: True for blocking, False for non-blocking.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        var flags = _sys_getfl(self._handle)
         if blocking:
-            _fcntl_setfl(self._handle._raw, flags & ~Int32(O_NONBLOCK))
+            _sys_setfl(self._handle, flags & ~Int32(O_NONBLOCK))
         else:
-            _fcntl_setfl(self._handle._raw, flags | Int32(O_NONBLOCK))
+            _sys_setfl(self._handle, flags | Int32(O_NONBLOCK))
 
-    def take_error(self) raises -> Optional[IOError]:
-        """Read and clear the pending socket error (SO_ERROR)."""
-        var val = _getsockopt_int(self._handle._raw, Int32(SOL_SOCKET), Int32(SO_ERROR))
+    def take_error(self) raises IOError -> Optional[IOError]:
+        """Read and clear the pending socket error (SO_ERROR).
+
+        This is how the result of a non-blocking `connect` is collected:
+        an empty Optional means the connect succeeded.
+
+        Returns:
+            The pending error, or an empty Optional when there is none.
+
+        Raises:
+            IOError if reading the option itself fails.
+        """
+        var val = _sys_getsockopt_int(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_ERROR)
+        )
         if val == 0:
             return Optional[IOError]()
-        return IOError(Errno(errno=UInt16(val)))
+        return IOError.from_errno(Int(val))
 
-    def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises:
-        """Blocking `connect(2)` to the given address."""
+    def connect[Addr: SocketAddrStor](self, ref addr: Addr) raises IOError:
+        """Start `connect(2)` to the given address.
+
+        Sockets from the `tcp_*`/`udp_*` factories are non-blocking, so this
+        call normally *starts* the connect rather than completing it: it
+        raises an IOError wrapping EINPROGRESS and the connection completes
+        later. Observe that completion through a loop (readiness: wait for
+        writability; completion: await the connect operation) and read the
+        final status with `take_error`, or use `ConnectOutcome` for the
+        decoded form. On a socket made blocking with `set_blocking(True)` the
+        call instead blocks until the connect resolves.
+
+        Args:
+            addr: The peer address to connect to.
+
+        Raises:
+            IOError on syscall failure. EINPROGRESS means the connect is
+            under way, not that it failed.
+        """
         var stor = addr.addr_stor()
         _sys_connect(self._handle, stor)
 
@@ -347,15 +766,28 @@ struct Socket(Movable):
         family: AddrFamily,
         type: SocketType,
         protocol: Protocol,
-    ) raises -> Self:
-        """Create a blocking socket, connect to `addr`, and return it."""
+    ) raises IOError -> Self:
+        """Create a blocking socket, connect to `addr`, and return it.
+
+        Args:
+            addr: The peer address.
+            family: Address family.
+            type: Socket type.
+            protocol: Transport protocol.
+
+        Returns:
+            A connected, blocking Socket.
+
+        Raises:
+            IOError on syscall failure.
+        """
         var handle = _sys_socket(family, type, SocketFlags.CLOEXEC, protocol)
         var stor = addr.addr_stor()
         _sys_connect(handle, stor)
         return Self(handle^)
 
     @staticmethod
-    def tcp_connect(ref addr: SocketAddrV4) raises -> Self:
+    def tcp_connect(ref addr: SocketAddrV4) raises IOError -> Self:
         """Blocking TCP client to an IPv4 address.
 
         Returns a BLOCKING socket suitable for direct blocking send/recv.
@@ -365,7 +797,7 @@ struct Socket(Movable):
         return Self._connect_new(addr, AddrFamily.INET, SocketType.STREAM, Protocol.TCP)
 
     @staticmethod
-    def tcp_connect(ref addr: SocketAddrV6) raises -> Self:
+    def tcp_connect(ref addr: SocketAddrV6) raises IOError -> Self:
         """Blocking TCP client to an IPv6 address.
 
         Returns a BLOCKING socket suitable for direct blocking send/recv.
@@ -375,7 +807,7 @@ struct Socket(Movable):
         return Self._connect_new(addr, AddrFamily.INET6, SocketType.STREAM, Protocol.TCP)
 
     @staticmethod
-    def udp_connect(ref addr: SocketAddrV4) raises -> Self:
+    def udp_connect(ref addr: SocketAddrV4) raises IOError -> Self:
         """Blocking UDP client to an IPv4 address (sets default peer).
 
         Returns a BLOCKING socket suitable for direct blocking send/recv.
@@ -385,7 +817,7 @@ struct Socket(Movable):
         return Self._connect_new(addr, AddrFamily.INET, SocketType.DGRAM, Protocol.UDP)
 
     @staticmethod
-    def udp_connect(ref addr: SocketAddrV6) raises -> Self:
+    def udp_connect(ref addr: SocketAddrV6) raises IOError -> Self:
         """Blocking UDP client to an IPv6 address (sets default peer).
 
         Returns a BLOCKING socket suitable for direct blocking send/recv.
@@ -394,7 +826,9 @@ struct Socket(Movable):
         """
         return Self._connect_new(addr, AddrFamily.INET6, SocketType.DGRAM, Protocol.UDP)
 
-    def recv[origin: MutOrigin](self, buf: Span[UInt8, origin]) raises -> Int:
+    def recv[
+        origin: MutOrigin
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Int:
         """Receive into buf. Returns bytes read (0 = peer closed).
 
         On a blocking socket the call blocks until data arrives or the
@@ -412,7 +846,7 @@ struct Socket(Movable):
             IOError on syscall failure.
         """
         var n = _recv(
-            self.raw(),
+            self._handle._raw,
             Pointer[UInt8, MutUntrackedOrigin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
@@ -420,9 +854,11 @@ struct Socket(Movable):
         )
         if n >= 0:
             return n
-        raise String(n)
+        raise IOError.from_errno(n)
 
-    def send[origin: Origin](self, buf: Span[UInt8, origin]) raises -> Int:
+    def send[
+        origin: Origin
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Int:
         """Send from buf. Returns bytes written (may be partial).
 
         ``MSG_NOSIGNAL`` is applied internally to suppress ``SIGPIPE`` on
@@ -443,7 +879,7 @@ struct Socket(Movable):
             IOError on syscall failure.
         """
         var n = _send(
-            self.raw(),
+            self._handle._raw,
             Pointer[UInt8, origin](
                 unsafe_from_address=Int(buf.unsafe_ptr())
             ),
@@ -451,11 +887,11 @@ struct Socket(Movable):
         )
         if n >= 0:
             return n
-        raise String(n)
+        raise IOError.from_errno(n)
 
     def send_to[
         origin: Origin,
-    ](self, buf: Span[UInt8, origin], ref addr: SocketAddrV4) raises -> Int:
+    ](self, buf: Span[UInt8, origin], ref addr: SocketAddrV4) raises IOError -> Int:
         """Send a datagram to `addr` via sendto(2).
 
         Uses ``MSG_NOSIGNAL`` internally to suppress ``SIGPIPE`` on Linux.
@@ -470,7 +906,8 @@ struct Socket(Movable):
             Number of bytes actually sent.
 
         Raises:
-            On syscall failure.
+            IOError on syscall failure. On a non-blocking socket a full send
+            buffer surfaces as EAGAIN / EWOULDBLOCK.
         """
         var stor = addr.addr_stor()
         var stor_p = Pointer(to=stor.addr)
@@ -488,11 +925,11 @@ struct Socket(Movable):
         )
         if n >= 0:
             return n
-        raise String(n)
+        raise IOError.from_errno(n)
 
     def recv_from[
         origin: MutOrigin,
-    ](self, buf: Span[UInt8, origin]) raises -> Tuple[Int, SocketAddrV4]:
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Tuple[Int, SocketAddrV4]:
         """Receive a datagram and the sender's address via recvfrom(2).
 
         Designed for unconnected UDP sockets. Returns a tuple of bytes
@@ -506,7 +943,8 @@ struct Socket(Movable):
             A tuple of (bytes_read, sender_address).
 
         Raises:
-            On syscall failure.
+            IOError on syscall failure. On a non-blocking socket an empty
+            receive queue surfaces as EAGAIN / EWOULDBLOCK.
         """
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
@@ -524,22 +962,80 @@ struct Socket(Movable):
             len_p.unsafe_bitcast[UInt8](),
         )
         if n < 0:
-            raise String(n)
+            raise IOError.from_errno(n)
         var stor = SocketAddrStorV4()
         stor.addr = addr
         return (n, stor.to_v4())
 
-    def shutdown(self, how: Shutdown) raises:
-        """Shut down read, write, or both directions."""
-        _shutdown(self._handle._raw, how.value)
+    def shutdown(self, how: Shutdown) raises IOError:
+        """Shut down read, write, or both directions.
 
-    def local_addr_v4(self) raises -> SocketAddrV4:
-        """Return the local IPv4 address bound to this socket."""
+        Args:
+            how: Which direction(s) to shut down.
+
+        Raises:
+            IOError on syscall failure (e.g. ENOTCONN).
+        """
+        _sys_shutdown(self._handle, how.value)
+
+    def local_addr_v4(self) raises IOError -> SocketAddrV4:
+        """Return the local IPv4 address bound to this socket.
+
+        Returns:
+            The bound IPv4 address and port.
+
+        Raises:
+            IOError on syscall failure.
+        """
         var addr = sockaddr_in()
         var addrlen = socklen_t(size_of[sockaddr_in]())
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        _raw_getsockname(
+        _sys_getsockname(
+            self._handle,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
+        var stor = SocketAddrStorV4()
+        stor.addr = addr
+        return stor.to_v4()
+
+    def local_addr_v6(self) raises IOError -> SocketAddrV6:
+        """Return the local IPv6 address bound to this socket.
+
+        Returns:
+            The bound IPv6 address and port.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        var addr = sockaddr_in6()
+        var addrlen = socklen_t(size_of[sockaddr_in6]())
+        var addr_p = Pointer(to=addr)
+        var len_p = Pointer(to=addrlen)
+        _sys_getsockname(
+            self._handle,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
+        var stor = SocketAddrStorV6()
+        stor.addr = addr
+        return stor.to_v6()
+
+    def peer_addr_v4(self) raises IOError -> SocketAddrV4:
+        """Return the peer IPv4 address of a connected socket.
+
+        Returns:
+            The peer's IPv4 address and port.
+
+        Raises:
+            IOError on syscall failure (ENOTCONN when not connected).
+        """
+        var addr = sockaddr_in()
+        var addrlen = socklen_t(size_of[sockaddr_in]())
+        var addr_p = Pointer(to=addr)
+        var len_p = Pointer(to=addrlen)
+        _sys_getpeername(
             self._handle._raw,
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
@@ -548,13 +1044,20 @@ struct Socket(Movable):
         stor.addr = addr
         return stor.to_v4()
 
-    def local_addr_v6(self) raises -> SocketAddrV6:
-        """Return the local IPv6 address bound to this socket."""
+    def peer_addr_v6(self) raises IOError -> SocketAddrV6:
+        """Return the peer IPv6 address of a connected socket.
+
+        Returns:
+            The peer's IPv6 address and port.
+
+        Raises:
+            IOError on syscall failure (ENOTCONN when not connected).
+        """
         var addr = sockaddr_in6()
         var addrlen = socklen_t(size_of[sockaddr_in6]())
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
-        _raw_getsockname(
+        _sys_getpeername(
             self._handle._raw,
             addr_p.unsafe_bitcast[UInt8](),
             len_p.unsafe_bitcast[UInt8](),
@@ -563,47 +1066,28 @@ struct Socket(Movable):
         stor.addr = addr
         return stor.to_v6()
 
-    def peer_addr_v4(self) raises -> SocketAddrV4:
-        """Return the peer IPv4 address of a connected socket."""
-        var addr = sockaddr_in()
-        var addrlen = socklen_t(size_of[sockaddr_in]())
-        var addr_p = Pointer(to=addr)
-        var len_p = Pointer(to=addrlen)
-        _raw_getpeername(
-            self._handle._raw,
-            addr_p.unsafe_bitcast[UInt8](),
-            len_p.unsafe_bitcast[UInt8](),
-        )
-        var stor = SocketAddrStorV4()
-        stor.addr = addr
-        return stor.to_v4()
+    def close(mut self) raises IOError:
+        """Explicitly close the socket.
 
-    def peer_addr_v6(self) raises -> SocketAddrV6:
-        """Return the peer IPv6 address of a connected socket."""
-        var addr = sockaddr_in6()
-        var addrlen = socklen_t(size_of[sockaddr_in6]())
-        var addr_p = Pointer(to=addr)
-        var len_p = Pointer(to=addrlen)
-        _raw_getpeername(
-            self._handle._raw,
-            addr_p.unsafe_bitcast[UInt8](),
-            len_p.unsafe_bitcast[UInt8](),
-        )
-        var stor = SocketAddrStorV6()
-        stor.addr = addr
-        return stor.to_v6()
+        Idempotent -- safe to call before the destructor runs.
 
-    def close(mut self) raises:
-        """Explicitly close the socket. Idempotent -- safe to call before destructor."""
+        Raises:
+            IOError on syscall failure.
+        """
         if self._handle._raw >= 0:
-            _fd_close(unsafe_fd=self._handle._raw)
+            _sys_close(self._handle._raw)
             self._handle._raw = -1
 
     @always_inline
-    def raw(self) raises -> RawHandle:
+    def raw(self) raises IOError -> RawHandle:
         """Returns the underlying raw handle value.
 
+        Returns:
+            The raw file descriptor.
+
         Raises:
-            If the stored handle is somehow invalid (negative).
+            IOError wrapping EBADF if the stored handle is invalid (negative).
         """
-        return self._handle.raw()
+        if self._handle._raw < 0:
+            raise IOError.from_errno(EBADF)
+        return self._handle._raw

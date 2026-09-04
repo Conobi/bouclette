@@ -63,7 +63,7 @@ def main() raises:
     var filtered_count = 0
     var o = ip.octets
 
-    var loop = WatchLoop(sq_entries=UInt32(1024))
+    var loop = WatchLoop(capacity=1024)
 
     var p = start_port
     while p <= end_port:
@@ -103,7 +103,7 @@ def main() raises:
                 print(t"  {port}/tcp\tFILTERED (unreachable)")
                 filtered_count += 1
             else:
-                print(t"  {port}/tcp\tERROR ({outcome.raw_result()})")
+                print(t"  {port}/tcp\tERROR ({outcome.error()})")
                 filtered_count += 1
 
         # Close sockets before next batch.
