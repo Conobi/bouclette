@@ -37,6 +37,10 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 | IOCP | Completion | Windows | Planned |
 | IOCP (emulated) | Readiness | Windows | Planned |
 
+For a feature-by-feature comparison with mio, libuv, compio, monoio, libxev and
+TigerBeetle's I/O layer, including where Boucle is behind, see
+[`docs/feature-comparison.md`](docs/feature-comparison.md).
+
 ---
 
 ## Install / build
