@@ -2,7 +2,7 @@
 
 from std.memory import Pointer
 from std.testing import assert_true, assert_equal
-from boucle.watch._callback import _FutureCallback, _dispatch
+from boucle.watch._callback import _FutureCallback, _SlotLink, _dispatch
 from boucle.proactor.completion import CompletionFn
 
 
@@ -53,6 +53,18 @@ struct _TestCallback(_FutureCallback):
 
     def mark_loop_gone(mut self):
         """No-op: no WatchLoop is involved in this test."""
+        pass
+
+    def bind(mut self, link: _SlotLink):
+        """No-op: this stand-in never enters a slab."""
+        pass
+
+    def notify_done(self):
+        """No-op: there is no settle queue to tell."""
+        pass
+
+    def mark_owner_dropped(mut self):
+        """No-op: no handle owns this stand-in."""
         pass
 
 

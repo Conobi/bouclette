@@ -25,12 +25,12 @@ from std.memory.alloc import unsafe_alloc
 
 from boucle.error import IOError
 from boucle.proactor.completion import Completion
-from boucle.watch._callback import _FutureCallback, _dispatch
+from boucle.watch._callback import _FutureCallback, _SlotLink, _dispatch
 from boucle.watch.transfer import TransferResult
 
 
 # ===----------------------------------------------------------------------=== #
-# _SendFutureState — internal, heap-allocated per-operation state
+# _SendFutureState — internal, slab-owned per-operation state
 # ===----------------------------------------------------------------------=== #
 
 
@@ -53,6 +53,7 @@ struct _SendFutureState(_FutureCallback):
                         the WatchLoop then frees this state.
         _loop_gone: True if the WatchLoop was destroyed before done;
                     the SendFuture then frees this state.
+        _link: The slot this state lives in and the loop's settle queue.
     """
 
     var completion: Completion
@@ -61,12 +62,13 @@ struct _SendFutureState(_FutureCallback):
     var done: Bool
     var _owner_dropped: Bool
     var _loop_gone: Bool
+    var _link: _SlotLink
 
     def __init__(out self, var buf: List[UInt8]):
         """Construct a _SendFutureState owning the send buffer.
 
         The completion is initialized with a no-op callback; the caller
-        must wire invoke and context after heap allocation.
+        must wire invoke and context once the state is in its slot.
 
         Args:
             buf: The bytes to send, moved in for the duration of the
@@ -78,6 +80,7 @@ struct _SendFutureState(_FutureCallback):
         self.done = False
         self._owner_dropped = False
         self._loop_gone = False
+        self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -91,6 +94,7 @@ struct _SendFutureState(_FutureCallback):
         self.done = move.done
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
+        self._link = move._link
 
     def take_buffer(mut self) -> List[UInt8]:
         """Move the send buffer out, leaving an empty list behind.
@@ -153,6 +157,23 @@ struct _SendFutureState(_FutureCallback):
         """Record that the WatchLoop was destroyed with this send in flight."""
         self._loop_gone = True
 
+    def bind(mut self, link: _SlotLink):
+        """Record the slot this state lives in and the queue to notify.
+
+        Args:
+            link: The slot key and the loop's settle queue.
+        """
+        self._link = link
+
+    def notify_done(self):
+        """Tell the slot link the completion has arrived."""
+        self._link.completed(self._owner_dropped)
+
+    def mark_owner_dropped(mut self):
+        """Record that the handle let go, and queue the slot if done."""
+        self._owner_dropped = True
+        self._link.dropped(self.done)
+
 
 # ===----------------------------------------------------------------------=== #
 # SendFuture — RAII handle returned to callers
@@ -162,7 +183,7 @@ struct _SendFutureState(_FutureCallback):
 struct SendFuture(Movable):
     """RAII handle for an in-flight async send operation.
 
-    Owns a heap-allocated _SendFutureState which in turn owns the buffer
+    Points at a slab-owned _SendFutureState which in turn owns the buffer
     being sent. Call done() to check completion, then result() to get the
     byte count and the buffer back.
 
@@ -179,10 +200,10 @@ struct SendFuture(Movable):
         out self,
         state: Pointer[_SendFutureState, MutUntrackedOrigin],
     ):
-        """Construct a SendFuture wrapping a heap-allocated state.
+        """Construct a SendFuture wrapping a slab-owned state.
 
         Args:
-            state: Pointer to the heap-allocated _SendFutureState.
+            state: Pointer to the slab-owned _SendFutureState.
         """
         self._state = state
 
@@ -197,18 +218,17 @@ struct SendFuture(Movable):
     def __deinit__(deinit self):
         """Release the state, or hand it over to the WatchLoop.
 
-        If the completion has been delivered, or the loop has already
-        been destroyed, this handle is the last owner and frees the
-        state — and with it the buffer nobody asked for. Otherwise the
-        loop still tracks the state, so it is marked as orphaned and the
-        loop frees it: after the completion arrives during run(), or
-        when the loop itself is destroyed.
+        If the loop has already been destroyed, this handle is the last
+        reader of the state: its contents are destroyed here — and with
+        them the buffer nobody asked for — while the slot memory stays
+        with the leaked slab. Otherwise the state is marked as orphaned
+        and the loop's slab releases it: at the sweep after the
+        completion arrives, or when the loop itself is destroyed.
         """
-        if self._state[].done or self._state[]._loop_gone:
+        if self._state[]._loop_gone:
             self._state.unsafe_deinit_pointee()
-            self._state.unsafe_free()
         else:
-            self._state[]._owner_dropped = True
+            self._state[].mark_owner_dropped()
 
     def result(deinit self) raises -> TransferResult:
         """Take the byte count and the buffer from a completed send.
@@ -237,15 +257,16 @@ struct SendFuture(Movable):
         if not state[].done:
             if state[]._loop_gone:
                 state.unsafe_deinit_pointee()
-                state.unsafe_free()
                 raise "loop destroyed before completion"
-            state[]._owner_dropped = True
+            state[].mark_owner_dropped()
             raise "operation not complete"
 
         var raw = state[]._result
         var buf = state[].take_buffer()
-        state.unsafe_deinit_pointee()
-        state.unsafe_free()
+        if state[]._loop_gone:
+            state.unsafe_deinit_pointee()
+        else:
+            state[].mark_owner_dropped()
         if raw < 0:
             raise IOError.from_errno(Int(raw))
         return TransferResult(Int(raw), buf^)

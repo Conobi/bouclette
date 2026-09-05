@@ -1,19 +1,25 @@
 """WatchLoop — ergonomic completion-based I/O loop.
 
-Every operation method heap-allocates a per-operation state whose
-Completion address is handed to the driver, and returns a Future handle
-owning that state. The loop records every such state in an in-flight
-registry and owns it jointly with the handle (rules in `_callback.mojo`):
+Every operation method places a per-operation state in a loop-owned
+slab (one per state type, `_slab.mojo`), hands the state's Completion
+address to the driver, and returns a Future handle pointing at that
+slot. Slab chunks never move, so the address stays valid for the life
+of the loop, and submitting an operation costs a free-list pop rather
+than a heap allocation. The slab is also the registry (rules in
+`_callback.mojo`):
 
-- run() sweeps the registry after each tick: states that are done leave
-  it, and those whose handle was already dropped are freed there.
+- Each state carries the key of its slot. Of the completion arriving
+  and the handle letting go, whichever happens second pushes that key
+  onto the loop's settle queue, so run() releases exactly the slots
+  that became reclaimable since the last tick and visits nothing else.
 - Destroying the loop while operations are in flight tears the driver
-  down first, then settles every remaining entry: orphaned states are
-  freed, states still owned by a live handle are marked `loop_gone` so
-  the handle frees them on drop and result() reports the loss.
+  down first, then settles every remaining slot: orphaned states are
+  released, states still owned by a live handle are marked `loop_gone`
+  so result() reports the loss, and the chunks holding them stay
+  allocated for as long as the handle may read them.
 
-No state is ever freed by a completion callback, and nothing leaks if
-run() is never called again after a drop.
+No state is ever freed by a completion callback or by a handle, and
+nothing leaks if run() is never called again after a drop.
 
 recv() and send() take their buffer by value and move it into that same
 per-operation state, so the loop owns the bytes the kernel touches for
@@ -32,7 +38,8 @@ from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
-from boucle.watch._callback import _FutureCallback, _InFlightEntry, _dispatch
+from boucle.watch._callback import _KIND_BITS, _FutureCallback, _dispatch
+from boucle.watch._slab import _Slab
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
 from boucle.watch.connect_timeout import (
@@ -44,6 +51,15 @@ from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.timer import _TimerFutureState, TimerFuture
 
 
+# Slab kinds, stored in the low `_KIND_BITS` of every settle-queue key.
+comptime _KIND_ACCEPT = 0
+comptime _KIND_CONNECT = 1
+comptime _KIND_CONNECT_WITH_TIMEOUT = 2
+comptime _KIND_RECV = 3
+comptime _KIND_SEND = 4
+comptime _KIND_TIMER = 5
+
+
 struct WatchLoop(Movable):
     """Opaque event loop for completion-based I/O with Future dispatch.
 
@@ -51,9 +67,12 @@ struct WatchLoop(Movable):
     _pending tracks completions in flight — each operation adds 1, each
     dispatched completion subtracts 1, managed entirely by run().
 
-    _in_flight is the registry of every operation state not yet settled,
-    simple and composite alike; it is what lets the loop free orphaned
-    states and inform surviving handles when the loop is destroyed.
+    The six slabs hold every operation state, simple and composite
+    alike, and double as the registry of what is not yet settled; they
+    are what let the loop release orphaned states and inform surviving
+    handles when the loop is destroyed. _settle is the queue of slot
+    keys pushed by completions and handle drops since the last sweep;
+    it lives on the heap so its address survives moving the loop.
 
     _composites_awaiting_cancel additionally lists the composite states,
     because only they need the loop to submit a deferred cancel
@@ -64,7 +83,14 @@ struct WatchLoop(Movable):
 
     var _driver: _WatchDriver
     var _pending: Int
-    var _in_flight: List[_InFlightEntry]
+    var _settle: Pointer[List[Int], MutUntrackedOrigin]
+    var _settling: List[Int]
+    var _accepts: _Slab[_AcceptFutureState]
+    var _connects: _Slab[_ConnectFutureState]
+    var _connects_with_timeout: _Slab[_ConnectWithTimeoutState]
+    var _recvs: _Slab[_RecvFutureState]
+    var _sends: _Slab[_SendFutureState]
+    var _timers: _Slab[_TimerFutureState]
     var _composites_awaiting_cancel: List[
         Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
     ]
@@ -84,7 +110,18 @@ struct WatchLoop(Movable):
         """
         self._driver = _WatchDriver(capacity=capacity, backend=backend)
         self._pending = 0
-        self._in_flight = List[_InFlightEntry]()
+        self._settle = unsafe_alloc[List[Int]](1)
+        self._settle.unsafe_write(List[Int](capacity=capacity))
+        self._settling = List[Int](capacity=capacity)
+        var q = self._settle
+        self._accepts = _Slab[_AcceptFutureState](capacity, _KIND_ACCEPT, q)
+        self._connects = _Slab[_ConnectFutureState](capacity, _KIND_CONNECT, q)
+        self._connects_with_timeout = _Slab[_ConnectWithTimeoutState](
+            capacity, _KIND_CONNECT_WITH_TIMEOUT, q
+        )
+        self._recvs = _Slab[_RecvFutureState](capacity, _KIND_RECV, q)
+        self._sends = _Slab[_SendFutureState](capacity, _KIND_SEND, q)
+        self._timers = _Slab[_TimerFutureState](capacity, _KIND_TIMER, q)
         self._composites_awaiting_cancel = List[
             Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
         ]()
@@ -93,7 +130,14 @@ struct WatchLoop(Movable):
         """Move constructor."""
         self._driver = move._driver^
         self._pending = move._pending
-        self._in_flight = move._in_flight^
+        self._settle = move._settle
+        self._settling = move._settling^
+        self._accepts = move._accepts^
+        self._connects = move._connects^
+        self._connects_with_timeout = move._connects_with_timeout^
+        self._recvs = move._recvs^
+        self._sends = move._sends^
+        self._timers = move._timers^
         self._composites_awaiting_cancel = move._composites_awaiting_cancel^
 
     def __deinit__(deinit self):
@@ -124,19 +168,29 @@ struct WatchLoop(Movable):
           descriptor and frees its op pool and timer heap, so no
           callback can fire either.
 
-        Every remaining registry entry is then detached: orphaned states
-        are freed here, states still owned by a live handle are marked
-        `loop_gone`. Freeing a state is safe at that point because its
+        Every remaining slot is then detached: orphaned states are
+        released here, states still owned by a live handle are marked
+        `loop_gone` and their slab keeps its chunks allocated for that
+        handle. Releasing a state is safe at that point because its
         buffer has already been abandoned, so nothing the kernel may
         still touch goes back to the allocator.
         """
-        for entry in self._in_flight:
-            entry.abandon(entry.state)
+        self._accepts.abandon_all()
+        self._connects.abandon_all()
+        self._connects_with_timeout.abandon_all()
+        self._recvs.abandon_all()
+        self._sends.abandon_all()
+        self._timers.abandon_all()
         self._driver^.__deinit__()
-        for entry in self._in_flight:
-            entry.detach(entry.state)
-        self._in_flight.clear()
+        self._accepts.detach_all()
+        self._connects.detach_all()
+        self._connects_with_timeout.detach_all()
+        self._recvs.detach_all()
+        self._sends.detach_all()
+        self._timers.detach_all()
         self._composites_awaiting_cancel.clear()
+        self._settle.unsafe_deinit_pointee()
+        self._settle.unsafe_free()
 
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism is active."""
@@ -150,9 +204,16 @@ struct WatchLoop(Movable):
         after run() returns. A composite counts as one entry.
 
         Returns:
-            The number of registry entries not yet settled.
+            The number of slab slots whose operation is not yet done.
         """
-        return len(self._in_flight)
+        return (
+            self._accepts.in_flight()
+            + self._connects.in_flight()
+            + self._connects_with_timeout.in_flight()
+            + self._recvs.in_flight()
+            + self._sends.in_flight()
+            + self._timers.in_flight()
+        )
 
     def pending_composites(self) -> Int:
         """Return how many connect_with_timeout operations still await a cancel.
@@ -179,24 +240,18 @@ struct WatchLoop(Movable):
         Returns:
             An AcceptFuture representing the in-flight accept.
         """
-        var state_ptr = unsafe_alloc[_AcceptFutureState](1)
-        state_ptr.unsafe_write(_AcceptFutureState())
+        var state_ptr = self._accepts.alloc(_AcceptFutureState())
 
         state_ptr[].completion.invoke = _dispatch[_AcceptFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[].completion)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
         var fd = socket.raw()
         self._driver.accept(fd, cmp_ptr)
         self._pending += 1
-        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return AcceptFuture(state_ptr)
 
@@ -207,7 +262,7 @@ struct WatchLoop(Movable):
 
         Returns a ConnectFuture that resolves to a ConnectOutcome after
         run() completes. The address storage is copied into the
-        heap-allocated state for pointer stability.
+        slab-owned state for pointer stability.
 
         Args:
             socket: The socket to connect.
@@ -216,19 +271,14 @@ struct WatchLoop(Movable):
         Returns:
             A ConnectFuture representing the in-flight connect.
         """
-        var state_ptr = unsafe_alloc[_ConnectFutureState](1)
         var addr_stor = SocketAddrStorV4(addr)
-        state_ptr.unsafe_write(_ConnectFutureState(addr_stor))
+        var state_ptr = self._connects.alloc(_ConnectFutureState(addr_stor))
 
         state_ptr[].completion.invoke = _dispatch[_ConnectFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[].completion)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
         var fd = socket.raw()
@@ -236,7 +286,6 @@ struct WatchLoop(Movable):
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
         self._driver.connect(fd, addr_ptr, addr_len, cmp_ptr)
         self._pending += 1
-        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return ConnectFuture(state_ptr)
 
@@ -251,7 +300,8 @@ struct WatchLoop(Movable):
         Submits both a connect operation and a timeout operation. The
         first to complete resolves the operation; the other is cancelled.
         Returns a ConnectWithTimeoutFuture that resolves to a
-        ConnectOutcome after run() completes.
+        ConnectOutcome after run() completes. The address storage is
+        copied into the slab-owned state for pointer stability.
 
         Args:
             socket: The socket to connect.
@@ -262,48 +312,35 @@ struct WatchLoop(Movable):
             A ConnectWithTimeoutFuture representing the in-flight
             composite operation.
         """
-        var state_ptr = unsafe_alloc[_ConnectWithTimeoutState](1)
         var addr_stor = SocketAddrStorV4(addr)
         var ts = Timeout.from_ms(Int64(timeout_ms))
-        state_ptr.unsafe_write(
+        var state_ptr = self._connects_with_timeout.alloc(
             _ConnectWithTimeoutState(addr_stor, ts)
         )
 
         state_ptr[]._connect_cmp.invoke = (
             _ConnectWithTimeoutState._on_connect_cb
         )
-        state_ptr[]._connect_cmp.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[]._connect_cmp.context = state_ptr.unsafe_bitcast[NoneType]()
 
         state_ptr[]._timeout_cmp.invoke = (
             _ConnectWithTimeoutState._on_timeout_cb
         )
-        state_ptr[]._timeout_cmp.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[]._timeout_cmp.context = state_ptr.unsafe_bitcast[NoneType]()
 
-        state_ptr[]._cancel_cmp.invoke = (
-            _ConnectWithTimeoutState._on_cancel_cb
-        )
-        state_ptr[]._cancel_cmp.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[]._cancel_cmp.invoke = _ConnectWithTimeoutState._on_cancel_cb
+        state_ptr[]._cancel_cmp.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var fd = socket.raw()
         var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[]._connect_cmp)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[]._connect_cmp))
         )
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
         self._driver.connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
 
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[]._timeout_cmp)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[]._timeout_cmp))
         )
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
@@ -312,7 +349,6 @@ struct WatchLoop(Movable):
 
         # 2 operations submitted → 2 completions expected.
         self._pending += 2
-        self._in_flight.append(_InFlightEntry(state_ptr))
         self._composites_awaiting_cancel.append(state_ptr)
 
         return ConnectWithTimeoutFuture(state_ptr)
@@ -345,18 +381,13 @@ struct WatchLoop(Movable):
             If the socket handle is invalid or the driver cannot accept
             the operation.
         """
-        var state_ptr = unsafe_alloc[_RecvFutureState](1)
-        state_ptr.unsafe_write(_RecvFutureState(buf^))
+        var state_ptr = self._recvs.alloc(_RecvFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_RecvFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[].completion)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
         var fd = socket.raw()
@@ -366,7 +397,6 @@ struct WatchLoop(Movable):
         var buf_len = UInt32(len(state_ptr[].buf))
         self._driver.recv(fd, buf_ptr, buf_len, cmp_ptr)
         self._pending += 1
-        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return RecvFuture(state_ptr)
 
@@ -397,18 +427,13 @@ struct WatchLoop(Movable):
             If the socket handle is invalid or the driver cannot accept
             the operation.
         """
-        var state_ptr = unsafe_alloc[_SendFutureState](1)
-        state_ptr.unsafe_write(_SendFutureState(buf^))
+        var state_ptr = self._sends.alloc(_SendFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_SendFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[].completion)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
         var fd = socket.raw()
@@ -418,7 +443,6 @@ struct WatchLoop(Movable):
         var buf_len = UInt32(len(state_ptr[].buf))
         self._driver.send(fd, buf_ptr, buf_len, cmp_ptr)
         self._pending += 1
-        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return SendFuture(state_ptr)
 
@@ -434,19 +458,14 @@ struct WatchLoop(Movable):
         Returns:
             A TimerFuture representing the in-flight timeout.
         """
-        var state_ptr = unsafe_alloc[_TimerFutureState](1)
         var ts = Timeout.from_ms(Int64(timeout_ms))
-        state_ptr.unsafe_write(_TimerFutureState(ts))
+        var state_ptr = self._timers.alloc(_TimerFutureState(ts))
 
         state_ptr[].completion.invoke = _dispatch[_TimerFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[
-            NoneType
-        ]()
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
 
         var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(
-                Pointer(to=state_ptr[].completion)
-            )
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
@@ -454,7 +473,6 @@ struct WatchLoop(Movable):
         )
         self._driver.timeout(ts_ptr, cmp_ptr)
         self._pending += 1
-        self._in_flight.append(_InFlightEntry(state_ptr))
 
         return TimerFuture(state_ptr)
 
@@ -473,9 +491,9 @@ struct WatchLoop(Movable):
         After each tick, first flushes deferred cancel operations for
         composite operations (each cancel adds 1 to _pending for its own
         completion) and forgets the composites whose three completions
-        have all arrived, then sweeps the in-flight registry: every
-        state that is done leaves
-        it, and the ones whose handle was dropped early are freed there.
+        have all arrived, then settles the slots whose key was queued
+        during the tick: the ones whose handle was dropped early are
+        released there.
         The cancel list is trimmed before the sweep so it never keeps a
         pointer to a state the sweep is about to free.
 
@@ -503,15 +521,29 @@ struct WatchLoop(Movable):
             i -= 1
 
     def _sweep_in_flight(mut self):
-        """Drop every settled registry entry, freeing the orphaned ones.
+        """Settle every slot queued since the last sweep.
 
-        Called after each tick. Each entry's sweep hook reports whether
-        the state is done and, if its handle was already dropped, frees
-        it; done entries leave the registry either way.
+        Called after each tick. The queue holds the key of every slot
+        whose completion has arrived and whose handle has let go since
+        the last sweep; each key is routed to its slab, which releases
+        the slot. The queue is swapped with a spare list before it is
+        walked, so nothing can push to the list being iterated and no
+        list is allocated per tick.
         """
-        var i = len(self._in_flight) - 1
-        while i >= 0:
-            var entry = self._in_flight[i].copy()
-            if entry.sweep(entry.state):
-                _ = self._in_flight.pop(i)
-            i -= 1
+        swap(self._settling, self._settle[])
+        for key in self._settling:
+            var kind = key & ((1 << _KIND_BITS) - 1)
+            var index = key >> _KIND_BITS
+            if kind == _KIND_RECV:
+                self._recvs.settle(index)
+            elif kind == _KIND_SEND:
+                self._sends.settle(index)
+            elif kind == _KIND_TIMER:
+                self._timers.settle(index)
+            elif kind == _KIND_ACCEPT:
+                self._accepts.settle(index)
+            elif kind == _KIND_CONNECT:
+                self._connects.settle(index)
+            else:
+                self._connects_with_timeout.settle(index)
+        self._settling.clear()

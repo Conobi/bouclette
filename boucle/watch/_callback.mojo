@@ -1,23 +1,29 @@
 """Internal traits and generic hooks for Future state ownership.
 
-Two type-erased hand-offs meet here. The driver holds each operation's
-Completion (function pointer + void* context) and fires it on completion
-arrival; the WatchLoop holds a registry entry for every state still in
-flight so that it can settle ownership after each tick and when it is
-destroyed. Both sides work on `Pointer[NoneType, MutUntrackedOrigin]`
-and cast back to the concrete state type through one monomorphised
-function each (`_dispatch`, `_sweep`, `_detach`).
+The driver holds each operation's Completion (function pointer + void*
+context) and fires it on completion arrival; `_dispatch` casts the
+context back to the concrete state type and records the result. The
+WatchLoop keeps every state in a typed slab (`_slab.mojo`) that doubles
+as the registry, and settles ownership through the `_InFlightState`
+trait after each tick and when it is destroyed.
 
-Ownership of the heap-allocated state is shared between the Future
-handle the caller holds and the WatchLoop that submitted the operation:
+Ownership of the slab-owned state is shared between the Future handle
+the caller holds and the WatchLoop that submitted the operation:
 
-- A handle dropped after the state is done frees it (the loop has
-  already forgotten the entry).
-- A handle dropped before the state is done marks it `owner_dropped`;
-  the loop frees it in its post-tick sweep once done, or in its own
-  destructor if it never gets there.
-- A loop destroyed before the state is done marks it `loop_gone`; the
-  handle frees it on drop and reports the loss from result().
+- A handle never frees a slot. Dropping it, or consuming it through
+  result(), marks the state `owner_dropped`; the slab releases the slot
+  at its next sweep once the state is done, or in the loop's destructor
+  if it never gets there.
+- A loop destroyed before the handle is dropped marks the state
+  `loop_gone`; the handle then reports the loss from result(), destroys
+  the state's contents on drop, and the slab leaves its chunks
+  allocated so that read is always valid.
+
+Nothing scans the slabs. Every state carries a `_SlotLink` naming its
+slot; of the two events that make a slot reclaimable — the completion
+arriving and the handle letting go — the second one pushes the key
+onto the loop's settle queue, and the post-tick sweep releases exactly
+the slots queued since the last one.
 
 The completion callback itself only records the result; it never frees.
 
@@ -32,15 +38,88 @@ Not part of the public API.
 
 from std.memory import Pointer
 
+from boucle.socle.ptr import null_ptr
 
-trait _InFlightState(Movable, Deinitable):
-    """Internal trait for heap-allocated operation states tracked by WatchLoop.
+
+struct _SlotLink(Copyable, ImplicitlyCopyable, Movable):
+    """Where a state lives, and whom to tell when that slot may be settled.
+
+    A slot becomes reclaimable when its completion has arrived *and* its
+    handle has let go. Whichever of the two happens second pushes the
+    slot's key onto the loop's settle queue, so every slot is queued
+    exactly once. The completion also decrements the slab's live count,
+    which is how `in_flight_count` stays exact without a scan.
+
+    Fields:
+        key: The slot's identity as the loop's sweep understands it —
+             the slab index shifted left by `_KIND_BITS`, with the
+             slab's kind in the low bits. -1 while unbound.
+        queue: The loop's settle queue. Never touched once the loop is
+               gone.
+        live: The slab's count of submitted, not yet done operations.
+    """
+
+    var key: Int
+    var queue: Pointer[List[Int], MutUntrackedOrigin]
+    var live: Pointer[Int, MutUntrackedOrigin]
+
+    def __init__(out self):
+        """Construct an unbound link; both events are no-ops on it."""
+        self.key = -1
+        self.queue = null_ptr[List[Int], MutUntrackedOrigin]()
+        self.live = null_ptr[Int, MutUntrackedOrigin]()
+
+    def __init__(
+        out self,
+        key: Int,
+        queue: Pointer[List[Int], MutUntrackedOrigin],
+        live: Pointer[Int, MutUntrackedOrigin],
+    ):
+        """Construct a link to a slot.
+
+        Args:
+            key: The slot key the loop's sweep decodes.
+            queue: The loop's settle queue.
+            live: The slab's live counter.
+        """
+        self.key = key
+        self.queue = queue
+        self.live = live
+
+    def completed(self, owner_dropped: Bool):
+        """Record the completion; queue the slot if the handle is gone.
+
+        Args:
+            owner_dropped: Whether the handle had already let go.
+        """
+        if self.key < 0:
+            return
+        self.live[] -= 1
+        if owner_dropped:
+            self.queue[].append(self.key)
+
+    def dropped(self, done: Bool):
+        """Record the handle letting go; queue the slot if it is done.
+
+        Args:
+            done: Whether the completion had already arrived.
+        """
+        if self.key >= 0 and done:
+            self.queue[].append(self.key)
+
+
+# Low bits of a slot key that carry the slab kind; the rest is the index.
+comptime _KIND_BITS = 3
+
+
+trait _InFlightState(Deinitable, Movable):
+    """Internal trait for slab-owned operation states tracked by WatchLoop.
 
     Every state the loop registers, simple or composite, exposes the
     three facts the loop needs to settle ownership: whether the
     operation has finished, whether the Future handle has already been
     dropped, and whether the loop has already been destroyed.
-    Deinitable because the loop destroys and frees the state when the
+    Deinitable because the slab destroys the state in place when the
     handle is gone. Not part of the public API.
     """
 
@@ -76,7 +155,35 @@ trait _InFlightState(Movable, Deinitable):
         ...
 
     def mark_loop_gone(mut self):
-        """Record that the WatchLoop has been destroyed with this state in flight."""
+        """Record that the WatchLoop has been destroyed with this state in flight.
+        """
+        ...
+
+    def bind(mut self, link: _SlotLink):
+        """Record which slot holds this state and the queue to notify.
+
+        Called by the slab right after the state is moved into its
+        slot, before the operation is submitted.
+
+        Args:
+            link: The slot key and the loop's settle queue.
+        """
+        ...
+
+    def notify_done(self):
+        """Tell the slot link that the completion has arrived.
+
+        Called once, right after the state marks itself done.
+        """
+        ...
+
+    def mark_owner_dropped(mut self):
+        """Record that the Future handle let go, and queue the slot.
+
+        Called by the handle on drop and when result() consumes it.
+        Never called once the loop is gone: the queue it would push to
+        no longer exists.
+        """
         ...
 
     def abandon_buffer(mut self):
@@ -112,133 +219,24 @@ trait _FutureCallback(_InFlightState):
         ...
 
 
-# Function-pointer types stored in a WatchLoop registry entry.
-comptime _SweepFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> Bool
-comptime _DetachFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> None
-comptime _AbandonFn = def (Pointer[NoneType, MutUntrackedOrigin]) thin -> None
-
-
-def _dispatch[F: _FutureCallback](
-    ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32
-):
+def _dispatch[
+    F: _FutureCallback
+](ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32):
     """Generic completion dispatch to a typed _FutureCallback.
 
     After monomorphisation this is a plain function pointer compatible with
     CompletionFn — no closure capture, no heap allocation.
 
-    Only records the result. Freeing an orphaned state is the WatchLoop's
-    job (see `_sweep`), so the registry never holds a dangling pointer.
+    Only records the result and queues the slot for the next sweep.
+    Releasing an orphaned state is the slab's job, so no pointer the
+    loop holds ever dangles.
 
     Args:
-        ctx: Type-erased pointer to the heap-allocated _FutureCallback
+        ctx: Type-erased pointer to the slab-owned _FutureCallback
              implementor.
         result: The operation result.
         flags: The operation flags (currently unused by _FutureCallback).
     """
     var state_ptr = ctx.unsafe_bitcast[F]()
     state_ptr[].set_result(result)
-
-
-def _sweep[F: _InFlightState](ctx: Pointer[NoneType, MutUntrackedOrigin]) -> Bool:
-    """Settle a registry entry after a tick; return True if it can be dropped.
-
-    A state that is not done stays registered. A done state leaves the
-    registry: if its Future handle was dropped early the loop is the last
-    owner and frees it here; otherwise the handle frees it on its own
-    drop.
-
-    Args:
-        ctx: Type-erased pointer to the heap-allocated state.
-
-    Returns:
-        True if the entry must be removed from the registry.
-    """
-    var state_ptr = ctx.unsafe_bitcast[F]()
-    if not state_ptr[].is_done():
-        return False
-    if state_ptr[].owner_dropped():
-        state_ptr.unsafe_deinit_pointee()
-        state_ptr.unsafe_free()
-    return True
-
-
-def _detach[F: _InFlightState](ctx: Pointer[NoneType, MutUntrackedOrigin]):
-    """Sever a registry entry from a WatchLoop that is being destroyed.
-
-    Called for every entry still registered when the loop dies, after
-    the driver has been torn down so no callback can fire concurrently.
-    If the Future handle was already dropped the state has no owner left
-    and is freed. Otherwise the handle becomes the sole owner: the state
-    is marked `loop_gone` so the handle frees it on drop and reports the
-    destroyed loop from result().
-
-    Args:
-        ctx: Type-erased pointer to the heap-allocated state.
-    """
-    var state_ptr = ctx.unsafe_bitcast[F]()
-    if state_ptr[].owner_dropped():
-        state_ptr.unsafe_deinit_pointee()
-        state_ptr.unsafe_free()
-    else:
-        state_ptr[].mark_loop_gone()
-
-
-def _abandon[F: _InFlightState](ctx: Pointer[NoneType, MutUntrackedOrigin]):
-    """Let an unfinished state give up the memory the kernel may still use.
-
-    Called for every registry entry when the loop is destroyed, before
-    the driver is torn down. A finished state has nothing to abandon —
-    its completion has already arrived, so the kernel is done with it.
-
-    Args:
-        ctx: Type-erased pointer to the heap-allocated state.
-    """
-    var state_ptr = ctx.unsafe_bitcast[F]()
-    if not state_ptr[].is_done():
-        state_ptr[].abandon_buffer()
-
-
-struct _InFlightEntry(Copyable, Movable):
-    """One WatchLoop registry entry: a type-erased state plus its two hooks.
-
-    Fields:
-        state: Type-erased pointer to the heap-allocated operation state.
-        sweep: `_sweep[F]` for the state's concrete type.
-        detach: `_detach[F]` for the state's concrete type.
-        abandon: `_abandon[F]` for the state's concrete type.
-    """
-
-    var state: Pointer[NoneType, MutUntrackedOrigin]
-    var sweep: _SweepFn
-    var detach: _DetachFn
-    var abandon: _AbandonFn
-
-    def __init__[F: _InFlightState](
-        out self, state: Pointer[F, MutUntrackedOrigin]
-    ):
-        """Register a typed state, monomorphising its hooks.
-
-        Parameters:
-            F: The concrete state type.
-
-        Args:
-            state: Pointer to the heap-allocated state to track.
-        """
-        self.state = state.unsafe_bitcast[NoneType]()
-        self.sweep = _sweep[F]
-        self.detach = _detach[F]
-        self.abandon = _abandon[F]
-
-    def __init__(out self, *, copy: Self):
-        """Copy constructor."""
-        self.state = copy.state
-        self.sweep = copy.sweep
-        self.detach = copy.detach
-        self.abandon = copy.abandon
-
-    def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
-        self.state = move.state
-        self.sweep = move.sweep
-        self.detach = move.detach
-        self.abandon = move.abandon
+    state_ptr[].notify_done()

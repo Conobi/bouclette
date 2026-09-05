@@ -29,13 +29,13 @@ from boucle.drivers import _WatchDriver
 from boucle.net.addr import SocketAddrStorV4
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
-from boucle.watch._callback import _InFlightState
+from boucle.watch._callback import _InFlightState, _SlotLink
 from boucle.watch.outcome import ConnectOutcome
 from boucle.socle.platform import ECANCELED
 
 
 # ===----------------------------------------------------------------------=== #
-# _ConnectWithTimeoutState — internal, heap-allocated per-operation state
+# _ConnectWithTimeoutState — internal, slab-owned per-operation state
 # ===----------------------------------------------------------------------=== #
 
 
@@ -85,6 +85,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
     var consumed: Bool
     var _owner_dropped: Bool
     var _loop_gone: Bool
+    var _link: _SlotLink
 
     def __init__(
         out self,
@@ -115,6 +116,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self.consumed = False
         self._owner_dropped = False
         self._loop_gone = False
+        self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor.
@@ -137,6 +139,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
+        self._link = move._link
 
     def is_done(self) -> Bool:
         """Return True once all 3 completions have arrived.
@@ -163,8 +166,26 @@ struct _ConnectWithTimeoutState(_InFlightState):
         return self._loop_gone
 
     def mark_loop_gone(mut self):
-        """Record that the WatchLoop was destroyed with this composite in flight."""
+        """Record that the WatchLoop was destroyed with this composite in flight.
+        """
         self._loop_gone = True
+
+    def bind(mut self, link: _SlotLink):
+        """Record the slot this state lives in and the queue to notify.
+
+        Args:
+            link: The slot key and the loop's settle queue.
+        """
+        self._link = link
+
+    def notify_done(self):
+        """Tell the slot link the completion has arrived."""
+        self._link.completed(self._owner_dropped)
+
+    def mark_owner_dropped(mut self):
+        """Record that the handle let go, and queue the slot if done."""
+        self._owner_dropped = True
+        self._link.dropped(self.done)
 
     def _check_done(mut self):
         """Mark operation as done when all 3 completions have arrived."""
@@ -173,6 +194,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
                 self._total_completions == 3, "completion count exceeded 3"
             )
             self.done = True
+            self.notify_done()
 
     def flush_cancel(mut self, mut driver: _WatchDriver) raises -> Int:
         """Submit the deferred cancel operation if a callback requested one.
@@ -191,26 +213,18 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         if self._cancel_target == UInt8(1):
             var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-                unsafe_from_address=Int(
-                    Pointer(to=self._timeout_cmp)
-                )
+                unsafe_from_address=Int(Pointer(to=self._timeout_cmp))
             )
             var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-                unsafe_from_address=Int(
-                    Pointer(to=self._cancel_cmp)
-                )
+                unsafe_from_address=Int(Pointer(to=self._cancel_cmp))
             )
             driver.cancel(target_cmp_ptr, cancel_cmp_ptr)
         elif self._cancel_target == UInt8(2):
             var target_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-                unsafe_from_address=Int(
-                    Pointer(to=self._connect_cmp)
-                )
+                unsafe_from_address=Int(Pointer(to=self._connect_cmp))
             )
             var cancel_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-                unsafe_from_address=Int(
-                    Pointer(to=self._cancel_cmp)
-                )
+                unsafe_from_address=Int(Pointer(to=self._cancel_cmp))
             )
             driver.cancel(target_cmp_ptr, cancel_cmp_ptr)
 
@@ -328,7 +342,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
 struct ConnectWithTimeoutFuture(Movable):
     """RAII handle for a composite connect+timeout operation.
 
-    Owns a heap-allocated _ConnectWithTimeoutState. Call done() to check
+    Points at a slab-owned _ConnectWithTimeoutState. Call done() to check
     completion, then result() to extract the ConnectOutcome.
 
     Dropping the handle before run() has delivered all three completions
@@ -346,10 +360,10 @@ struct ConnectWithTimeoutFuture(Movable):
         out self,
         state: Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin],
     ):
-        """Construct a ConnectWithTimeoutFuture wrapping a heap-allocated state.
+        """Construct a ConnectWithTimeoutFuture wrapping a slab-owned state.
 
         Args:
-            state: Pointer to the heap-allocated _ConnectWithTimeoutState.
+            state: Pointer to the slab-owned _ConnectWithTimeoutState.
         """
         self._state = state
 
@@ -364,18 +378,17 @@ struct ConnectWithTimeoutFuture(Movable):
     def __deinit__(deinit self):
         """Release the state, or hand it over to the WatchLoop.
 
-        If all three completions have been delivered, or the loop has
-        already been destroyed, this handle is the last owner and frees
-        the state. Otherwise the loop still tracks the composite, so the
-        state is marked as orphaned and the loop frees it — once the
-        last completion has arrived during run(), or when the loop itself
-        is destroyed.
+        If the loop has already been destroyed, this handle is the last
+        reader of the state and destroys its contents here; the slot
+        memory stays with the leaked slab. Otherwise the state is marked
+        as orphaned and the loop's slab releases it — at the sweep after
+        the last completion has arrived, or when the loop itself is
+        destroyed.
         """
-        if self._state[].done or self._state[]._loop_gone:
+        if self._state[]._loop_gone:
             self._state.unsafe_deinit_pointee()
-            self._state.unsafe_free()
         else:
-            self._state[]._owner_dropped = True
+            self._state[].mark_owner_dropped()
 
     def result(mut self) raises -> ConnectOutcome:
         """Decode the operation result into a ConnectOutcome.
