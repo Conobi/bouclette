@@ -8,6 +8,7 @@ of the underlying kernel mechanism.
 from .driver import IoDriver, ReadinessDriver
 from .readiness_event import ReadinessEvent
 from .backend import Backend
+from .feature import DriverFeature
 from .io_uring import IoUringDriver
 from .epoll import EpollDriver
 from .epoll_completion import EpollCompletionDriver

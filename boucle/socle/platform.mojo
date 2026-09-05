@@ -39,9 +39,15 @@ whoever writes the second backend. Each section below is tagged:
   has only `accept(2)` and needs a follow-up `fcntl` to apply
   `O_NONBLOCK`/`O_CLOEXEC`), `MSG_NOSIGNAL` (macOS suppresses `SIGPIPE`
   with the `SO_NOSIGPIPE` socket option instead, so the flag has to move
-  from the per-call argument to socket setup), and `SO_REUSEPORT`
+  from the per-call argument to socket setup), `SO_REUSEPORT`
   (present on BSD/macOS but with load-balancing semantics Linux only
-  gained in 3.9 — verify before relying on it).
+  gained in 3.9 — verify before relying on it), `SOL_IP` and `SOL_IPV6`
+  (Linux spellings of the IPv4/IPv6 option levels; POSIX, BSD and macOS
+  spell these `IPPROTO_IP`/`IPPROTO_IPV6` instead, and macOS has no
+  `SOL_IP` at all — though `SOL_IPV6 == IPPROTO_IPV6` numerically, so a
+  second backend can alias one to the other), and `IP_RECVTOS` (a
+  BSD/Linux extension, not POSIX; macOS numbers it 27, FreeBSD 68,
+  not the Linux value).
 """
 
 from boucle.socle import is_linux, is_darwin, is_windows
@@ -117,6 +123,22 @@ from boucle.socle.linux.raw import (
     socklen_t,
 )
 
+# --- Message headers (needs a per-OS equivalent) ----------------------
+#
+# `iovec` is POSIX and identical everywhere. `msghdr` and `cmsghdr` are
+# POSIX in name but not in field width: Linux LP64 uses `size_t` for
+# `msg_iovlen`, `msg_controllen` and `cmsg_len`, macOS uses `int` /
+# `socklen_t`. The portable message layer (`boucle.net.message`, added
+# with the message futures) and `boucle.watch` build these structs
+# field by field, so a second backend supplies its own layouts under
+# the same names.
+
+from boucle.socle.linux.raw import (
+    cmsghdr,
+    iovec,
+    msghdr,
+)
+
 from boucle.socle.linux.raw.utils import _to_be
 
 # --- Socket syscalls (portable, except `_raw_accept4`) ----------------
@@ -152,8 +174,10 @@ from boucle.socle.linux.net.syscalls import (
 # against these at compile time, so a second backend whose values differ
 # fails the build instead of silently misconfiguring a socket.
 #
-# `MSG_NOSIGNAL` and `SO_REUSEPORT` need a per-OS equivalent (see the
-# module docstring); the rest are POSIX.
+# `MSG_NOSIGNAL`, `SO_REUSEPORT`, `SOL_IP`, `SOL_IPV6` and `IP_RECVTOS`
+# need a per-OS equivalent (see the module docstring); the rest are
+# POSIX. `SOL_IPV6 == IPPROTO_IPV6`, so a second backend can alias one
+# to the other.
 
 from boucle.socle.linux.raw import (
     AF_INET,
@@ -161,12 +185,20 @@ from boucle.socle.linux.raw import (
     AF_UNIX,
     AF_UNSPEC,
     IPPROTO_IPV6,
+    IPV6_RECVTCLASS,
+    IPV6_TCLASS,
     IPV6_V6ONLY,
+    IP_RECVTOS,
+    IP_TOS,
+    MSG_CTRUNC,
     MSG_NOSIGNAL,
+    MSG_TRUNC,
     O_CLOEXEC,
     O_NONBLOCK,
     SOCK_DGRAM,
     SOCK_STREAM,
+    SOL_IP,
+    SOL_IPV6,
     SOL_SOCKET,
     SO_ERROR,
     SO_RCVTIMEO,

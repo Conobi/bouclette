@@ -13,6 +13,7 @@ from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from boucle.drivers.driver import IoDriver
 from boucle.drivers.backend import Backend
+from boucle.drivers.feature import DriverFeature
 from boucle.drivers.io_uring import IoUringDriver
 from boucle.drivers.epoll_completion import EpollCompletionDriver
 from boucle.socle import is_linux
@@ -255,3 +256,16 @@ struct AutoDriver(IoDriver):
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism this driver uses."""
         return self._backend
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return the active backend's answer for `feature`.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            What the io_uring or epoll driver reports.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().supports(feature)
+        return self._epoll.value().supports(feature)

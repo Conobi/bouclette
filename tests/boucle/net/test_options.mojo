@@ -32,6 +32,9 @@ def test_options() raises:
     var rflags = RecvFlags.PEEK | RecvFlags.DONTWAIT
     assert_true(rflags.value != RecvFlags().value)
 
+    assert_equal(RecvFlags.CTRUNC.value, UInt32(8))
+    assert_equal(RecvFlags.TRUNC.value, UInt32(32))
+
     assert_true(Backlog.DEFAULT.value > 0)
 
     assert_equal(Shutdown.RDWR.value, Int32(2))

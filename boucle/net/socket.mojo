@@ -56,8 +56,6 @@ from boucle.socle.platform import (
     sockaddr_in,
     sockaddr_in6,
     socklen_t,
-    AF_INET,
-    AF_INET6,
     EAFNOSUPPORT,
     EBADF,
     SOL_SOCKET,
@@ -399,6 +397,21 @@ def _sys_close(fd: RawHandle) raises IOError:
 # ===----------------------------------------------------------------------=== #
 
 
+@always_inline
+def _sockaddr_family(ref addr: sockaddr_in6, len: Int) -> AddrFamily:
+    """Return the family a syscall wrote into a sockaddr_in6-sized image.
+
+    Args:
+        addr: The storage the kernel filled.
+        len: The number of bytes the kernel reported as meaningful.
+
+    Returns:
+        The decoded family, or UNSPEC for a short or unknown image.
+    """
+    var bytes = Pointer(to=addr).unsafe_bitcast[UInt8]()
+    return AddrFamily.from_sockaddr(Span(unsafe_ptr=bytes, length=len))
+
+
 def _getpeername(fd: RawHandle) raises IOError -> String:
     """Return the peer IP address of a connected socket as a string.
 
@@ -423,8 +436,8 @@ def _getpeername(fd: RawHandle) raises IOError -> String:
         stor_p.unsafe_bitcast[UInt8](),
         len_p.unsafe_bitcast[UInt8](),
     )
-    var family = Int(stor.sin6_family)
-    if family == AF_INET:
+    var family = _sockaddr_family(stor, Int(addrlen))
+    if family == AddrFamily.INET:
         # IPv4: address bytes sit at offset 4 in sockaddr_in
         # (2-byte family + 2-byte port).
         var bp = stor_p.unsafe_bitcast[UInt8]().unsafe_offset(4)
@@ -432,7 +445,7 @@ def _getpeername(fd: RawHandle) raises IOError -> String:
             Int(bp[unsafe_offset=0]), ".", Int(bp[unsafe_offset=1]), ".",
             Int(bp[unsafe_offset=2]), ".", Int(bp[unsafe_offset=3]),
         )
-    elif family == AF_INET6:
+    elif family == AddrFamily.INET6:
         # IPv6: 16 address bytes start at offset 8 in sockaddr_in6
         # (2-byte family + 2-byte port + 4-byte flowinfo).
         # Each pair of network-order bytes forms one host-order UInt16 segment.
@@ -995,7 +1008,7 @@ struct Socket(Movable):
         """
         var received = self._recv_from_any(buf)
         var raw = received[1]
-        if Int(raw.sin6_family) != AF_INET:
+        if _sockaddr_family(raw, size_of[sockaddr_in6]()) != AddrFamily.INET:
             raise IOError(positive_errno=EAFNOSUPPORT)
         var stor = SocketAddrStorV4()
         stor.addr = Pointer(to=raw).unsafe_bitcast[sockaddr_in]()[]
@@ -1025,7 +1038,7 @@ struct Socket(Movable):
         """
         var received = self._recv_from_any(buf)
         var raw = received[1]
-        if Int(raw.sin6_family) != AF_INET6:
+        if _sockaddr_family(raw, size_of[sockaddr_in6]()) != AddrFamily.INET6:
             raise IOError(positive_errno=EAFNOSUPPORT)
         var stor = SocketAddrStorV6()
         stor.addr = raw

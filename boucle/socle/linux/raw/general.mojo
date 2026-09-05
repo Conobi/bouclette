@@ -51,6 +51,7 @@ comptime __NR_getpid = _pick[39, 172]()
 comptime __NR_pipe2 = _pick[293, 59]()
 # aarch64 has only epoll_pwait (no legacy epoll_wait); see __NR_epoll_wait note
 comptime __NR_epoll_pwait = _pick[281, 22]()
+comptime __NR_uname = _pick[63, 160]()
 
 # mmap constants (arch-stable)
 comptime MAP_FILE = 0

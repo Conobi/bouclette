@@ -56,3 +56,11 @@ from boucle.socle.linux.ucontext import (
     uc_swapcontext_unchecked,
     setup_context,
 )
+
+# ── Kernel identification (uname.mojo) ───────────────────────────────
+from boucle.socle.linux.uname import (
+    KernelVersion,
+    kernel_release,
+    kernel_version,
+    parse_kernel_release,
+)

@@ -15,6 +15,7 @@ from boucle.proactor.completion import Completion, CompletionFn
 from boucle.proactor.loop import EventLoop
 from boucle.drivers import _CompletionDriver
 from boucle.drivers.backend import Backend
+from boucle.drivers.feature import DriverFeature
 from std.memory import Pointer
 
 
@@ -206,6 +207,17 @@ struct CompletionLoop(Movable):
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism is active."""
         return self._inner.driver.backend()
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return whether the active driver provides `feature`.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            The driver's answer; True on epoll, kernel-dependent on io_uring.
+        """
+        return self._inner.driver.supports(feature)
 
     # ── EventLoop convenience methods ─────────────────────────────────────
 

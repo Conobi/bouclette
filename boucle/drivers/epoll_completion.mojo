@@ -57,6 +57,7 @@ from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
 from boucle.drivers.driver import IoDriver
 from boucle.drivers.backend import Backend
+from boucle.drivers.feature import DriverFeature
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -585,6 +586,21 @@ struct EpollCompletionDriver(IoDriver):
     def backend(self) -> Backend:
         """Return Backend.EPOLL."""
         return Backend.EPOLL
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return True for every feature: this driver emulates them all.
+
+        Multishot recvmsg and buffer groups are userspace loops over
+        `recvmsg` and a free list; a bounded wait is the epoll_wait
+        timeout. Nothing depends on the kernel version.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            True.
+        """
+        return True
 
     def tick(mut self, wait: Bool) raises -> Int:
         """Drain ready queue, poll epoll, fire expired timers.

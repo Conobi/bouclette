@@ -176,6 +176,66 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
         """
         return self.len
 
+    @always_inline
+    def addr_unsafe_mut_ptr(mut self) -> Pointer[UInt8, MutUntrackedOrigin]:
+        """Return a writable byte pointer to the stored sockaddr.
+
+        This is the name slot a recvmsg fills: the kernel writes up to
+        `size_of[sockaddr_in6]()` bytes here and reports how many in the
+        message header, which the owner then records with `set_len`.
+
+        Returns:
+            A pointer to the first byte of `addr`; valid for as long as
+            this struct is not moved or destroyed.
+        """
+        return Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self.addr))
+        )
+
+    @always_inline
+    def len_unsafe_ptr(mut self) -> Pointer[socklen_t, MutUntrackedOrigin]:
+        """Return a writable pointer to the length field.
+
+        For syscalls that take an in/out `socklen_t*` (recvfrom,
+        getsockname). recvmsg reports the length in `msg_namelen`
+        instead; use `set_len` for that.
+
+        Returns:
+            A pointer to `len`; valid for as long as this struct is not
+            moved or destroyed.
+        """
+        return Pointer[socklen_t, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self.len))
+        )
+
+    @always_inline
+    def set_len(mut self, len: socklen_t):
+        """Record how many bytes of the storage a syscall wrote.
+
+        The kernel may report a length larger than the slot when the
+        address was truncated; the recorded value is clamped to the
+        storage size so no reader runs past `addr`.
+
+        Args:
+            len: The length reported by the kernel.
+        """
+        var cap = socklen_t(size_of[sockaddr_in6]())
+        self.len = len if len < cap else cap
+
+    @always_inline
+    def family(self) -> AddrFamily:
+        """Return the family of the stored sockaddr.
+
+        Returns:
+            UNSPEC when fewer than two bytes are meaningful (nothing was
+            stored or written), otherwise the decoded family.
+        """
+        return AddrFamily.from_sockaddr(
+            Span[UInt8, ImmStaticOrigin](
+                unsafe_ptr=self.addr_unsafe_ptr(), length=Int(self.len)
+            )
+        )
+
 
 # ===----------------------------------------------------------------------=== #
 # IPv4 storage and address
@@ -377,6 +437,28 @@ struct SocketAddrV6(TrivialRegisterPassable, SocketAddrStor, SocketAddrStorMut):
     @always_inline
     def segments(ref self) -> ref [self.ip.segments] Self.Segments:
         return self.ip.segments
+
+    @always_inline
+    def is_ipv4_mapped(self) -> Bool:
+        """Return True when this is an IPv4-mapped address (::ffff:a.b.c.d).
+
+        A dual-stack socket sees IPv4 peers under this form. The kernel
+        routes a send to such a peer through the IPv4 stack, which is
+        why `Message.set_ecn` treats a mapped peer as AF_INET.
+
+        Returns:
+            True if the first five segments are zero and the sixth is
+            0xFFFF.
+        """
+        var s = self.ip.segments
+        return (
+            s[0] == 0
+            and s[1] == 0
+            and s[2] == 0
+            and s[3] == 0
+            and s[4] == 0
+            and s[5] == 0xFFFF
+        )
 
     @always_inline
     def addr_stor(ref self, out result: Self.AddrStorType):

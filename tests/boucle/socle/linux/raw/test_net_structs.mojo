@@ -4,6 +4,8 @@ from boucle.socle.linux.raw.net import (
     cmsghdr, in_pktinfo, in6_pktinfo,
     AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM,
     IPPROTO_TCP, IPPROTO_UDP,
+    IP_TOS, IP_RECVTOS, IPV6_TCLASS, IPV6_RECVTCLASS,
+    SOL_IP, SOL_IPV6, MSG_TRUNC, MSG_CTRUNC,
 )
 from boucle.socle.linux.raw.epoll import epoll_event
 from boucle.socle.linux.raw.io_uring import (
@@ -12,6 +14,7 @@ from boucle.socle.linux.raw.io_uring import (
 from boucle.socle.linux.raw.utils import _pick_int
 from std.testing import assert_equal
 from std.sys.info import size_of
+from std.memory import Pointer
 
 
 def test_net_structs() raises:
@@ -48,6 +51,41 @@ def test_net_structs() raises:
     assert_equal(IPPROTO_UDP, 17)
 
 
+def test_tos_constants() raises:
+    """The IP_TOS/TCLASS option ids and the levels they are set at."""
+    assert_equal(IP_TOS, 1)
+    assert_equal(IP_RECVTOS, 13)
+    assert_equal(IPV6_TCLASS, 67)
+    assert_equal(IPV6_RECVTCLASS, 66)
+    assert_equal(SOL_IP, 0)
+    assert_equal(SOL_IPV6, 41)
+    assert_equal(MSG_TRUNC, 32)
+    assert_equal(MSG_CTRUNC, 8)
+
+
+def test_cmsghdr_field_offsets() raises:
+    """Cmsg_len sits at 0 (8 bytes), cmsg_level at 8, cmsg_type at 12.
+
+    The control walker and `Message.set_ecn` read and write records by
+    these offsets, so a padding change here must fail loudly.
+    """
+    var hdr = cmsghdr()
+    hdr.cmsg_len = 17
+    hdr.cmsg_level = 41
+    hdr.cmsg_type = 67
+    var base = Int(Pointer(to=hdr))
+    assert_equal(Int(Pointer(to=hdr.cmsg_len)) - base, 0)
+    assert_equal(Int(Pointer(to=hdr.cmsg_level)) - base, 8)
+    assert_equal(Int(Pointer(to=hdr.cmsg_type)) - base, 12)
+    var bytes = Pointer(to=hdr).unsafe_bitcast[UInt8]()
+    # Byte-level checks assume little-endian, true for x86_64 and aarch64 Linux.
+    assert_equal(Int(bytes[unsafe_offset=0]), 17)
+    assert_equal(Int(bytes[unsafe_offset=8]), 41)
+    assert_equal(Int(bytes[unsafe_offset=12]), 67)
+
+
 def main() raises:
     test_net_structs()
+    test_tos_constants()
+    test_cmsghdr_field_offsets()
     print("PASS: test_net_structs.mojo")

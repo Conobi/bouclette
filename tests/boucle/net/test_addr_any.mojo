@@ -15,6 +15,7 @@ from boucle.net.addr import (
     SocketAddrV4,
     SocketAddrV6,
 )
+from boucle.net.options import AddrFamily
 from boucle.socle.platform import sockaddr_in6
 
 
@@ -106,9 +107,56 @@ def test_copy_keeps_bytes_and_len() raises:
         assert_equal(Int(a[unsafe_offset=i]), Int(b[unsafe_offset=i]))
 
 
+def test_mutable_pointers_alias_the_storage() raises:
+    """The mutable byte and length pointers write into the same fields."""
+    var any = SocketAddrStorAny()
+    var bytes = any.addr_unsafe_mut_ptr()
+    assert_equal(Int(bytes), Int(Pointer(to=any.addr)))
+    bytes[unsafe_offset=0] = UInt8(10)  # AF_INET6, low byte
+    bytes[unsafe_offset=1] = UInt8(0)
+    assert_equal(Int(any.addr.sin6_family), 10)
+    var len_p = any.len_unsafe_ptr()
+    assert_equal(Int(len_p), Int(Pointer(to=any.len)))
+    len_p[] = 28
+    assert_equal(Int(any.addr_len()), 28)
+
+
+def test_set_len_clamps_to_the_storage() raises:
+    """A kernel-reported length beyond 28 bytes is clamped, not trusted."""
+    var any = SocketAddrStorAny()
+    any.set_len(16)
+    assert_equal(Int(any.addr_len()), 16)
+    any.set_len(110)
+    assert_equal(Int(any.addr_len()), size_of[sockaddr_in6]())
+    any.set_len(0)
+    assert_equal(Int(any.addr_len()), 0)
+
+
+def test_family_reads_the_prefix() raises:
+    """`family()` is UNSPEC when empty, else follows the stored bytes."""
+    var empty = SocketAddrStorAny()
+    assert_true(empty.family() == AddrFamily.UNSPEC)
+    var v4 = SocketAddrStorAny(SocketAddrV4(10, 0, 0, 1, port=53).addr_stor())
+    assert_true(v4.family() == AddrFamily.INET)
+    var v6 = SocketAddrStorAny(
+        SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 1, port=53).addr_stor()
+    )
+    assert_true(v6.family() == AddrFamily.INET6)
+    # Written by the kernel: family bytes present but length still zero
+    # means "no name was written", which is UNSPEC.
+    var written = SocketAddrStorAny()
+    written.addr.sin6_family = 2
+    assert_true(written.family() == AddrFamily.UNSPEC)
+    written.set_len(16)
+    assert_true(written.family() == AddrFamily.INET)
+
+
 def main() raises:
     test_default_is_zeroed()
     test_from_v4_storage()
     test_from_v6_storage_round_trips()
     test_copy_keeps_bytes_and_len()
+    test_mutable_pointers_alias_the_storage()
+    test_set_len_clamps_to_the_storage()
+    test_family_reads_the_prefix()
     print("PASS: test_addr_any.mojo")

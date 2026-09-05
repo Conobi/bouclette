@@ -16,6 +16,7 @@ from boucle.handle import RawHandle
 from boucle.interest import Interest
 from boucle.token import Token
 from boucle.drivers.backend import Backend
+from boucle.drivers.feature import DriverFeature
 from boucle.drivers.readiness_event import ReadinessEvent
 
 
@@ -198,6 +199,20 @@ trait IoDriver(Movable):
 
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism this driver uses."""
+        ...
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return whether `feature` can be used on this driver.
+
+        A driver that emulates the feature in userspace answers True.
+        The answer is fixed at construction; nothing is submitted.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            True if submissions relying on `feature` will be accepted.
+        """
         ...
 
 

@@ -74,6 +74,7 @@ from boucle.socle.linux.raw import (
     IORING_REGISTER_FILES_UPDATE,
     IORING_REGISTER_EVENTFD_ASYNC,
     IORING_REGISTER_PROBE,
+    IO_URING_OP_SUPPORTED,
     IORING_REGISTER_PERSONALITY,
     IORING_UNREGISTER_PERSONALITY,
     IORING_REGISTER_RESTRICTIONS,
@@ -1230,6 +1231,119 @@ struct IoUringBufReg(AsRegisterArg, Defaultable, ImplicitlyCopyable, Movable):
             ),
             nr_args=1,
         )
+
+
+# Entries the probe argument carries. The kernel fills min(nr_args,
+# last_op + 1) of them; 256 covers every opcode a __u8 can name.
+comptime IO_URING_PROBE_OPS = 256
+
+
+struct IoUringProbeOp(Defaultable, ImplicitlyCopyable, Movable):
+    """One entry of the `IORING_REGISTER_PROBE` reply (`io_uring_probe_op`).
+
+    Fields:
+        op: The opcode this entry describes; equals its index.
+        resv: Reserved.
+        flags: `IO_URING_OP_SUPPORTED` when the kernel implements `op`.
+        resv2: Reserved.
+    """
+
+    var op: UInt8
+    var resv: UInt8
+    var flags: UInt16
+    var resv2: UInt32
+
+    @always_inline
+    def __init__(out self):
+        """Construct a zeroed entry."""
+        _size_eq[Self, 8]()
+        self.op = 0
+        self.resv = 0
+        self.flags = 0
+        self.resv2 = 0
+
+
+struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
+    """Register argument and reply for `IORING_REGISTER_PROBE`.
+
+    Zero it, hand `as_register_arg(unsafe_opcode=REGISTER_PROBE)` to
+    `io_uring_register`, then ask `is_supported`. Layout is the kernel's
+    `io_uring_probe` header followed by `IO_URING_PROBE_OPS` entries.
+
+    Fields:
+        last_op: The highest opcode this kernel knows.
+        ops_len: How many entries the kernel filled (`last_op + 1`).
+        resv: Reserved.
+        resv2: Reserved.
+        ops: One entry per opcode, indexed by opcode.
+    """
+
+    var last_op: UInt8
+    var ops_len: UInt8
+    var resv: UInt16
+    var resv2: InlineArray[UInt32, 3]
+    var ops: InlineArray[IoUringProbeOp, IO_URING_PROBE_OPS]
+
+    def __init__(out self):
+        """Construct a zeroed probe ready for registration."""
+        _size_eq[Self, 16 + IO_URING_PROBE_OPS * 8]()
+        self.last_op = 0
+        self.ops_len = 0
+        self.resv = 0
+        self.resv2 = InlineArray[UInt32, 3](fill=0)
+        self.ops = InlineArray[IoUringProbeOp, IO_URING_PROBE_OPS](
+            fill=IoUringProbeOp()
+        )
+
+    @always_inline
+    def as_register_arg[
+        origin: MutOrigin
+    ](
+        ref [origin] self, *, unsafe_opcode: IoUringRegisterOp
+    ) -> RegisterArg[origin]:
+        """Describe this probe to `io_uring_register`.
+
+        Parameters:
+            origin: The origin of `self`.
+
+        Args:
+            unsafe_opcode: `IoUringRegisterOp.REGISTER_PROBE`; no other
+                           opcode takes this argument.
+
+        Returns:
+            A register argument with `nr_args = IO_URING_PROBE_OPS`.
+        """
+        # Bind &self first: inlining Pointer(to=self) into the
+        # constructor arg list risks losing the stack address mid-marshal.
+        var self_p = Pointer(to=self)
+        return RegisterArg[origin](
+            opcode=unsafe_opcode,
+            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
+                unsafe_from_address=Int(self_p)
+            ),
+            nr_args=UInt32(IO_URING_PROBE_OPS),
+        )
+
+    def is_supported(self, op: IoUringOp) -> Bool:
+        """Return True when the kernel reported `op` as supported.
+
+        Before registration every opcode is unsupported: `last_op` is 0
+        and `ops[0].flags` is 0.
+
+        Args:
+            op: The opcode to check.
+
+        Returns:
+            True if `op <= last_op` and its entry carries
+            `IO_URING_OP_SUPPORTED`.
+        """
+        var index = Int(op.id)
+        # op.id is UInt8 (max 255) and IO_URING_PROBE_OPS is 256, so this
+        # second check never rejects; it documents the array bound rather
+        # than guarding a reachable case.
+        if index > Int(self.last_op) or index >= IO_URING_PROBE_OPS:
+            return False
+        return (self.ops[index].flags & UInt16(IO_URING_OP_SUPPORTED)) != 0
 
 
 # ===----------------------------------------------------------------------=== #

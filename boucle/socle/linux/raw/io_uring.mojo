@@ -82,6 +82,8 @@ comptime IORING_UNREGISTER_EVENTFD = 5
 comptime IORING_REGISTER_FILES_UPDATE = 6
 comptime IORING_REGISTER_EVENTFD_ASYNC = 7
 comptime IORING_REGISTER_PROBE = 8
+# io_uring_probe_op.flags bit: the opcode is supported by this kernel.
+comptime IO_URING_OP_SUPPORTED = 1
 comptime IORING_REGISTER_PERSONALITY = 9
 comptime IORING_UNREGISTER_PERSONALITY = 10
 comptime IORING_REGISTER_RESTRICTIONS = 11

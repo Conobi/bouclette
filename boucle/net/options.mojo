@@ -57,8 +57,11 @@ struct SocketFlags(TrivialRegisterPassable, Defaultable):
         return self.value | rhs.value
 
 
-struct AddrFamily(TrivialRegisterPassable):
-    """`AF_*` constants for use with `socket`."""
+struct AddrFamily(TrivialRegisterPassable, Equatable):
+    """`AF_*` constants for use with `socket`.
+
+    Two families are equal when they carry the same `AF_*` id.
+    """
 
     comptime UNSPEC = Self(unsafe_id=0)   # AF_UNSPEC
     comptime UNIX = Self(unsafe_id=1)     # AF_UNIX
@@ -71,6 +74,57 @@ struct AddrFamily(TrivialRegisterPassable):
     @always_inline("nodebug")
     def __init__(out self, *, unsafe_id: UInt16):
         self.id = unsafe_id
+
+    @always_inline("nodebug")
+    def __eq__(self, rhs: Self) -> Bool:
+        """Return True when both carry the same AF_* id.
+
+        Args:
+            rhs: The family to compare against.
+
+        Returns:
+            True if the ids are equal.
+        """
+        return self.id == rhs.id
+
+    @always_inline("nodebug")
+    def __ne__(self, rhs: Self) -> Bool:
+        """Return True when the AF_* ids differ.
+
+        Args:
+            rhs: The family to compare against.
+
+        Returns:
+            True if the ids differ.
+        """
+        return self.id != rhs.id
+
+    @staticmethod
+    def from_sockaddr(bytes: Span[UInt8, _]) -> Self:
+        """Decode the family stored at the front of a sockaddr byte image.
+
+        Every sockaddr the kernel writes starts with a host-order
+        `sa_family_t`. This is the one place boucle reads it;
+        `_getpeername`, `recv_from_v4` and `recv_from_v6` all go
+        through here.
+
+        Args:
+            bytes: The sockaddr bytes as the kernel wrote them. Only the
+                   first two are read.
+
+        Returns:
+            INET, INET6 or UNIX when the id is one of those; UNSPEC when
+            fewer than two bytes are present or the id is any other
+            family.
+        """
+        if len(bytes) < 2:
+            return Self.UNSPEC
+        var id = (
+            bytes.unsafe_ptr().unsafe_bitcast[UInt16]().unsafe_load[alignment=1]()
+        )
+        if id == Self.INET.id or id == Self.INET6.id or id == Self.UNIX.id:
+            return Self(unsafe_id=id)
+        return Self.UNSPEC
 
 
 struct Protocol(TrivialRegisterPassable, Defaultable):
@@ -163,6 +217,7 @@ struct RecvFlags(TrivialRegisterPassable, Defaultable):
     comptime OOB = Self(1)                   # MSG_OOB
     comptime PEEK = Self(2)                  # MSG_PEEK
     comptime TRUNC = Self(32)                # MSG_TRUNC
+    comptime CTRUNC = Self(8)                # MSG_CTRUNC
     comptime WAITALL = Self(256)             # MSG_WAITALL
 
     var value: UInt32
@@ -245,6 +300,8 @@ from boucle.socle.platform import (
     AF_INET6 as _AF_INET6,
     SOCK_STREAM as _SOCK_STREAM,
     SOCK_DGRAM as _SOCK_DGRAM,
+    MSG_TRUNC as _MSG_TRUNC,
+    MSG_CTRUNC as _MSG_CTRUNC,
 )
 
 def _verify_platform_values():
@@ -255,6 +312,8 @@ def _verify_platform_values():
     comptime assert AddrFamily.INET6.id == UInt16(_AF_INET6), "AF_INET6 mismatch"
     comptime assert SocketType.STREAM.id == Int32(_SOCK_STREAM), "SOCK_STREAM mismatch"
     comptime assert SocketType.DGRAM.id == Int32(_SOCK_DGRAM), "SOCK_DGRAM mismatch"
+    comptime assert RecvFlags.TRUNC.value == UInt32(_MSG_TRUNC), "MSG_TRUNC mismatch"
+    comptime assert RecvFlags.CTRUNC.value == UInt32(_MSG_CTRUNC), "MSG_CTRUNC mismatch"
 
 
 comptime _VERIFIED_PLATFORM_VALUES: None = _verify_platform_values()

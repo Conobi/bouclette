@@ -127,6 +127,10 @@ comptime SO_SNDTIMEO = 21
 comptime IP_PKTINFO = 8
 comptime IPV6_V6ONLY = 26
 comptime IPV6_RECVPKTINFO = 49
+comptime IP_TOS = 1
+comptime IP_RECVTOS = 13
+comptime IPV6_TCLASS = 67
+comptime IPV6_RECVTCLASS = 66
 comptime UDP_GRO = 104
 comptime UDP_SEGMENT = 103
 

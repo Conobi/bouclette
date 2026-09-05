@@ -11,16 +11,80 @@ from std.memory.alloc import unsafe_alloc as _heap_alloc
 
 from boucle.socle.linux.io_uring import IoUring
 from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers
-from boucle.socle.linux.io_uring.types import IoUringSqeFlags, IoUringAcceptFlags, IoUringBufReg, IoUringRegisterOp
+from boucle.socle.linux.io_uring.types import (
+    IoUringSqeFlags,
+    IoUringAcceptFlags,
+    IoUringBufReg,
+    IoUringFeatureFlags,
+    IoUringOp,
+    IoUringParams,
+    IoUringProbe,
+    IoUringRegisterOp,
+    IoUringSetupFlags,
+)
 from boucle.socle.linux.raw import IORING_RECV_MULTISHOT
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import msghdr
+from boucle.socle.linux.uname import kernel_version, KernelVersion
 from boucle.handle import RawHandle
 from boucle.socle.ptr import null_ptr
 from boucle.drivers.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
 from boucle.drivers.backend import Backend
 from boucle.drivers.driver import IoDriver
+from boucle.drivers.feature import DriverFeature
+
+
+# Kernel versions that introduced the features the opcode probe cannot see.
+comptime _MULTISHOT_RECVMSG_MAJOR = 6
+comptime _MULTISHOT_RECVMSG_MINOR = 0
+comptime _BUFFER_RING_MAJOR = 5
+comptime _BUFFER_RING_MINOR = 19
+
+
+@fieldwise_init
+struct _KernelFeatures(TrivialRegisterPassable):
+    """The three feature answers `supports()` reports from.
+
+    Fields:
+        multishot_recvmsg: RECVMSG probed as supported and the kernel is
+                            6.0 or newer.
+        buffer_ring: The kernel is 5.19 or newer.
+        timeout_arg: `IORING_FEAT_EXT_ARG` was reported at setup.
+    """
+
+    var multishot_recvmsg: Bool
+    var buffer_ring: Bool
+    var timeout_arg: Bool
+
+
+def _features_from(
+    kv: KernelVersion, probe_ok: Bool, features: IoUringFeatureFlags
+) -> _KernelFeatures:
+    """Compute the version/probe-gated feature answers.
+
+    Pure function factored out of `IoUringDriver.__init__` so the
+    degrade-on-failure path is unit-testable without forcing a real
+    `uname(2)` failure: an unreadable kernel release becomes
+    `KernelVersion(0, 0)`, which fails every `at_least` gate below, so
+    both version-gated features answer False.
+
+    Args:
+        kv: The kernel version to gate against. `KernelVersion(0, 0)`
+            simulates an unreadable release.
+        probe_ok: Whether `IORING_REGISTER_PROBE` reported RECVMSG as
+                  supported.
+        features: The setup feature flags reported by `io_uring_setup`.
+
+    Returns:
+        The three feature answers `supports()` reports from.
+    """
+    return _KernelFeatures(
+        multishot_recvmsg=probe_ok
+        and kv.at_least(_MULTISHOT_RECVMSG_MAJOR, _MULTISHOT_RECVMSG_MINOR),
+        buffer_ring=kv.at_least(_BUFFER_RING_MAJOR, _BUFFER_RING_MINOR),
+        timeout_arg=Bool(features & IoUringFeatureFlags.EXT_ARG),
+    )
 
 
 struct IoUringDriver(IoDriver):
@@ -29,12 +93,49 @@ struct IoUringDriver(IoDriver):
     Each submitted operation stores its Completion pointer as the
     operation user_data. On completion arrival, tick() recovers the
     pointer and fires the callback with the kernel result and flags.
+
+    Construction reads three facts about the running kernel and keeps
+    only the answers `supports()` needs: the opcode probe
+    (`IORING_REGISTER_PROBE`), the release from `uname` for multishot
+    recvmsg (6.0) and buffer rings (5.19), which the probe does not
+    expose, and the setup feature flags for `IORING_FEAT_EXT_ARG`. The
+    ring is always requested with `IORING_SETUP_NO_SQARRAY`.
+
+    Fields:
+        _ring: The io_uring instance.
+        _setup_flags: The io_uring setup flags requested at construction
+                      (always includes `IORING_SETUP_NO_SQARRAY`).
+        _supports_multishot_recvmsg: RECVMSG probes as supported and the
+                                     kernel is 6.0 or newer.
+        _supports_buffer_ring: The kernel is 5.19 or newer.
+        _supports_timeout_arg: `IORING_FEAT_EXT_ARG` was reported at setup.
     """
 
     var _ring: IoUring[]
+    var _setup_flags: IoUringSetupFlags
+    var _supports_multishot_recvmsg: Bool
+    var _supports_buffer_ring: Bool
+    var _supports_timeout_arg: Bool
 
     def __init__(out self, *, capacity: Int = 64) raises:
         """Construct an IoUringDriver with the given capacity hint.
+
+        Sets up the ring with `IORING_SETUP_NO_SQARRAY`, then reads
+        three facts about the running kernel and keeps only the
+        answers `supports()` needs: registers the opcode probe
+        (`IORING_REGISTER_PROBE`) -- one extra `io_uring_register`
+        syscall beyond ring setup -- to learn whether RECVMSG is
+        supported; reads the release via `uname(2)` for the two
+        features the probe cannot see (multishot recvmsg at 6.0,
+        buffer rings at 5.19); and reads the setup feature flags the
+        kernel reported for `IORING_FEAT_EXT_ARG`.
+
+        Neither optional read aborts construction on failure. A failed
+        probe register (e.g. a pre-5.6 kernel without
+        `IORING_REGISTER_PROBE`) degrades to "RECVMSG unsupported". An
+        unreadable kernel release degrades to `KernelVersion(0, 0)`,
+        which fails every version gate and so answers False to both
+        multishot recvmsg and buffer rings.
 
         Args:
             capacity: How many operations the driver should be ready to
@@ -42,11 +143,47 @@ struct IoUringDriver(IoDriver):
                       submission queue size, which the kernel rounds up
                       to a power of two.
         """
-        self._ring = IoUring[](sq_entries=UInt32(capacity))
+        var params = IoUringParams()
+        params.flags |= IoUringSetupFlags.NO_SQARRAY
+        self._ring = IoUring[](sq_entries=UInt32(capacity), params=params)
+        self._setup_flags = params.flags
+
+        var probe_ok: Bool
+        var probe = IoUringProbe()
+        try:
+            _ = self._ring.register(
+                probe.as_register_arg(
+                    unsafe_opcode=IoUringRegisterOp.REGISTER_PROBE
+                )
+            )
+            probe_ok = probe.is_supported(IoUringOp.RECVMSG)
+        except:
+            # Catches any register() failure, not only a pre-5.6 kernel
+            # missing REGISTER_PROBE (EINVAL): whatever the cause, none
+            # of the optional features this probe would confirm are
+            # assumed usable.
+            probe_ok = False
+
+        var kv: KernelVersion
+        try:
+            kv = kernel_version()
+        except:
+            # An unreadable release degrades to "no optional feature":
+            # KernelVersion(0, 0) fails every at_least gate.
+            kv = KernelVersion(0, 0)
+
+        var features = _features_from(kv, probe_ok, params.features)
+        self._supports_multishot_recvmsg = features.multishot_recvmsg
+        self._supports_buffer_ring = features.buffer_ring
+        self._supports_timeout_arg = features.timeout_arg
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self._ring = move._ring^
+        self._setup_flags = move._setup_flags
+        self._supports_multishot_recvmsg = move._supports_multishot_recvmsg
+        self._supports_buffer_ring = move._supports_buffer_ring
+        self._supports_timeout_arg = move._supports_timeout_arg
 
     def tick(mut self, wait: Bool) raises -> Int:
         """Submit pending operations and dispatch completed operations.
@@ -423,6 +560,39 @@ struct IoUringDriver(IoDriver):
     def backend(self) -> Backend:
         """Return Backend.IO_URING."""
         return Backend.IO_URING
+
+    def setup_flags(self) -> IoUringSetupFlags:
+        """Return the io_uring setup flags requested at construction.
+
+        Read-only, exposed so tests can confirm a specific flag (e.g.
+        `IORING_SETUP_NO_SQARRAY`) was actually requested from the
+        kernel, without reaching into the ring's internals.
+
+        Returns:
+            The flags passed to `io_uring_setup` when this driver's
+            ring was created.
+        """
+        return self._setup_flags
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return whether this kernel provides `feature` natively.
+
+        Answers come from facts read at construction; nothing is
+        submitted here.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            True if the feature can be used on this driver.
+        """
+        if feature is DriverFeature.MULTISHOT_RECVMSG:
+            return self._supports_multishot_recvmsg
+        if feature is DriverFeature.BUFFER_RING:
+            return self._supports_buffer_ring
+        if feature is DriverFeature.TIMEOUT_ARG:
+            return self._supports_timeout_arg
+        return False
 
     def register_buf_ring(
         mut self,
