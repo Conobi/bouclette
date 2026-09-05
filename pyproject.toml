@@ -10,6 +10,11 @@ dependencies = [
     "mojo-compiler-mojo-libs==1.0.0",
 ]
 
+[dependency-groups]
+dev = [
+    "mojo==1.0.0",
+]
+
 [build-system]
 requires = [
     "mojox-build>=0.5",
