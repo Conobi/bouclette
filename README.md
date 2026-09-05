@@ -16,7 +16,7 @@
 
 Most I/O libraries pick one model and emulate the other. Boucle exposes both as first-class APIs over shared types, so you pick the model that fits your workload — not the one your library chose for you.
 
-- **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`, `IOError` and `Backend`. No adapter layers.
+- **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`/`SocketAddrV6`, `IOError` and `Backend`. No adapter layers.
 - **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
 - **Automatic backend selection.** `Backend.AUTO` picks io_uring when the kernel supports it, falls back to epoll otherwise. A single binary works across kernel versions.
 - **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value*. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count. Dropping the future without running the loop is harmless.

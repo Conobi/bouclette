@@ -16,7 +16,7 @@ and result() reports the destroyed loop.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.net.addr import SocketAddrStorV4
+from boucle.net.addr import SocketAddrStorAny
 from boucle.proactor.completion import Completion
 from boucle.watch._callback import _FutureCallback, _SlotLink, _dispatch
 from boucle.watch.outcome import ConnectOutcome
@@ -42,7 +42,8 @@ struct _ConnectFutureState(_FutureCallback):
     Fields:
         completion: The per-operation completion token (fn ptr + context
                     ptr) whose address the driver holds.
-        _addr_stor: Copy of the target address for pointer stability.
+        _addr_stor: Copy of the target address (IPv4 or IPv6) for
+                    pointer stability.
         _result: Raw completion result (0 on success, negative errno on
                  failure).
         done: True once the completion callback has fired.
@@ -55,7 +56,7 @@ struct _ConnectFutureState(_FutureCallback):
     """
 
     var completion: Completion
-    var _addr_stor: SocketAddrStorV4
+    var _addr_stor: SocketAddrStorAny
     var _result: Int
     var done: Bool
     var consumed: Bool
@@ -63,14 +64,15 @@ struct _ConnectFutureState(_FutureCallback):
     var _loop_gone: Bool
     var _link: _SlotLink
 
-    def __init__(out self, addr_stor: SocketAddrStorV4):
+    def __init__(out self, addr_stor: SocketAddrStorAny):
         """Construct a _ConnectFutureState with address storage.
 
         The completion is initialized with a no-op callback; the caller
         must wire invoke and context once the state is in its slot.
 
         Args:
-            addr_stor: Copy of the target sockaddr for pointer stability.
+            addr_stor: Copy of the target sockaddr (IPv4 or IPv6) for
+                       pointer stability.
         """
         self.completion = Completion()
         self._addr_stor = addr_stor

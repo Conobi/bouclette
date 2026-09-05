@@ -4,11 +4,12 @@ Exercises the composite connect+timeout+cancel lifecycle:
 - Connect succeeds before timeout fires.
 - Connect refused (port nobody listens on).
 - Timeout fires before connect completes (non-routable address).
+- The same success and refused paths over IPv6 loopback.
 """
 
 from std.testing import assert_true
 
-from boucle.net.addr import SocketAddrV4
+from boucle.net.addr import SocketAddrV4, SocketAddrV6
 from boucle.net.options import Backlog
 from boucle.net.socket import Socket
 from boucle.watch import (
@@ -28,6 +29,31 @@ def _make_tcp_listener() raises -> Socket:
     var server = Socket.tcp_v4()
     server.set_reuse_addr()
     server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    server.listen(Backlog.DEFAULT)
+    return server^
+
+
+def _loopback_v6(port: UInt16) -> SocketAddrV6:
+    """Return the IPv6 loopback address ::1 on the given port.
+
+    Args:
+        port: The port in host order.
+
+    Returns:
+        [::1]:port.
+    """
+    return SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 1, port=port)
+
+
+def _make_tcp_listener_v6() raises -> Socket:
+    """Create a TCP v6 listener on ::1 with an ephemeral port.
+
+    Returns:
+        A non-blocking, listening socket.
+    """
+    var server = Socket.tcp_v6()
+    server.set_reuse_addr()
+    server.bind(_loopback_v6(0))
     server.listen(Backlog.DEFAULT)
     return server^
 
@@ -124,8 +150,77 @@ def test_connect_with_timeout_timeout() raises:
     client.close()
 
 
+def test_connect_with_timeout_success_v6() raises:
+    """Connect to [::1] succeeds before timeout fires.
+
+    Same lifecycle as the IPv4 case, over an IPv6 loopback listener.
+    """
+    var server = _make_tcp_listener_v6()
+    var port = server.local_addr_v6().port
+    assert_true(Int(port) > 0, "ephemeral port should be > 0")
+
+    var client = Socket.tcp_v6()
+    var target_addr = _loopback_v6(port)
+
+    var loop = WatchLoop(capacity=16)
+    var accept_f = loop.accept(server)
+    var connect_f = loop.connect_with_timeout(
+        client, target_addr, timeout_ms=5000
+    )
+
+    loop.run()
+
+    assert_true(connect_f.done(), "connect should be done after run()")
+    assert_true(accept_f.done(), "accept should be done after run()")
+
+    var outcome = connect_f.result()
+    assert_true(outcome.is_connected(), "outcome should be CONNECTED")
+
+    var accepted = accept_f.result()
+    assert_true(accepted.raw() >= 0, "accepted fd should be valid")
+
+    accepted.close()
+    client.close()
+    server.close()
+
+
+def test_connect_with_timeout_refused_v6() raises:
+    """Connect to a closed IPv6 loopback port is REFUSED.
+
+    Binds a listener on ::1 to learn a free ephemeral port, closes it,
+    then connects to that port: nothing listens there any more, so the
+    kernel returns ECONNREFUSED before the timeout fires.
+    """
+    var probe = _make_tcp_listener_v6()
+    var port = probe.local_addr_v6().port
+    assert_true(Int(port) > 0, "ephemeral port should be > 0")
+    probe.close()
+
+    var client = Socket.tcp_v6()
+    var target_addr = _loopback_v6(port)
+
+    var loop = WatchLoop(capacity=16)
+    var connect_f = loop.connect_with_timeout(
+        client, target_addr, timeout_ms=1000
+    )
+
+    loop.run()
+
+    assert_true(connect_f.done(), "connect should be done after run()")
+
+    var outcome = connect_f.result()
+    assert_true(
+        outcome.is_refused(),
+        String("outcome should be REFUSED, got: ", outcome),
+    )
+
+    client.close()
+
+
 def main() raises:
     test_connect_with_timeout_success()
     test_connect_with_timeout_refused()
     test_connect_with_timeout_timeout()
+    test_connect_with_timeout_success_v6()
+    test_connect_with_timeout_refused_v6()
     print("ConnectWithTimeoutFuture tests passed.")

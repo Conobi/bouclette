@@ -34,7 +34,7 @@ from std.memory.alloc import unsafe_alloc
 from boucle.drivers import _WatchDriver
 from boucle.drivers.backend import Backend
 from boucle.handle import RawHandle
-from boucle.net.addr import SocketAddrV4, SocketAddrStorV4
+from boucle.net.addr import SocketAddrStor, SocketAddrStorAny
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
@@ -255,24 +255,29 @@ struct WatchLoop(Movable):
 
         return AcceptFuture(state_ptr)
 
-    def connect(
-        mut self, ref socket: Socket, ref addr: SocketAddrV4
-    ) raises -> ConnectFuture:
+    def connect[
+        Addr: SocketAddrStor
+    ](mut self, ref socket: Socket, ref addr: Addr) raises -> ConnectFuture:
         """Submit an async connect on a socket to the given address.
 
         Returns a ConnectFuture that resolves to a ConnectOutcome after
-        run() completes. The address storage is copied into the
-        slab-owned state for pointer stability.
+        run() completes. The address is converted to its kernel storage
+        and copied into the slab-owned state for pointer stability.
+
+        Parameters:
+            Addr: The address type, SocketAddrV4 or SocketAddrV6.
 
         Args:
-            socket: The socket to connect.
-            addr: The target IPv4 address to connect to.
+            socket: The socket to connect; its family must match `addr`.
+            addr: The target IPv4 or IPv6 address to connect to.
 
         Returns:
             A ConnectFuture representing the in-flight connect.
         """
-        var addr_stor = SocketAddrStorV4(addr)
-        var state_ptr = self._connects.alloc(_ConnectFutureState(addr_stor))
+        var stor = addr.addr_stor()
+        var state_ptr = self._connects.alloc(
+            _ConnectFutureState(SocketAddrStorAny(stor))
+        )
 
         state_ptr[].completion.invoke = _dispatch[_ConnectFutureState]
         state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
@@ -283,16 +288,18 @@ struct WatchLoop(Movable):
 
         var fd = socket.raw()
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
-        var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
+        var addr_len = UInt64(state_ptr[]._addr_stor.addr_len())
         self._driver.connect(fd, addr_ptr, addr_len, cmp_ptr)
         self._pending += 1
 
         return ConnectFuture(state_ptr)
 
-    def connect_with_timeout(
+    def connect_with_timeout[
+        Addr: SocketAddrStor
+    ](
         mut self,
         ref socket: Socket,
-        ref addr: SocketAddrV4,
+        ref addr: Addr,
         timeout_ms: UInt64,
     ) raises -> ConnectWithTimeoutFuture:
         """Submit a connect with a kernel-level timeout.
@@ -300,22 +307,26 @@ struct WatchLoop(Movable):
         Submits both a connect operation and a timeout operation. The
         first to complete resolves the operation; the other is cancelled.
         Returns a ConnectWithTimeoutFuture that resolves to a
-        ConnectOutcome after run() completes. The address storage is
-        copied into the slab-owned state for pointer stability.
+        ConnectOutcome after run() completes. The address is converted
+        to its kernel storage and copied into the slab-owned state for
+        pointer stability.
+
+        Parameters:
+            Addr: The address type, SocketAddrV4 or SocketAddrV6.
 
         Args:
-            socket: The socket to connect.
-            addr: The target IPv4 address.
+            socket: The socket to connect; its family must match `addr`.
+            addr: The target IPv4 or IPv6 address.
             timeout_ms: Timeout in milliseconds.
 
         Returns:
             A ConnectWithTimeoutFuture representing the in-flight
             composite operation.
         """
-        var addr_stor = SocketAddrStorV4(addr)
+        var stor = addr.addr_stor()
         var ts = Timeout.from_ms(Int64(timeout_ms))
         var state_ptr = self._connects_with_timeout.alloc(
-            _ConnectWithTimeoutState(addr_stor, ts)
+            _ConnectWithTimeoutState(SocketAddrStorAny(stor), ts)
         )
 
         state_ptr[]._connect_cmp.invoke = (
@@ -336,7 +347,7 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[]._connect_cmp))
         )
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
-        var addr_len = UInt64(SocketAddrStorV4.ADDR_LEN)
+        var addr_len = UInt64(state_ptr[]._addr_stor.addr_len())
         self._driver.connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
 
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](

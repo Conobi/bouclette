@@ -891,26 +891,31 @@ struct Socket(Movable):
 
     def send_to[
         origin: Origin,
-    ](self, buf: Span[UInt8, origin], ref addr: SocketAddrV4) raises IOError -> Int:
+        Addr: SocketAddrStor,
+    ](self, buf: Span[UInt8, origin], ref addr: Addr) raises IOError -> Int:
         """Send a datagram to `addr` via sendto(2).
 
         Uses ``MSG_NOSIGNAL`` internally to suppress ``SIGPIPE`` on Linux.
         Designed for unconnected UDP sockets — the destination address is
-        specified per-call rather than via a prior ``connect(2)``.
+        specified per-call rather than via a prior ``connect(2)``. The
+        address family follows the type of `addr`; it must match the
+        socket's own family.
 
         Args:
             buf: Byte span to send.
-            addr: IPv4 destination address (ip + port).
+            addr: IPv4 or IPv6 destination address (ip + port).
 
         Returns:
             Number of bytes actually sent.
 
         Raises:
             IOError on syscall failure. On a non-blocking socket a full send
-            buffer surfaces as EAGAIN / EWOULDBLOCK.
+            buffer surfaces as EAGAIN / EWOULDBLOCK; a destination whose
+            family differs from the socket's surfaces as EAFNOSUPPORT or
+            EINVAL from the kernel.
         """
         var stor = addr.addr_stor()
-        var stor_p = Pointer(to=stor.addr)
+        var stor_p = Pointer(to=stor)
         var fd = self._handle._raw
         var buf_ptr = Pointer[UInt8, origin](
             unsafe_from_address=Int(buf.unsafe_ptr())
@@ -921,33 +926,34 @@ struct Socket(Movable):
             len(buf),
             Int32(MSG_NOSIGNAL),
             stor_p.unsafe_bitcast[UInt8](),
-            UInt(size_of[sockaddr_in]()),
+            UInt(Addr.AddrStorType.ADDR_LEN),
         )
         if n >= 0:
             return n
         raise IOError.from_errno(n)
 
-    def recv_from[
+    def _recv_from_any[
         origin: MutOrigin,
-    ](self, buf: Span[UInt8, origin]) raises IOError -> Tuple[Int, SocketAddrV4]:
-        """Receive a datagram and the sender's address via recvfrom(2).
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Tuple[Int, sockaddr_in6]:
+        """Receive a datagram and the raw sender address via recvfrom(2).
 
-        Designed for unconnected UDP sockets. Returns a tuple of bytes
-        read and the sender's SocketAddrV4 so the caller can reply to
-        the correct peer.
+        The address is received into a ``sockaddr_in6``-sized buffer, large
+        enough for either family, so the kernel never truncates it. The
+        family the kernel wrote is left in the ``sin6_family`` field for the
+        public ``recv_from_v4`` / ``recv_from_v6`` wrappers to check.
 
         Args:
             buf: Mutable byte span to receive into.
 
         Returns:
-            A tuple of (bytes_read, sender_address).
+            A tuple of (bytes_read, raw_sender_address).
 
         Raises:
             IOError on syscall failure. On a non-blocking socket an empty
             receive queue surfaces as EAGAIN / EWOULDBLOCK.
         """
-        var addr = sockaddr_in()
-        var addrlen = socklen_t(size_of[sockaddr_in]())
+        var addr = sockaddr_in6()
+        var addrlen = socklen_t(size_of[sockaddr_in6]())
         var addr_p = Pointer(to=addr)
         var len_p = Pointer(to=addrlen)
         var fd = self._handle._raw
@@ -963,9 +969,67 @@ struct Socket(Movable):
         )
         if n < 0:
             raise IOError.from_errno(n)
+        return (n, addr)
+
+    def recv_from_v4[
+        origin: MutOrigin,
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Tuple[Int, SocketAddrV4]:
+        """Receive a datagram and its IPv4 sender address via recvfrom(2).
+
+        Designed for unconnected UDP IPv4 sockets. Returns the bytes read
+        and the sender's SocketAddrV4 so the caller can reply to the
+        correct peer. The family the kernel reports is checked before
+        decoding: a source that is not AF_INET (an IPv6 socket, say) raises
+        rather than yielding a garbage address.
+
+        Args:
+            buf: Mutable byte span to receive into.
+
+        Returns:
+            A tuple of (bytes_read, sender_address).
+
+        Raises:
+            IOError on syscall failure — on a non-blocking socket an empty
+            receive queue surfaces as EAGAIN / EWOULDBLOCK — or
+            IOError(EAFNOSUPPORT) when the sender's family is not AF_INET.
+        """
+        var received = self._recv_from_any(buf)
+        var raw = received[1]
+        if Int(raw.sin6_family) != AF_INET:
+            raise IOError(positive_errno=EAFNOSUPPORT)
         var stor = SocketAddrStorV4()
-        stor.addr = addr
-        return (n, stor.to_v4())
+        stor.addr = Pointer(to=raw).unsafe_bitcast[sockaddr_in]()[]
+        return (received[0], stor.to_v4())
+
+    def recv_from_v6[
+        origin: MutOrigin,
+    ](self, buf: Span[UInt8, origin]) raises IOError -> Tuple[Int, SocketAddrV6]:
+        """Receive a datagram and its IPv6 sender address via recvfrom(2).
+
+        Designed for unconnected UDP IPv6 sockets. Returns the bytes read
+        and the sender's SocketAddrV6 so the caller can reply to the
+        correct peer. The family the kernel reports is checked before
+        decoding: a source that is not AF_INET6 (an IPv4 socket, say)
+        raises rather than yielding a garbage address.
+
+        Args:
+            buf: Mutable byte span to receive into.
+
+        Returns:
+            A tuple of (bytes_read, sender_address).
+
+        Raises:
+            IOError on syscall failure — on a non-blocking socket an empty
+            receive queue surfaces as EAGAIN / EWOULDBLOCK — or
+            IOError(EAFNOSUPPORT) when the sender's family is not AF_INET6.
+        """
+        var received = self._recv_from_any(buf)
+        var raw = received[1]
+        if Int(raw.sin6_family) != AF_INET6:
+            raise IOError(positive_errno=EAFNOSUPPORT)
+        var stor = SocketAddrStorV6()
+        stor.addr = raw
+        return (received[0], stor.to_v6())
 
     def shutdown(self, how: Shutdown) raises IOError:
         """Shut down read, write, or both directions.

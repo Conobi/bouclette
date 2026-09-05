@@ -1,0 +1,114 @@
+"""Test SocketAddrStorAny — family-agnostic sockaddr storage.
+
+A SocketAddrStorAny is built from a concrete storage (sockaddr_in or
+sockaddr_in6) and remembers how many bytes of it are meaningful, so a
+single field can hold the target of a connect for either family.
+"""
+
+from std.sys.info import size_of
+from std.testing import assert_equal, assert_true
+
+from boucle.net.addr import (
+    SocketAddrStorAny,
+    SocketAddrStorV4,
+    SocketAddrStorV6,
+    SocketAddrV4,
+    SocketAddrV6,
+)
+from boucle.socle.platform import sockaddr_in6
+
+
+def test_default_is_zeroed() raises:
+    """The default storage has no family, no length, all-zero bytes."""
+    var any = SocketAddrStorAny()
+    assert_equal(Int(any.addr_len()), 0)
+    var bytes = Pointer(to=any.addr).unsafe_bitcast[UInt8]()
+    for i in range(size_of[sockaddr_in6]()):
+        assert_equal(Int(bytes[unsafe_offset=i]), 0, "byte must be zero")
+    assert_equal(
+        Int(any.addr_unsafe_ptr()),
+        Int(Pointer(to=any.addr)),
+        "addr_unsafe_ptr must point at the stored bytes",
+    )
+
+
+def test_from_v4_storage() raises:
+    """Built from a sockaddr_in, the length is 16 and the head bytes match.
+
+    sockaddr_in and sockaddr_in6 share the family (offset 0) and port
+    (offset 2) prefix, so the copied bytes must decode to AF_INET and
+    carry the same network-order port as the source storage.
+    """
+    var addr4 = SocketAddrV4(127, 0, 0, 1, port=8080)
+    var stor4 = addr4.addr_stor()
+    var any = SocketAddrStorAny(stor4)
+
+    assert_equal(Int(any.addr_len()), 16)
+    assert_equal(Int(any.addr_len()), Int(SocketAddrStorV4.ADDR_LEN))
+    assert_equal(Int(any.addr.sin6_family), 2, "family must be AF_INET")
+    assert_equal(
+        Int(any.addr.sin6_port),
+        Int(stor4.addr.sin_port),
+        "port bytes must match the source storage",
+    )
+
+    var src = Pointer(to=stor4.addr).unsafe_bitcast[UInt8]()
+    var dst = Pointer(to=any.addr).unsafe_bitcast[UInt8]()
+    for i in range(Int(SocketAddrStorV4.ADDR_LEN)):
+        assert_equal(
+            Int(dst[unsafe_offset=i]),
+            Int(src[unsafe_offset=i]),
+            String("byte ", i, " must match the source storage"),
+        )
+    # Bytes past the IPv4 length are untouched by the copy.
+    for i in range(Int(SocketAddrStorV4.ADDR_LEN), size_of[sockaddr_in6]()):
+        assert_equal(Int(dst[unsafe_offset=i]), 0, "tail must stay zero")
+
+
+def test_from_v6_storage_round_trips() raises:
+    """Built from a sockaddr_in6, the length is 28 and the address survives.
+
+    Reinterpreting the stored bytes as a SocketAddrStorV6 and decoding
+    them with to_v6() must give back the original address, port and
+    scope id.
+    """
+    var addr6 = SocketAddrV6(
+        0x2001, 0x0DB8, 0, 0, 0, 0, 0, 1, port=443, scope_id=7
+    )
+    var stor6 = addr6.addr_stor()
+    var any = SocketAddrStorAny(stor6)
+
+    assert_equal(Int(any.addr_len()), 28)
+    assert_equal(Int(any.addr_len()), Int(SocketAddrStorV6.ADDR_LEN))
+    assert_equal(Int(any.addr.sin6_family), 10, "family must be AF_INET6")
+
+    var back = SocketAddrStorV6()
+    back.addr = any.addr
+    var decoded = back.to_v6()
+    assert_equal(decoded.port, UInt16(443))
+    assert_equal(decoded.scope_id, UInt32(7))
+    assert_equal(decoded.segments()[0], UInt16(0x2001))
+    assert_equal(decoded.segments()[1], UInt16(0x0DB8))
+    assert_equal(decoded.segments()[7], UInt16(1))
+    for i in range(2, 7):
+        assert_equal(decoded.segments()[i], UInt16(0))
+
+
+def test_copy_keeps_bytes_and_len() raises:
+    """A copy of the storage carries the same bytes and length."""
+    var addr4 = SocketAddrV4(10, 0, 0, 2, port=9)
+    var any = SocketAddrStorAny(addr4.addr_stor())
+    var copy = any
+    assert_equal(Int(copy.addr_len()), 16)
+    var a = Pointer(to=any.addr).unsafe_bitcast[UInt8]()
+    var b = Pointer(to=copy.addr).unsafe_bitcast[UInt8]()
+    for i in range(size_of[sockaddr_in6]()):
+        assert_equal(Int(a[unsafe_offset=i]), Int(b[unsafe_offset=i]))
+
+
+def main() raises:
+    test_default_is_zeroed()
+    test_from_v4_storage()
+    test_from_v6_storage_round_trips()
+    test_copy_keeps_bytes_and_len()
+    print("PASS: test_addr_any.mojo")

@@ -26,7 +26,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
 from boucle.drivers import _WatchDriver
-from boucle.net.addr import SocketAddrStorV4
+from boucle.net.addr import SocketAddrStorAny
 from boucle.proactor.completion import Completion
 from boucle.timeout import Timeout
 from boucle.watch._callback import _InFlightState, _SlotLink
@@ -52,7 +52,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
         _connect_cmp: Completion token for the connect operation.
         _timeout_cmp: Completion token for the timeout operation.
         _cancel_cmp: Completion token for the cancel operation.
-        _addr_stor: Copy of the target address for pointer stability.
+        _addr_stor: Copy of the target address (IPv4 or IPv6) for
+                    pointer stability.
         _ts: Timeout duration for operation pointer stability.
         _result: Raw completion result from the resolving callback.
         _result_set: True once a non-ECANCELED completion resolves the
@@ -73,7 +74,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
     var _connect_cmp: Completion
     var _timeout_cmp: Completion
     var _cancel_cmp: Completion
-    var _addr_stor: SocketAddrStorV4
+    var _addr_stor: SocketAddrStorAny
     var _ts: Timeout
     var _result: Int
     var _result_set: Bool
@@ -89,7 +90,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
     def __init__(
         out self,
-        addr_stor: SocketAddrStorV4,
+        addr_stor: SocketAddrStorAny,
         ts: Timeout,
     ):
         """Construct state with address storage and timeout.
@@ -98,7 +99,8 @@ struct _ConnectWithTimeoutState(_InFlightState):
         and context after heap allocation.
 
         Args:
-            addr_stor: Copy of the target sockaddr for pointer stability.
+            addr_stor: Copy of the target sockaddr (IPv4 or IPv6) for
+                       pointer stability.
             ts: Timeout duration for the kernel timer.
         """
         self._connect_cmp = Completion()

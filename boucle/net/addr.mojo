@@ -2,7 +2,9 @@
 
 Provides SocketAddrV4 / SocketAddrV6 (user-facing) and their storage
 counterparts SocketAddrStorV4 / SocketAddrStorV6 that map directly to
-the kernel's sockaddr_in / sockaddr_in6 layouts.
+the kernel's sockaddr_in / sockaddr_in6 layouts, plus SocketAddrStorAny,
+a family-agnostic storage sized for the largest of them so one field
+can hold the target of an operation for either family.
 
 Traits
 ------
@@ -95,6 +97,84 @@ struct SocketAddrStorAnyMut[Addr: SocketAddr](SocketAddrMut):
         return Pointer[Int8, ImmStaticOrigin](
             unsafe_from_address=Int(Pointer(to=self.len))
         )
+
+
+# ===----------------------------------------------------------------------=== #
+# Family-agnostic storage
+# ===----------------------------------------------------------------------=== #
+
+
+struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
+    """Storage large enough for any supported sockaddr, plus its length.
+
+    The kernel takes a socket address as an opaque pointer and a byte
+    count, so an operation that must hold its target address for the
+    life of the request does not need to know the family — it needs the
+    bytes and how many of them are meaningful. This struct copies a
+    concrete storage (SocketAddrStorV4, SocketAddrStorV6, ...) into a
+    buffer laid out as the largest supported sockaddr and records the
+    source's length.
+
+    Fields:
+        addr: Byte buffer laid out as sockaddr_in6, the largest sockaddr
+              supported. Only the first `len` bytes are meaningful.
+        len: Number of meaningful bytes in `addr` (0 when default-built).
+    """
+
+    var addr: sockaddr_in6
+    var len: socklen_t
+
+    @always_inline
+    def __init__(out self):
+        """Construct an empty storage: all bytes zero, length zero."""
+        self.addr = sockaddr_in6()
+        self.len = 0
+
+    def __init__[Addr: SocketAddr](out self, ref stor: Addr):
+        """Copy a concrete sockaddr storage into the family-agnostic buffer.
+
+        Copies `Addr.ADDR_LEN` bytes from the source storage; any bytes
+        past that length stay zero.
+
+        Parameters:
+            Addr: The concrete storage type, e.g. SocketAddrStorV4.
+
+        Args:
+            stor: The storage whose bytes are copied.
+        """
+        comptime assert Int(Addr.ADDR_LEN) <= size_of[sockaddr_in6](), (
+            "sockaddr storage larger than the largest supported family"
+        )
+        self.addr = sockaddr_in6()
+        self.len = Addr.ADDR_LEN
+        var n = Int(self.len)
+        var src = stor.addr_unsafe_ptr()
+        var dst = Pointer(to=self.addr).unsafe_bitcast[UInt8]()
+        for i in range(n):
+            dst[unsafe_offset=i] = src[unsafe_offset=i]
+
+    @always_inline
+    def addr_unsafe_ptr(
+        ref self,
+    ) -> Pointer[UInt8, ImmStaticOrigin]:
+        """Return a byte pointer to the start of the stored sockaddr.
+
+        Returns:
+            A pointer to the first byte of `addr`; valid for as long as
+            this struct is not moved or destroyed.
+        """
+        return Pointer[UInt8, ImmStaticOrigin](
+            unsafe_from_address=Int(Pointer(to=self.addr))
+        )
+
+    @always_inline
+    def addr_len(self) -> socklen_t:
+        """Return the number of meaningful bytes in the stored sockaddr.
+
+        Returns:
+            The source storage's ADDR_LEN, or 0 for a default-built value.
+        """
+        return self.len
 
 
 # ===----------------------------------------------------------------------=== #
