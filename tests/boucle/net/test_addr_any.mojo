@@ -112,6 +112,8 @@ def test_mutable_pointers_alias_the_storage() raises:
     var any = SocketAddrStorAny()
     var bytes = any.addr_unsafe_mut_ptr()
     assert_equal(Int(bytes), Int(Pointer(to=any.addr)))
+    # sin6_family is a host-order UInt16; on little-endian x86_64/aarch64
+    # its low byte comes first, so AF_INET6 (10) is byte 0 and byte 1 is 0.
     bytes[unsafe_offset=0] = UInt8(10)  # AF_INET6, low byte
     bytes[unsafe_offset=1] = UInt8(0)
     assert_equal(Int(any.addr.sin6_family), 10)
@@ -130,6 +132,28 @@ def test_set_len_clamps_to_the_storage() raises:
     assert_equal(Int(any.addr_len()), size_of[sockaddr_in6]())
     any.set_len(0)
     assert_equal(Int(any.addr_len()), 0)
+
+
+def test_addr_len_clamps_a_kernel_written_length() raises:
+    """A length the kernel wrote through the raw pointer is clamped on read.
+
+    recvfrom/getsockname store the true address length into the in/out
+    `socklen_t`, which exceeds the slot when the address was truncated.
+    The raw field must keep that value (it is the truncation signal)
+    while `addr_len()` and `family()` never let a consumer read past
+    the 28-byte slot.
+    """
+    var any = SocketAddrStorAny()
+    any.set_len(28)
+    var bytes = any.addr_unsafe_mut_ptr()
+    bytes[unsafe_offset=0] = UInt8(2)  # AF_INET, low byte (little-endian)
+    bytes[unsafe_offset=1] = UInt8(0)
+    var len_p = any.len_unsafe_ptr()
+    len_p[] = 110
+    assert_equal(Int(any.len), 110, "the raw field keeps the kernel value")
+    assert_equal(Int(any.addr_len()), 28, "addr_len clamps to the slot")
+    assert_equal(Int(any.addr_len()), size_of[sockaddr_in6]())
+    assert_true(any.family() == AddrFamily.INET, "family reads the prefix")
 
 
 def test_family_reads_the_prefix() raises:
@@ -158,5 +182,6 @@ def main() raises:
     test_copy_keeps_bytes_and_len()
     test_mutable_pointers_alias_the_storage()
     test_set_len_clamps_to_the_storage()
+    test_addr_len_clamps_a_kernel_written_length()
     test_family_reads_the_prefix()
     print("PASS: test_addr_any.mojo")

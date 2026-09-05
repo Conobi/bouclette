@@ -118,7 +118,9 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
     Fields:
         addr: Byte buffer laid out as sockaddr_in6, the largest sockaddr
               supported. Only the first `len` bytes are meaningful.
-        len: Number of meaningful bytes in `addr` (0 when default-built).
+        len: Length as recorded by a constructor or written by the kernel
+             (0 when default-built). May exceed the slot after a syscall
+             that truncated the address; read it through `addr_len()`.
     """
 
     var addr: sockaddr_in6
@@ -171,10 +173,18 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
     def addr_len(self) -> socklen_t:
         """Return the number of meaningful bytes in the stored sockaddr.
 
+        The kernel may write a length larger than the slot into `len`
+        (through `len_unsafe_ptr` or a copied `msg_namelen`) to signal
+        that the address was truncated. The value returned here is
+        clamped to `size_of[sockaddr_in6]()`, so a consumer that copies
+        `addr_len()` bytes out of `addr` can never read past it.
+
         Returns:
-            The source storage's ADDR_LEN, or 0 for a default-built value.
+            The source storage's ADDR_LEN, 0 for a default-built value,
+            or at most 28 when the kernel reported a longer address.
         """
-        return self.len
+        var cap = socklen_t(size_of[sockaddr_in6]())
+        return self.len if self.len < cap else cap
 
     @always_inline
     def addr_unsafe_mut_ptr(mut self) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -199,6 +209,16 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
         For syscalls that take an in/out `socklen_t*` (recvfrom,
         getsockname). recvmsg reports the length in `msg_namelen`
         instead; use `set_len` for that.
+
+        In/out contract: the kernel reads `len` as the capacity of
+        `addr`, so initialise it to `size_of[sockaddr_in6]()` (via
+        `set_len(28)` or the copying constructor) before handing this
+        pointer to recvfrom/recvmsg/getsockname; a default-built storage
+        has `len == 0` and would receive no address bytes. After the
+        call `len` holds the address length the kernel reported, which
+        may exceed the capacity to signal truncation. Read it back
+        through `addr_len()` or `family()`, which clamp to the slot, and
+        never use the raw field as a byte count.
 
         Returns:
             A pointer to `len`; valid for as long as this struct is not
@@ -232,7 +252,7 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
         """
         return AddrFamily.from_sockaddr(
             Span[UInt8, ImmStaticOrigin](
-                unsafe_ptr=self.addr_unsafe_ptr(), length=Int(self.len)
+                unsafe_ptr=self.addr_unsafe_ptr(), length=Int(self.addr_len())
             )
         )
 
