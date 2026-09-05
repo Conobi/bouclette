@@ -41,6 +41,10 @@ from boucle.socle.platform import (
     EPERM,
     EPIPE,
     ETIMEDOUT,
+    # Completion flag encoding — boucle/proactor/completion.mojo.
+    IORING_CQE_BUFFER_SHIFT,
+    IORING_CQE_F_BUFFER,
+    IORING_CQE_F_MORE,
     # Raw handles — boucle/handle.mojo, boucle/watch/accept.mojo.
     UnsafeFd,
     close,
@@ -143,6 +147,13 @@ def test_errno_constants_are_reachable() raises:
         + Int(EPERM)
     )
     assert_true(sum_of_the_rest > 0)
+
+
+def test_completion_flag_encoding_is_reachable() raises:
+    """`boucle/proactor/completion.mojo` decodes flags with these bits."""
+    assert_equal(Int(IORING_CQE_BUFFER_SHIFT), 16)
+    assert_equal(Int(IORING_CQE_F_BUFFER), 1)
+    assert_equal(Int(IORING_CQE_F_MORE), 2)
 
 
 def test_handle_primitives_are_reachable() raises:
@@ -269,6 +280,7 @@ def test_coroutine_stack_is_reachable() raises:
 def main() raises:
     test_platform_name_is_a_supported_os()
     test_errno_constants_are_reachable()
+    test_completion_flag_encoding_is_reachable()
     test_handle_primitives_are_reachable()
     test_c_scalar_aliases_are_reachable()
     test_address_layouts_are_reachable()

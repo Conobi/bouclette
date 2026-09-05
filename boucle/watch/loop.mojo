@@ -76,11 +76,13 @@ struct WatchLoop(Movable):
     keys pushed by completions and handle drops since the last sweep;
     it lives on the heap so its address survives moving the loop.
 
-    _composites_awaiting_cancel additionally lists the composite states,
-    because only they need the loop to submit a deferred cancel
-    operation after each tick. It never owns anything: a composite is dropped
-    from it as soon as it is done, and the registry alone decides who
-    frees the state.
+    _deferred lists the slot keys of states that may still need the loop
+    to submit an operation on their behalf outside a callback: today the
+    composites, from submission until their three completions have
+    arrived, because the loser's cancel is submitted after the tick that
+    resolved them. It never owns anything: a key is dropped from it as
+    soon as the state is done, and the registry alone decides who frees
+    the state.
     """
 
     var _driver: _WatchDriver
@@ -93,9 +95,7 @@ struct WatchLoop(Movable):
     var _recvs: _Slab[_RecvFutureState]
     var _sends: _Slab[_SendFutureState]
     var _timers: _Slab[_TimerFutureState]
-    var _composites_awaiting_cancel: List[
-        Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
-    ]
+    var _deferred: List[Int]
 
     def __init__(
         out self, *, capacity: Int = 64, backend: Backend = Backend.AUTO
@@ -124,9 +124,7 @@ struct WatchLoop(Movable):
         self._recvs = _Slab[_RecvFutureState](capacity, _KIND_RECV, q)
         self._sends = _Slab[_SendFutureState](capacity, _KIND_SEND, q)
         self._timers = _Slab[_TimerFutureState](capacity, _KIND_TIMER, q)
-        self._composites_awaiting_cancel = List[
-            Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin]
-        ]()
+        self._deferred = List[Int]()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
@@ -140,7 +138,7 @@ struct WatchLoop(Movable):
         self._recvs = move._recvs^
         self._sends = move._sends^
         self._timers = move._timers^
-        self._composites_awaiting_cancel = move._composites_awaiting_cancel^
+        self._deferred = move._deferred^
 
     def __deinit__(deinit self):
         """Abandon in-flight buffers, tear the driver down, settle the registry.
@@ -190,7 +188,7 @@ struct WatchLoop(Movable):
         self._recvs.detach_all()
         self._sends.detach_all()
         self._timers.detach_all()
-        self._composites_awaiting_cancel.clear()
+        self._deferred.clear()
         self._settle.unsafe_deinit_pointee()
         self._settle.unsafe_free()
 
@@ -218,16 +216,16 @@ struct WatchLoop(Movable):
         )
 
     def pending_composites(self) -> Int:
-        """Return how many connect_with_timeout operations still await a cancel.
+        """Return how many states still hold a deferred submission slot.
 
         Diagnostic accessor for tests: a composite stays listed from
-        submission until run() has seen all three of its completions,
-        so this must be 0 after run() returns.
+        submission until run() or step() has seen all three of its
+        completions, so this must be 0 once the loop is drained.
 
         Returns:
-            The number of composite operations awaiting completion.
+            The number of states on the deferred list.
         """
-        return len(self._composites_awaiting_cancel)
+        return len(self._deferred)
 
     def accept(mut self, ref socket: Socket) raises -> AcceptFuture:
         """Submit an async accept on a listening socket.
@@ -362,7 +360,7 @@ struct WatchLoop(Movable):
 
         # 2 operations submitted → 2 completions expected.
         self._pending += 2
-        self._composites_awaiting_cancel.append(state_ptr)
+        self._deferred.append(state_ptr[]._link.key)
 
         return ConnectWithTimeoutFuture(state_ptr)
 
@@ -489,26 +487,67 @@ struct WatchLoop(Movable):
 
         return TimerFuture(state_ptr)
 
-    def run(mut self) raises:
-        """Block until every submitted operation has completed, then return.
+    def step(mut self, timeout_ms: Int = -1) raises -> Int:
+        """Drive the loop for one tick, waiting at most `timeout_ms`.
 
-        This is the "drain" verb, and the only way to drive a WatchLoop:
-        there is nothing to run forever on a loop whose work is a set of
-        futures. `CompletionLoop` is where `run_forever()`, `run_once()`
-        and `poll()` live.
+        This is the verb for long-lived work: `run()` returns as soon as
+        no one-shot operation is pending, so a program whose only work
+        re-arms itself (a datagram stream) calls `step()` in its own
+        loop and decides when to stop.
+
+        One call does, in order:
+
+        1. Flush deferred submissions (re-arms, internal cancels) queued
+           since the last flush.
+        2. Wait until at least one completion is available or
+           `timeout_ms` has passed. -1 waits without limit; 0 polls.
+        3. Dispatch every completion available at that moment.
+        4. Flush deferred submissions again, then sweep settled slots.
+        5. Return the number of completions dispatched in 3 that belong
+           to a handle the caller can observe.
+
+        A re-arm queued in step 4 is submitted in step 1 of the next
+        call. The loop's own bookkeeping completions — the cancel a
+        `connect_with_timeout` submits for its loser, a driver's
+        sentinel timeout — are dispatched but not counted.
+
+        Args:
+            timeout_ms: Upper bound on the wait, in milliseconds. -1
+                        waits until a completion arrives; 0 returns
+                        after dispatching what is already available.
+
+        Returns:
+            The number of observable completions dispatched, 0 when the
+            bound expired first.
+        """
+        _ = self._flush_deferred()
+        var dispatched = self._driver.tick(wait=True, timeout_ms=timeout_ms)
+        self._pending -= dispatched
+        var internal = self._flush_deferred()
+        self._sweep_in_flight()
+        return dispatched - internal
+
+    def run(mut self) raises:
+        """Block until every one-shot operation has completed, then return.
+
+        This is the "drain" verb: submit futures, call run(), read
+        results. It counts one-shot operations only; an operation that
+        re-arms itself is not pending, so with nothing but such work
+        armed run() returns immediately — drive those with `step()`.
+        `CompletionLoop` is where `run_forever()`, `run_once()` and
+        `poll()` live.
 
         _pending tracks completions in flight. tick() returns the number
         of dispatched completions; run() decrements directly. Callbacks
         never touch the counter — they only set result state.
 
-        After each tick, first flushes deferred cancel operations for
-        composite operations (each cancel adds 1 to _pending for its own
-        completion) and forgets the composites whose three completions
-        have all arrived, then settles the slots whose key was queued
-        during the tick: the ones whose handle was dropped early are
-        released there.
-        The cancel list is trimmed before the sweep so it never keeps a
-        pointer to a state the sweep is about to free.
+        After each tick, first flushes the deferred list (a composite's
+        cancel adds 1 to _pending for its own completion; composites
+        whose three completions have all arrived are forgotten), then
+        settles the slots whose key was queued during the tick: the
+        ones whose handle was dropped early are released there. The
+        deferred list is trimmed before the sweep so it never names a
+        slot the sweep is about to free.
 
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
@@ -516,22 +555,41 @@ struct WatchLoop(Movable):
         while self._pending > 0:
             var dispatched = self._driver.tick(wait=True)
             self._pending -= dispatched
-            self._flush_composite_cancels()
+            _ = self._flush_deferred()
             self._sweep_in_flight()
 
-    def _flush_composite_cancels(mut self) raises:
-        """Submit deferred cancel operations and forget finished composites.
+    def _flush_deferred(mut self) raises -> Int:
+        """Submit deferred operations, drop finished states, count internal completions.
 
-        Called after each tick, before the registry sweep. Only
-        composites need this step; the registry handles their ownership.
+        Called before and after each tick. Every listed key is decoded
+        to its slab and slot; the state submits whatever it deferred
+        (today: a composite's cancel), reports the internal completions
+        it has seen since the previous flush, and is dropped from the
+        list once done. The list is walked from the back so a pop does
+        not disturb the indices still to visit.
+
+        Returns:
+            The number of completions dispatched since the previous
+            flush that belong to the loop's own bookkeeping and must not
+            be reported by `step()`.
         """
-        var i = len(self._composites_awaiting_cancel) - 1
+        var internal = 0
+        var i = len(self._deferred) - 1
         while i >= 0:
-            var state_ptr = self._composites_awaiting_cancel[i]
+            var key = self._deferred[i]
+            var kind = key & ((1 << _KIND_BITS) - 1)
+            var index = key >> _KIND_BITS
+            debug_assert(
+                kind == _KIND_CONNECT_WITH_TIMEOUT,
+                "only composites defer submissions today",
+            )
+            var state_ptr = self._connects_with_timeout._slot(index)
+            internal += state_ptr[].take_internal_completions()
             self._pending += state_ptr[].flush_cancel(self._driver)
             if state_ptr[].done:
-                _ = self._composites_awaiting_cancel.pop(i)
+                _ = self._deferred.pop(i)
             i -= 1
+        return internal
 
     def _sweep_in_flight(mut self):
         """Settle every slot queued since the last sweep.

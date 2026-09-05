@@ -63,6 +63,9 @@ struct _ConnectWithTimeoutState(_InFlightState):
         _cancel_submitted: Whether cancel has been flagged.
         _total_completions: Number of completions received so far (done
                             when 3).
+        _uncounted_internal: Cancel completions that arrived since the
+                             loop last took the count; step() subtracts
+                             them from what a tick dispatched.
         done: True when all 3 completions have been received.
         consumed: True after result() has been called.
         _owner_dropped: True if the ConnectWithTimeoutFuture was dropped
@@ -82,6 +85,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
     var _cancel_target: UInt8
     var _cancel_submitted: Bool
     var _total_completions: Int
+    var _uncounted_internal: Int
     var done: Bool
     var consumed: Bool
     var _owner_dropped: Bool
@@ -114,6 +118,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._cancel_target = UInt8(0)
         self._cancel_submitted = False
         self._total_completions = 0
+        self._uncounted_internal = 0
         self.done = False
         self.consumed = False
         self._owner_dropped = False
@@ -137,6 +142,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._cancel_target = move._cancel_target
         self._cancel_submitted = move._cancel_submitted
         self._total_completions = move._total_completions
+        self._uncounted_internal = move._uncounted_internal
         self.done = move.done
         self.consumed = move.consumed
         self._owner_dropped = move._owner_dropped
@@ -232,6 +238,21 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
         self._cancel_target = UInt8(0)
         return 1
+
+    def take_internal_completions(mut self) -> Int:
+        """Return the cancel completions seen since the last call, and reset.
+
+        The loop calls this after each tick to keep internal completions
+        out of `step()`'s return value. Only the cancel operation counts:
+        the connect and timeout results, including the loser's
+        -ECANCELED, belong to the handle.
+
+        Returns:
+            0 or 1; a composite submits at most one cancel.
+        """
+        var n = self._uncounted_internal
+        self._uncounted_internal = 0
+        return n
 
     @staticmethod
     def _on_connect_cb(
@@ -333,6 +354,7 @@ struct _ConnectWithTimeoutState(_InFlightState):
             unsafe_from_address=Int(ctx)
         )
         self_ptr[]._total_completions += 1
+        self_ptr[]._uncounted_internal += 1
         self_ptr[]._check_done()
 
 

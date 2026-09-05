@@ -48,6 +48,15 @@ whoever writes the second backend. Each section below is tagged:
   second backend can alias one to the other), and `IP_RECVTOS` (a
   BSD/Linux extension, not POSIX; macOS numbers it 27, FreeBSD 68,
   not the Linux value).
+- **portable by contract** — not identical in nature across platforms,
+  but boucle adopts one backend's encoding as the library-wide
+  convention and requires every other backend to reproduce it, so
+  callers see one shape regardless of which kernel mechanism drives the
+  loop. The completion flag bits (`IORING_CQE_BUFFER_SHIFT`,
+  `IORING_CQE_F_BUFFER`, `IORING_CQE_F_MORE`) are the current example:
+  io_uring's layout is the contract, and the epoll completion driver
+  emits the same bits for its emulated multishot deliveries rather than
+  inventing its own.
 """
 
 from boucle.socle import is_linux, is_darwin, is_windows
