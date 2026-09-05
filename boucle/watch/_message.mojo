@@ -107,7 +107,9 @@ struct _MessageState(_FutureCallback):
         Must run after the state is in its slab slot and before the
         operation is submitted. For a receive the whole name slot and
         the whole control area are offered; for a send only a set peer
-        and appended control records are.
+        and appended control records are. The payload window may be
+        empty (`iov_len` 0) for a zero-length send or a receive with no
+        bytes requested.
         """
         self._iov[0].iov_base = UInt64(Int(self.msg._payload.unsafe_ptr()))
         self._iov[0].iov_len = UInt64(len(self.msg._payload))
@@ -165,11 +167,18 @@ struct _MessageState(_FutureCallback):
         """Give up the message instead of freeing it.
 
         Called when the WatchLoop is destroyed with this operation still
-        in flight. The kernel may not be finished with the payload, the
-        name slot or the control area, so the whole message is parked on
-        the heap and never freed: a bounded leak paid only when a loop
-        is destroyed mid-operation, in exchange for never handing the
-        allocator memory the kernel still touches.
+        in flight. Parking the whole message on the heap protects its
+        payload and control-area storage: the kernel may still be
+        writing into those buffers, so freeing them here would hand the
+        allocator memory it still touches. It does not protect the name
+        slot or the msghdr — both stay behind in this state's slab slot,
+        so the kernel keeps writing the peer address and `msg_flags`
+        into slot memory (now owned by the fresh, empty message left in
+        `self.msg`) until the operation truly completes. Keeping that
+        slot's chunk allocated for as long as the kernel might still
+        write into it is the loop's responsibility: see
+        `WatchLoop.__deinit__`, which marks the message slabs leaked
+        when any message state is abandoned not-done.
         """
         var parked = unsafe_alloc[Message](1)
         parked.unsafe_write(self.take_message())
@@ -183,6 +192,7 @@ struct _MessageState(_FutureCallback):
         Args:
             result: The completion result (bytes >= 0, or negative errno).
         """
+        debug_assert(not self.done, "completion delivered twice")
         self._result = result
         self.done = True
         if self._receiving and result >= 0:

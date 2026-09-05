@@ -19,8 +19,8 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 - **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`/`SocketAddrV6`, `IOError` and `Backend`. No adapter layers.
 - **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
 - **Automatic backend selection.** `Backend.AUTO` picks io_uring when the kernel supports it, falls back to epoll otherwise. A single binary works across kernel versions.
-- **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value*. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count. Dropping the future without running the loop is harmless.
-- **One error type.** Every failing socket call raises `IOError`, carrying the errno and printing as `ECONNREFUSED (111)`.
+- **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value* and `send_msg`/`recv_msg` take a `Message` the same way. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count, and a failed operation hands it back inside the typed `TransferFailed`/`MessageFailed` error. Dropping the future without running the loop is harmless.
+- **One errno type.** Every failure carries an `IOError` with the errno, printing as `ECONNREFUSED (111)`. `Socket` calls raise it directly; the completion futures wrap it in `TransferFailed`/`MessageFailed` so the in-flight buffer rides back with the error.
 - **`socle/` is private.** OS abstractions (syscalls, fd, errno, epoll/io_uring wrappers) live in `boucle/socle/`, and `boucle/socle/platform.mojo` is the single seam where the portable layer names a concrete OS. Platform-specific features require an explicit `socle/` import — the path makes the portability trade-off visible.
 - **Stackful coroutines.** Real yield/resume via `ucontext` — no state machine transform. Coroutines run on their own stack and suspend cooperatively. Temporary bridge until Mojo ships native async/await.
 - **Portable by design.** The architecture supports multiple backends per platform. Currently Linux-only (io_uring + epoll); macOS (kqueue) and Windows (IOCP) are planned.
@@ -140,6 +140,10 @@ typed failure: ECONNREFUSED (111)
 
 **Buffer ownership.** `recv`/`send` take `var buf: List[UInt8]`, so the loop owns the bytes for exactly as long as the operation is in flight. You get them back from `result()` as a `TransferResult`: `count` bytes moved, `transferred()` is a span over them, `take_buffer()` returns the list itself. The buffer's *length* is the recv window — a list of length 32 asks for at most 32 bytes — and the length is not changed by the operation. Dropping a future instead of calling `result()` simply gives the buffer up.
 
+**Datagrams.** `send_msg`/`recv_msg` take a `Message`: a payload list, an optional peer (`set_peer`) and a control area (`control_capacity`). `send_to(socket, buf, addr)` and `recv_from(socket, buf)` are the two-line wrappers. The `MessageResult` carries `count`, `peer_v4()`/`peer_v6()`, `control()` (a walker over cmsg records, with `ecn()` for the codepoint), `truncated()`/`control_truncated()`, and `take_message()`. To receive ECN, call `socket.set_recv_tos()` and give the receiving message at least 24 bytes of control capacity; to send it, `msg.set_ecn(mark)` after `set_peer` (a v4-mapped v6 peer gets an `IP_TOS` record, as the kernel requires).
+
+**Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned).
+
 **Lifetimes.** Sockets are *not* moved into the loop: they must stay alive across `run()`, and you close them yourself.
 
 ### Readiness — `ReadinessLoop`
@@ -227,7 +231,8 @@ Read handler state back with `loop.handler()`; reach the interest set from outsi
 
 | Verb | Meaning | Where |
 |---|---|---|
-| `run()` | Block until every submitted operation has completed, then return (drain). | `WatchLoop` — its only verb |
+| `run()` | Block until every submitted operation has completed, then return (drain). | `WatchLoop` |
+| `step(timeout_ms)` | Drive one bounded tick, for long-lived work that re-arms itself (e.g. a datagram stream). | `WatchLoop` |
 | `run_forever()` | Loop until `stop()` is called. | `CompletionLoop`, `EventLoop` |
 | `run_once()` | One blocking tick. | `CompletionLoop`, `EventLoop`, `ReadinessLoop` (with an optional `timeout_ms`) |
 | `poll()` | One non-blocking tick. | `CompletionLoop`, `EventLoop`, `ReadinessLoop` |
@@ -248,16 +253,21 @@ Capacity is a hint everywhere and is spelled `capacity=`; every timeout is milli
 boucle/                              Public API — what developers import
 ├── watch/                           Completion model: WatchLoop + asyncio-style Futures
 │   ├── loop.mojo                    WatchLoop (accept, connect, connect_with_timeout,
-│   │                                recv, send, timeout, run)
+│   │                                recv, send, recv_msg, send_msg, recv_from, send_to,
+│   │                                timeout, run)
 │   ├── accept.mojo                  AcceptFuture
 │   ├── connect.mojo                 ConnectFuture
 │   ├── connect_timeout.mojo         ConnectWithTimeoutFuture (composite connect+timer)
 │   ├── recv.mojo                    RecvFuture
 │   ├── send.mojo                    SendFuture
+│   ├── recv_msg.mojo                RecvMsgFuture
+│   ├── send_msg.mojo                SendMsgFuture
 │   ├── timer.mojo                   TimerFuture
-│   ├── transfer.mojo                TransferResult (byte count + the buffer back)
+│   ├── transfer.mojo                TransferResult, TransferFailed, MessageFailed, FailureReason
 │   ├── outcome.mojo                 ConnectOutcome
-│   └── _callback.mojo               Internal future-state ownership hooks
+│   ├── _callback.mojo               Internal future-state ownership hooks
+│   ├── _message.mojo                Slab-owned msghdr state behind the message futures
+│   └── _slab.mojo                   Per-kind chunked slab of operation states
 ├── readiness.mojo                   Readiness model: ReadinessLoop, ReadinessRegistry,
 │                                    ReadinessHandler
 ├── proactor/                        Raw completion plumbing under watch/
@@ -284,6 +294,7 @@ boucle/                              Public API — what developers import
 │   │                                recv, send)
 │   ├── addr.mojo                    SocketAddrV4, SocketAddrV6
 │   ├── ip.mojo                      IpAddrV4, IpAddrV6
+│   ├── message.mojo                 Message, MessageResult, ControlMessages
 │   └── options.mojo                 Portable socket options (Backlog, Shutdown, flags)
 ├── error.mojo                       IOError — the one error type I/O raises
 ├── handle.mojo                      RawHandle, OwnedHandle

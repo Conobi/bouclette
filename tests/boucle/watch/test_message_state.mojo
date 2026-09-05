@@ -94,6 +94,7 @@ def test_sending_state_offers_only_what_is_set() raises:
     # A send completion does not touch the peer or control lengths.
     addressed[]._hdr.msg_namelen = 0
     addressed[].set_result(3)
+    addressed[].notify_done()
     assert_equal(Int(addressed[].msg._peer.addr_len()), 16)
     assert_true(addressed[].msg.peer_family() == AddrFamily.INET)
 
@@ -101,7 +102,7 @@ def test_sending_state_offers_only_what_is_set() raises:
     addressed[].mark_owner_dropped()
     bare[].set_result(3)
     bare[].notify_done()
-    addressed[].notify_done()
+    assert_equal(len(queue), 2, "both slots settle once dropped and done")
     slab.detach_all()
 
 
@@ -117,6 +118,34 @@ def test_abandon_buffer_parks_the_message() raises:
     s[].mark_owner_dropped()
     slab.detach_all()
     assert_true(not slab._leaked)
+    assert_equal(len(queue), 0, "the operation never completed: nothing to settle")
+
+
+def test_receiving_state_with_no_control_capacity_offers_none() raises:
+    """A receive with zero control capacity offers no control area at all."""
+    var queue = List[Int]()
+    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var s = slab.alloc(_MessageState(Message(List[UInt8](length=4, fill=0)), receiving=True))
+    s[].wire()
+    assert_equal(Int(s[]._hdr.msg_control), 0, "no capacity: no control area")
+    assert_equal(Int(s[]._hdr.msg_controllen), 0)
+    s[].mark_owner_dropped()
+    slab.detach_all()
+    assert_equal(len(queue), 0, "the operation never completed: nothing to settle")
+
+
+def test_sending_state_with_unused_control_capacity_offers_none() raises:
+    """A send with reserved but unwritten control capacity offers no control area."""
+    var queue = List[Int]()
+    var slab = _Slab[_MessageState](2, 7, _queue_ptr(queue))
+    var msg = Message(List[UInt8](length=3, fill=1), control_capacity=24)
+    var s = slab.alloc(_MessageState(msg^, receiving=False))
+    s[].wire()
+    assert_equal(Int(s[]._hdr.msg_control), 0, "capacity reserved but unused: no control area")
+    assert_equal(Int(s[]._hdr.msg_controllen), 0)
+    s[].mark_owner_dropped()
+    slab.detach_all()
+    assert_equal(len(queue), 0, "the operation never completed: nothing to settle")
 
 
 def main() raises:
@@ -126,4 +155,8 @@ def main() raises:
     print("ok: sending state offers only what is set")
     test_abandon_buffer_parks_the_message()
     print("ok: abandon_buffer parks the message")
+    test_receiving_state_with_no_control_capacity_offers_none()
+    print("ok: receiving state with no control capacity offers none")
+    test_sending_state_with_unused_control_capacity_offers_none()
+    print("ok: sending state with unused control capacity offers none")
     print("PASS: test_message_state.mojo")

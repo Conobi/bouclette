@@ -14,6 +14,8 @@ from .connect_timeout import ConnectWithTimeoutFuture
 from .loop import WatchLoop
 from .outcome import ConnectOutcome
 from .recv import RecvFuture
+from .recv_msg import RecvMsgFuture
 from .send import SendFuture
+from .send_msg import SendMsgFuture
 from .transfer import FailureReason, MessageFailed, TransferFailed, TransferResult
 from .timer import TimerFuture

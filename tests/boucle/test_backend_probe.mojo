@@ -7,6 +7,7 @@ construction and rejection.
 
 from boucle.proactor.completion_loop import CompletionLoop
 from boucle.watch.loop import WatchLoop
+from boucle.drivers import DriverFeature
 from boucle.drivers.backend import Backend
 from boucle.drivers.io_uring import IoUringDriver
 from std.testing import assert_true
@@ -22,21 +23,35 @@ def _has_io_uring() -> Bool:
         return False
 
 
+def _auto_wants_io_uring() -> Bool:
+    """The selection rule: io_uring only when every datagram-path feature is native."""
+    try:
+        var d = IoUringDriver(capacity=4)
+        var complete = d.supports(DriverFeature.MULTISHOT_RECVMSG) and d.supports(
+            DriverFeature.BUFFER_RING
+        )
+        _ = d^
+        return complete
+    except:
+        return False
+
+
 def test_auto_selects_correct_backend() raises:
-    """AUTO must select io_uring when available, epoll otherwise."""
-    var uring_available = _has_io_uring()
+    """AUTO selects io_uring only when the datagram features are native."""
+    var wants_uring = _auto_wants_io_uring()
     var cl = CompletionLoop(capacity=4)
 
-    if uring_available:
+    if wants_uring:
         assert_true(
             cl.backend() is Backend.IO_URING,
-            "AUTO should select IO_URING when io_uring is available",
+            "AUTO should select IO_URING when multishot recvmsg and buffer rings are native",
         )
     else:
         assert_true(
             cl.backend() is Backend.EPOLL,
-            "AUTO should fall back to EPOLL when io_uring is unavailable",
+            "AUTO should fall back to EPOLL when io_uring is unavailable or incomplete",
         )
+    print("  (auto wants io_uring:", wants_uring, "; chose", cl.backend(), ")")
 
 
 def test_forced_epoll_always_works() raises:
@@ -75,9 +90,21 @@ def test_watchloop_auto_matches_completion() raises:
     )
 
 
+def test_forced_io_uring_skips_the_rule() raises:
+    """Backend.IO_URING is honoured whenever io_uring constructs, complete or not."""
+    if not _has_io_uring():
+        print("  (io_uring unavailable — forced IO_URING rule check skipped)")
+        return
+    var cl = CompletionLoop(capacity=4, backend=Backend.IO_URING)
+    assert_true(cl.backend() is Backend.IO_URING)
+    var wl = WatchLoop(capacity=4, backend=Backend.IO_URING)
+    assert_true(wl.backend() is Backend.IO_URING)
+
+
 def main() raises:
     test_auto_selects_correct_backend()
     test_forced_epoll_always_works()
     test_forced_io_uring_behavior()
+    test_forced_io_uring_skips_the_rule()
     test_watchloop_auto_matches_completion()
     print("PASS: test_backend_probe.mojo")

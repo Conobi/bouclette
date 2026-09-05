@@ -59,6 +59,8 @@ from boucle.socle.platform import (
     EAFNOSUPPORT,
     EBADF,
     SOL_SOCKET,
+    SOL_IP,
+    SOL_IPV6,
     SO_REUSEADDR,
     SO_REUSEPORT,
     SO_RCVTIMEO,
@@ -66,6 +68,10 @@ from boucle.socle.platform import (
     SO_ERROR,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
+    IP_RECVTOS,
+    IP_TOS,
+    IPV6_RECVTCLASS,
+    IPV6_TCLASS,
     O_NONBLOCK,
     O_CLOEXEC,
     MSG_NOSIGNAL,
@@ -691,6 +697,82 @@ struct Socket(Movable):
             Int32(1) if value else Int32(0),
         )
 
+    def _family(self) raises IOError -> AddrFamily:
+        """Return the socket's address family from getsockname(2).
+
+        Returns:
+            INET, INET6, UNIX, or UNSPEC for a family boucle does not model.
+
+        Raises:
+            IOError on syscall failure.
+        """
+        var addr = sockaddr_in6()
+        var addrlen = socklen_t(size_of[sockaddr_in6]())
+        var addr_p = Pointer(to=addr)
+        var len_p = Pointer(to=addrlen)
+        _sys_getsockname(
+            self._handle,
+            addr_p.unsafe_bitcast[UInt8](),
+            len_p.unsafe_bitcast[UInt8](),
+        )
+        return _sockaddr_family(addr, Int(addrlen))
+
+    def set_recv_tos(self, value: Bool = True) raises IOError:
+        """Ask the kernel to attach the received TOS byte to each datagram.
+
+        `IP_RECVTOS` on an AF_INET socket. On an AF_INET6 socket both
+        `IPV6_RECVTCLASS` and `IP_RECVTOS`, so IPv4-mapped peers on a
+        dual-stack socket also deliver a TOS record. The record lands in
+        the control area of a `recv_msg` whose `Message` has
+        `control_capacity` of at least 24; `ControlMessages.ecn()` reads
+        the codepoint.
+
+        Args:
+            value: True to enable, False to disable.
+
+        Raises:
+            IOError on syscall failure; IOError(EAFNOSUPPORT) when the
+            socket is neither AF_INET nor AF_INET6.
+        """
+        var on = Int32(1) if value else Int32(0)
+        var family = self._family()
+        if family == AddrFamily.INET6:
+            _sys_setsockopt(
+                self._handle, Int32(SOL_IPV6), Int32(IPV6_RECVTCLASS), on
+            )
+            _sys_setsockopt(self._handle, Int32(SOL_IP), Int32(IP_RECVTOS), on)
+        elif family == AddrFamily.INET:
+            _sys_setsockopt(self._handle, Int32(SOL_IP), Int32(IP_RECVTOS), on)
+        else:
+            raise IOError(positive_errno=EAFNOSUPPORT)
+
+    def set_tos(self, value: UInt8) raises IOError:
+        """Set the default TOS / traffic class for outgoing packets.
+
+        `IP_TOS` on an AF_INET socket; `IPV6_TCLASS` and `IP_TOS` on an
+        AF_INET6 socket so mapped destinations are covered. A per-message
+        ECN mark (`Message.set_ecn`) overrides this for that datagram.
+
+        Args:
+            value: The full TOS byte (DSCP in the high six bits, ECN in
+                   the low two).
+
+        Raises:
+            IOError on syscall failure; IOError(EAFNOSUPPORT) when the
+            socket is neither AF_INET nor AF_INET6.
+        """
+        var tos = Int32(value)
+        var family = self._family()
+        if family == AddrFamily.INET6:
+            _sys_setsockopt(
+                self._handle, Int32(SOL_IPV6), Int32(IPV6_TCLASS), tos
+            )
+            _sys_setsockopt(self._handle, Int32(SOL_IP), Int32(IP_TOS), tos)
+        elif family == AddrFamily.INET:
+            _sys_setsockopt(self._handle, Int32(SOL_IP), Int32(IP_TOS), tos)
+        else:
+            raise IOError(positive_errno=EAFNOSUPPORT)
+
     def set_recv_timeout(self, timeout_ms: UInt64) raises IOError:
         """Set receive timeout (SO_RCVTIMEO). 0 disables.
 
@@ -1158,6 +1240,15 @@ struct Socket(Movable):
     @always_inline
     def raw(self) raises IOError -> RawHandle:
         """Returns the underlying raw handle value.
+
+        The returned handle is a plain value, not tied to this socket's
+        lifetime or origin. If the call site is the socket's last use,
+        Mojo's as-soon-as-possible destruction can drop (and close) the
+        socket before the handle is actually used, e.g. before a syscall
+        that consumes it runs. Callers that pass the handle on to a
+        helper must keep the `Socket` alive for as long as the handle is
+        in use, for example by taking `ref socket` into that helper
+        rather than calling `socket.raw()` inline as an argument.
 
         Returns:
             The raw file descriptor.

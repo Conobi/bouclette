@@ -8,6 +8,7 @@ surface: it stops compiling the day an export is dropped or renamed.
 """
 
 from boucle import (
+    AddrFamily,
     Backend,
     Coroutine,
     CoroutineBody,
@@ -33,9 +34,18 @@ from boucle import (
     ConnectFuture,
     ConnectOutcome,
     ConnectWithTimeoutFuture,
+    ControlMessage,
+    ControlMessages,
+    FailureReason,
+    Message,
+    MessageFailed,
+    MessageResult,
     RecvFuture,
+    RecvMsgFuture,
     SendFuture,
+    SendMsgFuture,
     TimerFuture,
+    TransferFailed,
     TransferResult,
     WatchLoop,
 )
@@ -70,6 +80,12 @@ def test_root_exports_are_usable() raises:
     var addr = SocketAddrV4(127, 0, 0, 1, port=0)
     assert_equal(String(addr.ip), "127.0.0.1")
     assert_true(Interest.READABLE.is_readable())
+    var msg = Message(List[UInt8](length=1, fill=0), control_capacity=24)
+    msg.set_peer(addr)
+    msg.set_ecn(1)
+    assert_equal(Int(msg.control().ecn().value()), 1)
+    assert_equal(String(FailureReason.LOOP_GONE), "LOOP_GONE")
+    assert_true(AddrFamily.INET != AddrFamily.INET6)
 
 
 def main() raises:

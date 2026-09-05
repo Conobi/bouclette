@@ -5,7 +5,7 @@ kernel writes into, and the raw completion result (bytes read or negative
 errno). RecvFuture is the RAII handle returned to callers.
 
 The buffer is owned by the operation, not by the caller: `recv` takes the
-`List[UInt8]` by value and moves it into this heap-allocated state, right
+`List[UInt8]` by value and moves it into this slab-owned state, right
 next to the Completion whose address the driver holds. While the recv is
 in flight nobody but the kernel can reach those bytes — the caller no
 longer has the list, so it can neither read it, write it, nor free it.

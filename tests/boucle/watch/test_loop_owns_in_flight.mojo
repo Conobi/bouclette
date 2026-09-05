@@ -1,6 +1,6 @@
 """The WatchLoop owns every in-flight operation state until it is settled.
 
-A Future handle and the loop share each heap-allocated operation state.
+A Future handle and the loop share each slab-owned operation state.
 The loop keeps a registry of the states still in flight so that no
 matter which side goes away first — the handle, or the loop itself —
 the state is freed exactly once and a surviving handle can report that

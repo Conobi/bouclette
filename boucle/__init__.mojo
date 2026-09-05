@@ -2,7 +2,9 @@
 
 The root package exports what an application needs and nothing more:
 
-- `WatchLoop` and its Futures: completion-based I/O, the default model.
+- `WatchLoop` and its Futures: completion-based I/O, the default model,
+  with `Message`/`MessageResult` for datagram operations and the typed
+  `TransferFailed`/`MessageFailed` failures that hand buffers back.
 - `ReadinessLoop`, `Interest`, `Readiness`, `Token`: readiness-based I/O.
 - `Socket` and the address types: the portable networking surface.
 - `Coroutine` and friends: stackful coroutines driven by either loop.
@@ -26,15 +28,25 @@ from .watch import (
     ConnectFuture,
     ConnectOutcome,
     ConnectWithTimeoutFuture,
+    FailureReason,
+    MessageFailed,
     RecvFuture,
+    RecvMsgFuture,
     SendFuture,
+    SendMsgFuture,
     TimerFuture,
+    TransferFailed,
     TransferResult,
     WatchLoop,
 )
 from .net import (
+    AddrFamily,
+    ControlMessage,
+    ControlMessages,
     IpAddrV4,
     IpAddrV6,
+    Message,
+    MessageResult,
     Socket,
     SocketAddrV4,
     SocketAddrV6,

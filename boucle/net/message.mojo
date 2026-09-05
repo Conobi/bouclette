@@ -5,9 +5,6 @@ value and hand back: one payload buffer, a peer address slot, and a
 control byte area. `ControlMessages` walks the cmsghdr records in that
 area; `MessageResult` is what a completed message operation returns.
 
-The multishot delivery decoder (`DeliveryHeader`) belongs in this module
-and arrives together with the buffer pool and the datagram stream.
-
 Control records follow the 64-bit Linux layout: a 16-byte `cmsghdr`
 (8-byte `cmsg_len`, `int` level, `int` type) followed by the data, with
 every record padded to an 8-byte boundary (`CMSG_ALIGN`). `cmsg_len`
@@ -269,8 +266,12 @@ struct Message(Movable):
             payload: The bytes to send, or the window to receive into.
             control_capacity: Bytes reserved for control records. Each
                               TOS/TCLASS record takes 24; a receiver that
-                              wants ECN needs at least that much.
+                              wants ECN needs at least that much. Must not
+                              be negative.
         """
+        debug_assert(
+            control_capacity >= 0, "control_capacity must not be negative"
+        )
         self._payload = payload^
         self._peer = SocketAddrStorAny()
         self._control = List[UInt8](length=control_capacity, fill=0)

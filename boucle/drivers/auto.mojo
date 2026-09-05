@@ -1,9 +1,12 @@
 """Auto-selecting completion driver with io_uring-to-epoll fallback.
 
-Probes for io_uring support at construction time and falls back to
-EpollCompletionDriver when unavailable. Implements IoDriver by
-delegating every method to whichever backend is active. The backend
-branch is perfectly predicted after init — essentially zero cost.
+Constructs an IoUringDriver and keeps it only when the kernel supports
+every feature the datagram path needs natively (multishot recvmsg and
+provided-buffer rings); otherwise, or when io_uring is unavailable,
+falls back to EpollCompletionDriver, which emulates them. compio applies
+the same all-or-nothing rule. Implements IoDriver by delegating every
+method to whichever backend is active. The backend branch is perfectly
+predicted after init — essentially zero cost.
 """
 
 from std.collections import Optional
@@ -19,16 +22,36 @@ from boucle.drivers.epoll_completion import EpollCompletionDriver
 from boucle.socle import is_linux
 
 
+def _native_datagram_path(ref driver: IoUringDriver) -> Bool:
+    """Return True when io_uring can serve the datagram path natively.
+
+    Args:
+        driver: A freshly constructed io_uring driver.
+
+    Returns:
+        True if both `MULTISHOT_RECVMSG` and `BUFFER_RING` are supported.
+    """
+    return driver.supports(DriverFeature.MULTISHOT_RECVMSG) and driver.supports(
+        DriverFeature.BUFFER_RING
+    )
+
+
 struct AutoDriver(IoDriver):
     """IoDriver that probes for io_uring and falls back to epoll.
 
     At construction, attempts to create an IoUringDriver. If the
-    io_uring syscalls are unavailable (ENOSYS on older kernels or
-    in restricted containers), falls back to EpollCompletionDriver.
+    io_uring syscalls are unavailable (ENOSYS on older kernels or in
+    restricted containers), or if the kernel lacks native multishot
+    recvmsg (6.0) or buffer rings (5.19), falls back to
+    EpollCompletionDriver so that `WatchLoop` behaves the same on every
+    backend. The bounded-wait feature (`TIMEOUT_ARG`) never affects the
+    choice: the io_uring driver falls back internally.
 
     The caller can force a specific backend via the `backend`
-    keyword argument (Backend.IO_URING or Backend.EPOLL). With
-    Backend.AUTO (the default), the probe runs normally.
+    keyword argument. Backend.IO_URING skips the rule: io_uring is used
+    whenever it constructs, and a submission the kernel cannot serve
+    then raises EOPNOTSUPP. Backend.EPOLL skips probing entirely.
+    With Backend.AUTO (the default), the rule runs.
 
     After init, every IoDriver method delegates to the active
     backend via a single branch on `_backend`. This branch is
@@ -52,8 +75,9 @@ struct AutoDriver(IoDriver):
                       hold at once (default 64). A hint, forwarded to
                       whichever backend wins the probe.
             backend: Force a specific backend. Backend.AUTO (default)
-                     probes for io_uring first; Backend.IO_URING
-                     requires io_uring or raises; Backend.EPOLL
+                     probes for io_uring and keeps it only when the
+                     datagram path is native; Backend.IO_URING requires
+                     io_uring or raises and skips the rule; Backend.EPOLL
                      skips probing entirely.
         """
         comptime if not is_linux:
@@ -62,10 +86,13 @@ struct AutoDriver(IoDriver):
 
         if backend is not Backend.EPOLL:
             try:
-                self._uring = IoUringDriver(capacity=capacity)
-                self._epoll = None
-                self._backend = Backend.IO_URING
-                return
+                var uring = IoUringDriver(capacity=capacity)
+                if backend is Backend.IO_URING or _native_datagram_path(uring):
+                    self._uring = uring^
+                    self._epoll = None
+                    self._backend = Backend.IO_URING
+                    return
+                _ = uring^
             except:
                 if backend is Backend.IO_URING:
                     raise "io_uring unavailable (ENOSYS)"

@@ -5,7 +5,7 @@ kernel reads from, and the raw completion result (bytes written or
 negative errno). SendFuture is the RAII handle returned to callers.
 
 The buffer is owned by the operation, not by the caller: `send` takes the
-`List[UInt8]` by value and moves it into this heap-allocated state, right
+`List[UInt8]` by value and moves it into this slab-owned state, right
 next to the Completion whose address the driver holds. While the send is
 in flight nobody can modify or free those bytes — the caller no longer
 has the list. `result()` hands it back, unchanged.
