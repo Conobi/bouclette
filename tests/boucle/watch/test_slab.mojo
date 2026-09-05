@@ -178,6 +178,22 @@ def test_future_outliving_a_tiny_loop_reports_loop_gone() raises:
     _ = t^
 
 
+def test_key_has_room_for_ten_kinds() raises:
+    """Kinds 0..9 (accept .. pool) fit in the low bits of a slot key."""
+    assert_equal(_KIND_BITS, 4)
+    var queue = List[Int]()
+    var slab = _Slab[_TimerFutureState](2, 9, _queue_ptr(queue))
+    var s = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    s[].set_result(-62)
+    s[].notify_done()
+    s[].mark_owner_dropped()
+    assert_equal(len(queue), 1)
+    assert_equal(queue[0] & ((1 << _KIND_BITS) - 1), 9, "kind 9 survives the encoding")
+    assert_equal(queue[0] >> _KIND_BITS, 0, "index 0 decodes back")
+    slab.settle(queue[0] >> _KIND_BITS)
+    assert_equal(len(slab._free), 2)
+
+
 def main() raises:
     test_slab_grows_in_chunks_and_keeps_addresses()
     print("ok: slab grows in chunks and keeps addresses")
@@ -193,4 +209,6 @@ def main() raises:
     print("ok: loop reuses slots across rounds")
     test_future_outliving_a_tiny_loop_reports_loop_gone()
     print("ok: future outliving a tiny loop reports loop gone")
+    test_key_has_room_for_ten_kinds()
+    print("ok: key has room for ten kinds")
     print("PASS: test_slab.mojo")

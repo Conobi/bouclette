@@ -19,7 +19,7 @@ from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
 from boucle.net.socket import Socket
 from boucle.socle.linux.errno import get_errno
-from boucle.watch import WatchLoop
+from boucle.watch import FailureReason, WatchLoop
 
 
 def _make_socketpair() raises -> Tuple[Int32, Int32]:
@@ -196,6 +196,103 @@ def test_live_composite_outliving_loop_reports_loop_gone() raises:
     server.close()
 
 
+def test_live_recv_future_outliving_loop_reports_loop_gone() raises:
+    """A RecvFuture outliving its loop raises LOOP_GONE and returns no buffer.
+
+    The loop's destructor abandoned the buffer (the kernel may still be
+    writing into it), so the failure has nothing to hand back.
+    """
+    var fds = _make_socketpair()
+    var reader = Socket(OwnedHandle(raw=fds[0]))
+    var writer = Socket(OwnedHandle(raw=fds[1]))
+    var loop = WatchLoop()
+    var recv_f = loop.recv(reader, List[UInt8](length=16, fill=0))
+
+    _ = loop^
+
+    assert_true(not recv_f.done(), "no completion can have been delivered")
+    var caught = False
+    var reason = FailureReason.IO
+    var back = Optional[List[UInt8]](List[UInt8]())
+    try:
+        _ = recv_f^.result()
+    except e:
+        caught = True
+        reason = e.reason
+        back = e^.take_buffer()
+    assert_true(caught, "result() should raise once the loop is gone")
+    assert_true(reason == FailureReason.LOOP_GONE)
+    assert_true(not Bool(back), "an abandoned buffer is not handed back")
+
+    reader.close()
+    writer.close()
+
+
+def test_live_send_future_outliving_loop_reports_loop_gone() raises:
+    """A SendFuture outliving its loop raises LOOP_GONE and returns no buffer.
+
+    The loop's destructor abandoned the buffer (the kernel may still be
+    reading from it), so the failure has nothing to hand back.
+    """
+    var fds = _make_socketpair()
+    var reader = Socket(OwnedHandle(raw=fds[0]))
+    var writer = Socket(OwnedHandle(raw=fds[1]))
+    var loop = WatchLoop()
+    var send_f = loop.send(writer, List[UInt8](length=16, fill=0))
+
+    _ = loop^
+
+    assert_true(not send_f.done(), "no completion can have been delivered")
+    var caught = False
+    var reason = FailureReason.IO
+    var back = Optional[List[UInt8]](List[UInt8]())
+    try:
+        _ = send_f^.result()
+    except e:
+        caught = True
+        reason = e.reason
+        back = e^.take_buffer()
+    assert_true(caught, "result() should raise once the loop is gone")
+    assert_true(reason == FailureReason.LOOP_GONE)
+    assert_true(not Bool(back), "an abandoned buffer is not handed back")
+
+    reader.close()
+    writer.close()
+
+
+def test_done_recv_future_outliving_loop_returns_its_buffer() raises:
+    """A RecvFuture whose completion already landed keeps its buffer.
+
+    Unlike the LOOP_GONE case above, the completion arrives before the
+    loop is destroyed: `abandon_all()` skips a state that is already
+    done, so nothing is abandoned, and result() still reports the
+    original IO failure with the original buffer intact.
+    """
+    var sock = Socket.tcp_v4()
+    var loop = WatchLoop(capacity=8)
+    var buf = List[UInt8](length=16, fill=0)
+    var storage = Int(buf.unsafe_ptr())
+    var recv_f = loop.recv(sock, buf^)
+    loop.run()
+
+    _ = loop^  # Destroyed after the completion arrived; future still held.
+
+    var caught = False
+    var reason = FailureReason.NOT_DONE
+    var back = Optional[List[UInt8]]()
+    try:
+        _ = recv_f^.result()
+    except e:
+        caught = True
+        reason = e.reason
+        back = e^.take_buffer()
+    assert_true(caught, "result() should raise the original IO failure")
+    assert_true(reason == FailureReason.IO)
+    assert_true(Bool(back), "the buffer comes back: nothing was abandoned")
+    assert_equal(Int(back.value().unsafe_ptr()), storage, "same storage")
+    sock.close()
+
+
 def main() raises:
     test_orphaned_future_freed_when_loop_destroyed_without_run()
     print("ok: orphaned future freed with loop")
@@ -209,4 +306,10 @@ def main() raises:
     print("ok: orphaned composite freed with loop")
     test_live_composite_outliving_loop_reports_loop_gone()
     print("ok: live composite reports loop gone")
+    test_live_recv_future_outliving_loop_reports_loop_gone()
+    print("ok: live recv future reports loop gone")
+    test_live_send_future_outliving_loop_reports_loop_gone()
+    print("ok: live send future reports loop gone")
+    test_done_recv_future_outliving_loop_returns_its_buffer()
+    print("ok: done recv future outliving loop returns its buffer")
     print("PASS: test_loop_owns_in_flight.mojo")

@@ -91,14 +91,20 @@ def _monotonic_ns() -> Int64:
 
 
 def _epoll_wait_timeout_ms(
-    *, wait: Bool, has_deadline: Bool, remaining_ns: Int64
+    *,
+    wait: Bool,
+    has_deadline: Bool,
+    remaining_ns: Int64,
+    timeout_ms: Int = -1,
 ) -> Int32:
     """Compute the epoll_wait timeout for one tick().
 
     Rules:
         - not wait: 0, whether or not a timer is armed -- the caller has
           work to process, so never block.
-        - wait, no timer armed: -1, block until an fd becomes ready.
+        - wait, no timer armed, no bound: -1, block until an fd is ready.
+        - wait, no timer armed, bound given: the bound, clamped to
+          Int32.MAX.
         - wait, timer armed: milliseconds until the earliest deadline,
           in [1, Int32.MAX]. A deadline already reached gives 0. A
           positive remainder is rounded UP to whole milliseconds (so a
@@ -106,13 +112,15 @@ def _epoll_wait_timeout_ms(
           before the deadline, which would busy-spin), and anything
           beyond Int32.MAX milliseconds (~24.8 days) clamps to
           Int32.MAX; a plain Int32 cast would wrap negative, which
-          epoll_wait reads as "block forever".
+          epoll_wait reads as "block forever". A bound smaller than
+          that remainder wins.
 
     Args:
         wait: Whether this tick may block at all.
         has_deadline: Whether at least one timer is armed.
         remaining_ns: Nanoseconds until the earliest deadline; only
                       read when has_deadline is True.
+        timeout_ms: The caller's bound in milliseconds; -1 for none.
 
     Returns:
         The timeout to pass to epoll_wait: -1, 0 or a positive count
@@ -120,16 +128,24 @@ def _epoll_wait_timeout_ms(
     """
     if not wait:
         return 0
+    var bound = Int32(-1)
+    if timeout_ms >= 0:
+        bound = Int32.MAX if timeout_ms >= Int(Int32.MAX) else Int32(
+            timeout_ms
+        )
     if not has_deadline:
-        return -1
+        return bound
     if remaining_ns <= 0:
         return 0
     comptime NS_PER_MS = Int64(1_000_000)
     var longest_ns = Int32.MAX.cast[DType.int64]() * NS_PER_MS
-    if remaining_ns >= longest_ns:
-        return Int32.MAX
-    var whole_ms_rounded_up = (remaining_ns + NS_PER_MS - 1) // NS_PER_MS
-    return whole_ms_rounded_up.cast[DType.int32]()
+    var until_deadline = Int32.MAX
+    if remaining_ns < longest_ns:
+        var whole_ms_rounded_up = (remaining_ns + NS_PER_MS - 1) // NS_PER_MS
+        until_deadline = whole_ms_rounded_up.cast[DType.int32]()
+    if bound >= 0 and bound < until_deadline:
+        return bound
+    return until_deadline
 
 
 # ── Internal data structures ──────────────────────────────────────────────────
@@ -602,7 +618,7 @@ struct EpollCompletionDriver(IoDriver):
         """
         return True
 
-    def tick(mut self, wait: Bool) raises -> Int:
+    def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
         """Drain ready queue, poll epoll, fire expired timers.
 
         All Completion callbacks fire here -- never during operation methods.
@@ -621,6 +637,9 @@ struct EpollCompletionDriver(IoDriver):
             wait: If True, block until at least one event or timer.
                   If False, return immediately after dispatching any
                   already-available events.
+            timeout_ms: Upper bound on the wait in milliseconds; -1 for
+                        none, 0 to poll. Folded into the epoll_wait
+                        timeout together with the earliest timer.
 
         Returns:
             The number of dispatched completions.
@@ -648,10 +667,11 @@ struct EpollCompletionDriver(IoDriver):
         var remaining_ns = Int64(0)
         if has_deadline:
             remaining_ns = next_deadline - _monotonic_ns()
-        var timeout_ms = _epoll_wait_timeout_ms(
+        var epoll_timeout = _epoll_wait_timeout_ms(
             wait=effective_wait,
             has_deadline=has_deadline,
             remaining_ns=remaining_ns,
+            timeout_ms=timeout_ms,
         )
 
         # 3. epoll_wait.
@@ -659,7 +679,7 @@ struct EpollCompletionDriver(IoDriver):
             self._epfd,
             self._events,
             max_events=self._max_events,
-            timeout=timeout_ms,
+            timeout=epoll_timeout,
         )
 
         # 4. Dispatch epoll events, skipping stale ones.

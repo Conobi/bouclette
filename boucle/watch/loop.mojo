@@ -58,6 +58,8 @@ comptime _KIND_CONNECT_WITH_TIMEOUT = 2
 comptime _KIND_RECV = 3
 comptime _KIND_SEND = 4
 comptime _KIND_TIMER = 5
+comptime _KIND_RECV_MSG = 6
+comptime _KIND_SEND_MSG = 7
 
 
 struct WatchLoop(Movable):

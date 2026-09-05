@@ -1,13 +1,17 @@
 """Tests for Future error paths and edge cases.
 
-Covers the two error shapes a Future can report:
+Covers the error shapes a Future can report:
 
-- a syscall failure, raised as an `IOError` carrying the errno, so the
-  message names the error (`ENOTCONN (107)`) instead of spelling out a
-  number;
-- misuse of the handle (result() before the completion arrived, loop
-  destroyed first, a second result() on the futures that allow one),
-  raised as a plain message.
+- a syscall failure on accept/connect/timer, raised as an `IOError`
+  carrying the errno, so the message names the error (`EINVAL (22)`)
+  instead of spelling out a number;
+- a syscall failure on recv/send, raised as a `TransferFailed` with
+  `reason == IO`, the errno in `error`, and the buffer recoverable
+  through `take_buffer()`;
+- misuse of the handle (result() before the completion arrived, a
+  second result() on the futures that allow one). On recv/send this is
+  `TransferFailed` with `reason == NOT_DONE` and no buffer; on the
+  other futures a plain message.
 
 RecvFuture and SendFuture have no "already consumed" shape: their
 result() consumes the future, so a second call does not compile.
@@ -23,7 +27,13 @@ from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Backlog
 from boucle.net.socket import Socket
 from boucle.socle.platform import Errno
-from boucle.watch import WatchLoop, AcceptFuture, ConnectFuture
+from boucle.watch import (
+    WatchLoop,
+    AcceptFuture,
+    ConnectFuture,
+    FailureReason,
+    TransferFailed,
+)
 
 
 def _make_tcp_listener() raises -> Socket:
@@ -164,13 +174,66 @@ def test_many_concurrent_ops() raises:
     server.close()
 
 
-def test_recv_failure_reports_an_ioerror() raises:
-    """A recv on a socket that was never connected fails with ENOTCONN.
+def test_recv_failure_returns_the_buffer() raises:
+    """A recv on a never-connected socket fails with ENOTCONN and gives the buffer back.
 
-    The point is the shape, not the errno: the message must be the one
-    `IOError` produces, so a caller reads a name instead of decoding a
-    number out of prose.
+    The point is the shape: `TransferFailed` with `reason == IO`, the
+    errno in `error`, and the very list that was submitted recoverable
+    from the failure.
     """
+    var sock = Socket.tcp_v4()
+    var loop = WatchLoop(capacity=8)
+    var buf = List[UInt8](length=16, fill=0)
+    var storage = Int(buf.unsafe_ptr())
+    var recv_f = loop.recv(sock, buf^)
+    loop.run()
+
+    var reason = FailureReason.NOT_DONE
+    var error = IOError(positive_errno=0)
+    var back = Optional[List[UInt8]]()
+    try:
+        _ = recv_f^.result()
+    except e:
+        reason = e.reason
+        error = e.error
+        back = e^.take_buffer()
+    assert_true(reason == FailureReason.IO, "a completed failure is IO")
+    assert_true(error == IOError(Errno.ENOTCONN))
+    assert_true(Bool(back), "the buffer comes back on IO failure")
+    assert_equal(len(back.value()), 16)
+    assert_equal(Int(back.value().unsafe_ptr()), storage, "same storage")
+    sock.close()
+
+
+def test_send_failure_returns_the_buffer() raises:
+    """A send on a never-connected socket fails with EPIPE and gives the buffer back."""
+    var sock = Socket.tcp_v4()
+    var loop = WatchLoop(capacity=8)
+    var buf = List[UInt8](length=4, fill=65)
+    var storage = Int(buf.unsafe_ptr())
+    var send_f = loop.send(sock, buf^)
+    loop.run()
+
+    var reason = FailureReason.NOT_DONE
+    var error = IOError(positive_errno=0)
+    var back = Optional[List[UInt8]]()
+    try:
+        _ = send_f^.result()
+    except e:
+        reason = e.reason
+        error = e.error
+        back = e^.take_buffer()
+    assert_true(reason == FailureReason.IO)
+    assert_true(error == IOError(Errno.EPIPE))
+    assert_true(Bool(back))
+    assert_equal(len(back.value()), 4)
+    assert_equal(Int(back.value()[0]), 65, "the bytes are untouched")
+    assert_equal(Int(back.value().unsafe_ptr()), storage, "same storage")
+    sock.close()
+
+
+def test_typed_failure_degrades_to_a_readable_message() raises:
+    """Through a bare `raises` frame the failure still reads as reason and errno."""
     var sock = Socket.tcp_v4()
     var loop = WatchLoop(capacity=8)
     var recv_f = loop.recv(sock, List[UInt8](length=16, fill=0))
@@ -181,23 +244,36 @@ def test_recv_failure_reports_an_ioerror() raises:
         _ = recv_f^.result()
     except e:
         message = String(e)
-    assert_equal(message, String(IOError(Errno.ENOTCONN)))
+    assert_equal(message, String("IO: ", IOError(Errno.ENOTCONN)))
     sock.close()
 
 
-def test_send_failure_reports_an_ioerror() raises:
-    """A send on a socket that was never connected fails with EPIPE."""
+def test_result_before_run_is_not_done() raises:
+    """Asking a recv for its result before the loop ran is NOT_DONE, no buffer.
+
+    No syscall failed, so the errno is EINVAL by convention. The buffer
+    stays with the loop, which drains the operation in run() below and
+    releases it.
+    """
     var sock = Socket.tcp_v4()
     var loop = WatchLoop(capacity=8)
-    var send_f = loop.send(sock, List[UInt8](length=4, fill=65))
-    loop.run()
+    var recv_f = loop.recv(sock, List[UInt8](length=16, fill=0))
 
+    var reason = FailureReason.IO
+    var back = Optional[List[UInt8]](List[UInt8]())
     var message = String("")
     try:
-        _ = send_f^.result()
+        _ = recv_f^.result()
     except e:
+        reason = e.reason
         message = String(e)
-    assert_equal(message, String(IOError(Errno.EPIPE)))
+        back = e^.take_buffer()
+    assert_true(reason == FailureReason.NOT_DONE)
+    assert_true(not Bool(back), "the buffer is still in flight")
+    assert_equal(message, "NOT_DONE: EINVAL (22)")
+
+    loop.run()
+    assert_equal(loop.in_flight_count(), 0)
     sock.close()
 
 
@@ -217,37 +293,13 @@ def test_accept_failure_reports_an_ioerror() raises:
     sock.close()
 
 
-def test_misuse_keeps_its_own_message() raises:
-    """Handle misuse is not a syscall failure and must not read like one.
-
-    An errno would be a lie here — no syscall failed — so these keep the
-    plain-message shape documented on result(). Asking a recv for its
-    result before the loop has run is the only misuse left on a
-    RecvFuture: result() consumes the future, so asking twice is a
-    compile error, not a runtime one. The buffer stays with the loop,
-    which drains the operation in run() below.
-    """
-    var sock = Socket.tcp_v4()
-    var loop = WatchLoop(capacity=8)
-    var recv_f = loop.recv(sock, List[UInt8](length=16, fill=0))
-
-    var message = String("")
-    try:
-        _ = recv_f^.result()
-    except e:
-        message = String(e)
-    assert_equal(message, "operation not complete")
-
-    loop.run()
-    sock.close()
-
-
 def main() raises:
     test_double_result_raises()
-    test_recv_failure_reports_an_ioerror()
-    test_send_failure_reports_an_ioerror()
+    test_recv_failure_returns_the_buffer()
+    test_send_failure_returns_the_buffer()
     test_accept_failure_reports_an_ioerror()
-    test_misuse_keeps_its_own_message()
+    test_typed_failure_degrades_to_a_readable_message()
+    test_result_before_run_is_not_done()
     test_not_done_before_run()
     test_sequential_runs()
     test_many_concurrent_ops()

@@ -7,6 +7,6 @@ pointer-level escape hatch, `WatchLoop` is the API users should reach
 for first.
 """
 
-from .completion import Completion, CompletionFn
+from .completion import Completion, CompletionFn, buffer_id, has_more
 from .completion_loop import CompletionLoop
 from .loop import EventLoop

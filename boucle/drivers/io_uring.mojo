@@ -15,16 +15,20 @@ from boucle.socle.linux.io_uring.types import (
     IoUringSqeFlags,
     IoUringAcceptFlags,
     IoUringBufReg,
+    IoUringEnterFlags,
     IoUringFeatureFlags,
+    IoUringGetEventsArg,
     IoUringOp,
     IoUringParams,
     IoUringProbe,
     IoUringRegisterOp,
     IoUringSetupFlags,
+    EnterArg,
 )
-from boucle.socle.linux.raw import IORING_RECV_MULTISHOT
+from boucle.socle.linux.raw import IORING_RECV_MULTISHOT, ETIME, __kernel_timespec
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import msghdr
+from boucle.socle.linux.errno import Errno
 from boucle.socle.linux.uname import kernel_version, KernelVersion
 from boucle.handle import RawHandle
 from boucle.socle.ptr import null_ptr
@@ -40,6 +44,45 @@ comptime _MULTISHOT_RECVMSG_MAJOR = 6
 comptime _MULTISHOT_RECVMSG_MINOR = 0
 comptime _BUFFER_RING_MAJOR = 5
 comptime _BUFFER_RING_MINOR = 19
+
+# user_data of the sentinel timeout a bounded tick submits on kernels
+# without IORING_FEAT_EXT_ARG. Real operations carry a Completion
+# address, never all ones; liburing reserves the same value
+# (LIBURING_UDATA_TIMEOUT). Completions carrying it are skipped and not
+# counted.
+comptime _SENTINEL_USER_DATA = UInt64.MAX
+
+comptime _NS_PER_MS = Int64(1_000_000)
+
+
+def _is_etime(e: Error) -> Bool:
+    """Return True when `e` is the socle layer's rendering of -ETIME.
+
+    Args:
+        e: An error raised by a socle syscall wrapper.
+
+    Returns:
+        True for `"-62"`; False for any other text.
+    """
+    try:
+        return Errno(error=e) is Errno(errno=UInt16(ETIME))
+    except:
+        return False
+
+
+def _timespec_from_ms(timeout_ms: Int) -> __kernel_timespec:
+    """Split a non-negative millisecond count into a kernel timespec.
+
+    Args:
+        timeout_ms: Milliseconds, >= 0.
+
+    Returns:
+        `tv_sec = timeout_ms // 1000`, `tv_nsec = (timeout_ms % 1000) * 1e6`.
+    """
+    return __kernel_timespec(
+        tv_sec=Int64(timeout_ms // 1000),
+        tv_nsec=Int64(timeout_ms % 1000) * _NS_PER_MS,
+    )
 
 
 @fieldwise_init
@@ -109,6 +152,9 @@ struct IoUringDriver(IoDriver):
                                      kernel is 6.0 or newer.
         _supports_buffer_ring: The kernel is 5.19 or newer.
         _supports_timeout_arg: `IORING_FEAT_EXT_ARG` was reported at setup.
+        _sentinel_ts: Timespec of the sentinel timeout on kernels without
+                      `IORING_FEAT_EXT_ARG`; the kernel copies it at
+                      submission, so one field serves every bounded tick.
     """
 
     var _ring: IoUring[]
@@ -116,6 +162,7 @@ struct IoUringDriver(IoDriver):
     var _supports_multishot_recvmsg: Bool
     var _supports_buffer_ring: Bool
     var _supports_timeout_arg: Bool
+    var _sentinel_ts: __kernel_timespec
 
     def __init__(out self, *, capacity: Int = 64) raises:
         """Construct an IoUringDriver with the given capacity hint.
@@ -143,6 +190,7 @@ struct IoUringDriver(IoDriver):
                       submission queue size, which the kernel rounds up
                       to a power of two.
         """
+        self._sentinel_ts = __kernel_timespec(tv_sec=Int64(0), tv_nsec=Int64(0))
         var params = IoUringParams()
         params.flags |= IoUringSetupFlags.NO_SQARRAY
         self._ring = IoUring[](sq_entries=UInt32(capacity), params=params)
@@ -184,28 +232,48 @@ struct IoUringDriver(IoDriver):
         self._supports_multishot_recvmsg = move._supports_multishot_recvmsg
         self._supports_buffer_ring = move._supports_buffer_ring
         self._supports_timeout_arg = move._supports_timeout_arg
+        self._sentinel_ts = move._sentinel_ts
 
-    def tick(mut self, wait: Bool) raises -> Int:
-        """Submit pending operations and dispatch completed operations.
+    def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
+        """Submit pending operations, wait at most `timeout_ms`, dispatch.
 
         Recovers the Completion pointer from each completion's user_data
         field and invokes the callback. Skips completions with
-        user_data == 0 (e.g. internal kernel notifications).
+        user_data == 0 (internal kernel notifications) and the sentinel
+        timeout's user_data, neither of which is counted.
+
+        A bounded wait uses the enter call's extended argument when the
+        kernel reported `IORING_FEAT_EXT_ARG`; the kernel then answers
+        -ETIME when the bound expires first, which is swallowed here.
+        Without the feature a one-shot timeout with `_SENTINEL_USER_DATA`
+        is submitted alongside the pending work and the wait is for one
+        completion, which the sentinel satisfies if nothing else does.
+        On kernels without `IORING_FEAT_EXT_ARG`, a bounded tick that
+        returns early for a reason other than its own sentinel firing
+        leaves that sentinel armed, so a later unbounded tick may wake
+        with zero dispatched once it fires; callers loop on their own
+        pending count rather than on one tick's return value.
 
         Args:
-            wait: If True, block until at least one completion arrives.
-                  If False, dispatch only already-available completions.
+            wait: If True, block until at least one completion arrives
+                  or the bound expires. If False, dispatch only
+                  already-available completions; `timeout_ms` is ignored.
+            timeout_ms: Upper bound on the wait in milliseconds. -1 means
+                        no bound; 0 means poll.
 
         Returns:
-            The number of completed operations (excludes skipped user_data==0).
+            The number of completed operations, excluding skipped ones.
         """
-        var wait_nr = UInt32(1) if wait else UInt32(0)
-        _ = self._ring.submit_and_wait(wait_nr=wait_nr)
+        if wait and timeout_ms >= 0:
+            self._submit_and_wait_bounded(timeout_ms)
+        else:
+            var wait_nr = UInt32(1) if wait else UInt32(0)
+            _ = self._ring.submit_and_wait(wait_nr=wait_nr)
         var dispatched = 0
         var cq = self._ring.cq(wait_nr=0)
         while cq:
             var cqe = cq.__next__()
-            if cqe.user_data == 0:
+            if cqe.user_data == 0 or cqe.user_data == _SENTINEL_USER_DATA:
                 continue
             var cmp = Pointer[Completion, MutUntrackedOrigin](
                 unsafe_from_address=Int(cqe.user_data)
@@ -214,6 +282,46 @@ struct IoUringDriver(IoDriver):
             dispatched += 1
         cq^.__deinit__()
         return dispatched
+
+    def _submit_and_wait_bounded(mut self, timeout_ms: Int) raises:
+        """Submit pending work and wait for one completion or `timeout_ms`.
+
+        Args:
+            timeout_ms: The bound in milliseconds, >= 0.
+        """
+        var ts = _timespec_from_ms(timeout_ms)
+        if self._supports_timeout_arg:
+            var arg = IoUringGetEventsArg()
+            arg.ts = UInt64(Int(Pointer(to=ts)))
+            var arg_p = Pointer(to=arg)
+            var enter_arg = EnterArg[
+                24, IoUringEnterFlags.EXT_ARG, ImmStaticOrigin
+            ](
+                arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
+                    unsafe_from_address=Int(arg_p)
+                )
+            )
+            try:
+                _ = self._ring.submit_and_wait(wait_nr=UInt32(1), arg=enter_arg)
+            except e:
+                if not _is_etime(e):
+                    raise e
+            _ = ts
+            _ = arg
+            return
+
+        # Fallback: a sentinel timeout operation stands in for the bound.
+        self._sentinel_ts = ts
+        if not self._ring.sq():
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise "submission queue full after flush"
+        var sq = self._ring.unsynced_sq()
+        var ts_cv = Pointer[c_void, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._sentinel_ts))
+        )
+        _ = Timeout(sq.__next__(), ts_cv).user_data(_SENTINEL_USER_DATA)
+        _ = self._ring.submit_and_wait(wait_nr=UInt32(1))
 
     def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]

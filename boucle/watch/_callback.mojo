@@ -109,7 +109,7 @@ struct _SlotLink(Copyable, ImplicitlyCopyable, Movable):
 
 
 # Low bits of a slot key that carry the slab kind; the rest is the index.
-comptime _KIND_BITS = 3
+comptime _KIND_BITS = 4
 
 
 trait _InFlightState(Deinitable, Movable):

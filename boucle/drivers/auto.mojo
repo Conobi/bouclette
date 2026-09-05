@@ -89,20 +89,23 @@ struct AutoDriver(IoDriver):
         _ = self._uring^
         _ = self._epoll^
 
-    def tick(mut self, wait: Bool) raises -> Int:
+    def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
         """Submit pending work and dispatch completed operations.
 
         Args:
-            wait: If True, block until at least one completion arrives.
-                  If False, return immediately after dispatching any
-                  already-available completions.
+            wait: If True, block until at least one completion arrives
+                  or `timeout_ms` has passed. If False, return
+                  immediately after dispatching any already-available
+                  completions.
+            timeout_ms: Upper bound on the wait in milliseconds; -1 for
+                        none, 0 to poll.
 
         Returns:
             The number of dispatched completions.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().tick(wait)
-        return self._epoll.value().tick(wait)
+            return self._uring.value().tick(wait, timeout_ms)
+        return self._epoll.value().tick(wait, timeout_ms)
 
     def nop(
         mut self, c: Pointer[Completion, MutUntrackedOrigin]

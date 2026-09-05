@@ -438,7 +438,10 @@ struct MessageResult(Movable):
         count: How many payload bytes moved. For a receive this is how
                many bytes at the front of the payload are valid; the
                payload's length is unchanged. For a send it is how many
-               bytes went out.
+               bytes went out. Under MSG_TRUNC the kernel reports the
+               full datagram length here, which can exceed the payload;
+               `transferred()` clamps to the payload's own length and
+               never does.
     """
 
     var count: Int
@@ -539,10 +542,15 @@ struct MessageResult(Movable):
     def transferred(ref self) -> Span[UInt8, origin_of(self._msg._payload)]:
         """View the payload bytes that actually moved.
 
+        Clamped to the payload's length: under MSG_TRUNC `count` is the
+        full datagram size, which can be larger than the payload the
+        caller offered as a receive window.
+
         Returns:
-            The first `count` bytes of the payload.
+            The first `count` bytes of the payload, or all of it when
+            `count` exceeds the payload's length.
         """
-        return Span(self._msg._payload)[: self.count]
+        return Span(self._msg._payload)[: min(self.count, len(self._msg._payload))]
 
     def take_message(deinit self) -> Message:
         """Take the message back, consuming this result.

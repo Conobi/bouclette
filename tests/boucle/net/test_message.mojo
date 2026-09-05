@@ -399,6 +399,15 @@ def test_message_result_v4_peer_and_ctrunc() raises:
     assert_true(wrong, "no name written: EAFNOSUPPORT")
 
 
+def test_message_result_transferred_clamps_count_above_payload_length() raises:
+    """A kernel-reported count past the payload (MSG_TRUNC) must not abort
+    transferred(); it clamps to the payload's own length instead."""
+    var msg = Message(List[UInt8](length=2, fill=0x41))
+    var r = MessageResult(10, msg^, Int32(MSG_TRUNC))
+    assert_equal(r.count, 10, "the raw kernel count is preserved")
+    assert_equal(len(r.transferred()), 2, "transferred() clamps to the payload")
+
+
 def main() raises:
     test_walker_yields_each_record()
     test_walker_stops_at_a_record_past_the_end()
@@ -416,4 +425,5 @@ def main() raises:
     test_set_ecn_raises_einval_without_family_or_room()
     test_message_result_exposes_count_peer_and_flags()
     test_message_result_v4_peer_and_ctrunc()
+    test_message_result_transferred_clamps_count_above_payload_length()
     print("PASS: test_message.mojo")

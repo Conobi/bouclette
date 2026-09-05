@@ -24,10 +24,9 @@ result() reports the destroyed loop.
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 
-from boucle.error import IOError
 from boucle.proactor.completion import Completion
 from boucle.watch._callback import _FutureCallback, _SlotLink, _dispatch
-from boucle.watch.transfer import TransferResult
+from boucle.watch.transfer import TransferFailed, TransferResult
 
 
 # ===----------------------------------------------------------------------=== #
@@ -193,7 +192,8 @@ struct RecvFuture(Movable):
     against. Dropping the future without calling result() is safe and
     means giving the buffer up: it is freed with the state once the
     completion has arrived. Destroying the loop before completion is
-    also safe — result() then raises.
+    also safe — result() then raises `TransferFailed` with
+    `reason == LOOP_GONE`.
     """
 
     var _state: Pointer[_RecvFutureState, MutUntrackedOrigin]
@@ -232,7 +232,7 @@ struct RecvFuture(Movable):
         else:
             self._state[].mark_owner_dropped()
 
-    def result(deinit self) raises -> TransferResult:
+    def result(deinit self) raises TransferFailed -> TransferResult:
         """Take the byte count and the buffer from a completed recv.
 
         Consumes the future — there is nothing left to call twice. The
@@ -240,28 +240,27 @@ struct RecvFuture(Movable):
         kernel wrote (0 means end of file); the buffer's own length is
         unchanged, it is still the window that was submitted.
 
-        Two shapes of failure come out of here. A failed recv raises an
-        `IOError` carrying the errno, the same type every boucle I/O call
-        raises. Misusing the handle raises a plain message instead — no
-        syscall failed, so there is no errno to report. The buffer is not
-        handed back on either path: raising leaves nothing to return it
-        in, so it is freed with the state.
+        Every failure is a `TransferFailed`. A failed recv carries
+        `reason == IO`, the errno in `error`, and the buffer, recoverable
+        with `take_buffer()`. Calling before the completion arrived is
+        `NOT_DONE` (the loop keeps the buffer and releases it when the
+        recv finishes); a loop destroyed first is `LOOP_GONE` (its
+        destructor abandoned the buffer). Neither of those returns a
+        buffer.
 
         Returns:
             The byte count paired with the buffer.
 
         Raises:
-            IOError if the recv syscall failed. A plain message if the
-            loop was destroyed before the operation completed, or the
-            operation has not completed.
+            TransferFailed with the reason above.
         """
         var state = self._state
         if not state[].done:
             if state[]._loop_gone:
                 state.unsafe_deinit_pointee()
-                raise "loop destroyed before completion"
+                raise TransferFailed.loop_gone()
             state[].mark_owner_dropped()
-            raise "operation not complete"
+            raise TransferFailed.not_done()
 
         var raw = state[]._result
         var buf = state[].take_buffer()
@@ -270,7 +269,7 @@ struct RecvFuture(Movable):
         else:
             state[].mark_owner_dropped()
         if raw < 0:
-            raise IOError.from_errno(Int(raw))
+            raise TransferFailed.io(raw, buf^)
         return TransferResult(Int(raw), buf^)
 
     def done(self) -> Bool:

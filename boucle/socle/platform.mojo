@@ -87,6 +87,20 @@ from boucle.socle.linux.raw import (
     ETIMEDOUT,
 )
 
+# --- Completion flag encoding (portable by contract) -------------------
+#
+# The flags a completion callback receives use io_uring's CQE layout on
+# every backend: the epoll completion driver emits the same bits for its
+# emulated multishot deliveries. A second OS backend keeps the encoding
+# and maps its native flags onto it, so these three names are the
+# contract, not a Linux detail.
+
+from boucle.socle.linux.raw import (
+    IORING_CQE_BUFFER_SHIFT,
+    IORING_CQE_F_BUFFER,
+    IORING_CQE_F_MORE,
+)
+
 # --- Raw handles ------------------------------------------------------
 
 from boucle.socle.linux.fd import (

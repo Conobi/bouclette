@@ -19,6 +19,7 @@ from boucle.socle.platform import (
     EAFNOSUPPORT,
     EAGAIN,
     EBADF,
+    ECANCELED,
     ECONNABORTED,
     ECONNREFUSED,
     ECONNRESET,
@@ -97,6 +98,8 @@ def _errno_name(errno: Int) -> StaticString:
         return "EINPROGRESS"
     if errno == EPIPE:
         return "EPIPE"
+    if errno == ECANCELED:
+        return "ECANCELED"
     return "UNKNOWN"
 
 

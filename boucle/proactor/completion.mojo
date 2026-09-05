@@ -6,7 +6,13 @@ loop recovers the Completion pointer and invokes its callback with
 the result.
 """
 
+from std.collections import Optional
 from std.memory import Pointer
+from boucle.socle.platform import (
+    IORING_CQE_BUFFER_SHIFT,
+    IORING_CQE_F_BUFFER,
+    IORING_CQE_F_MORE,
+)
 from boucle.socle.ptr import null_ptr
 
 
@@ -67,3 +73,39 @@ struct Completion(Movable):
     ):
         """Default no-op callback."""
         pass
+
+
+# ── Completion flag decoders ──────────────────────────────────────────────────
+
+
+def buffer_id(flags: UInt32) -> Optional[UInt16]:
+    """Return the provided-buffer id a completion's flags name, if any.
+
+    Set when the operation was submitted with buffer selection and the
+    kernel (or the epoll emulation) picked a buffer: bit 0 is the marker
+    and bits 16..31 carry the id.
+
+    Args:
+        flags: The flags passed to the completion callback.
+
+    Returns:
+        The buffer id, or None when no buffer was selected.
+    """
+    if (flags & UInt32(IORING_CQE_F_BUFFER)) == 0:
+        return None
+    return UInt16(flags >> UInt32(IORING_CQE_BUFFER_SHIFT))
+
+
+def has_more(flags: UInt32) -> Bool:
+    """Return True when a multishot operation stays armed after this completion.
+
+    A completion without this bit is the operation's last; a multishot
+    submission must be re-armed to deliver again.
+
+    Args:
+        flags: The flags passed to the completion callback.
+
+    Returns:
+        True if more completions will follow from the same submission.
+    """
+    return (flags & UInt32(IORING_CQE_F_MORE)) != 0

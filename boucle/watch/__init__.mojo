@@ -15,5 +15,5 @@ from .loop import WatchLoop
 from .outcome import ConnectOutcome
 from .recv import RecvFuture
 from .send import SendFuture
-from .transfer import TransferResult
+from .transfer import FailureReason, MessageFailed, TransferFailed, TransferResult
 from .timer import TimerFuture

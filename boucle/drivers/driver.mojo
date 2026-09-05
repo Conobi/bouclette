@@ -32,16 +32,21 @@ trait IoDriver(Movable):
         """Release all resources held by this driver."""
         ...
 
-    def tick(mut self, wait: Bool) raises -> Int:
+    def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
         """Submit pending operations and dispatch completed operations.
 
         Args:
-            wait: If True, block until at least one completion arrives.
-                  If False, return immediately after dispatching any
-                  already-available completions.
+            wait: If True, block until at least one completion arrives
+                  or `timeout_ms` has passed. If False, return
+                  immediately after dispatching any already-available
+                  completions; `timeout_ms` is then ignored.
+            timeout_ms: Upper bound on the wait in milliseconds. -1
+                        waits without limit; 0 polls.
 
         Returns:
-            The number of completed operations.
+            The number of completed operations the caller can observe.
+            Bookkeeping completions the driver submits for itself are
+            not counted.
         """
         ...
 
