@@ -33,6 +33,7 @@ from boucle.socle.platform import (
     ENOMEM,
     ENOSYS,
     ENOTCONN,
+    EOPNOTSUPP,
     EPERM,
     EPIPE,
     ETIMEDOUT,
@@ -74,6 +75,8 @@ def _errno_name(errno: Int) -> StaticString:
         return "EINVAL"
     if errno == ENOSYS:
         return "ENOSYS"
+    if errno == EOPNOTSUPP:
+        return "EOPNOTSUPP"
     if errno == EADDRINUSE:
         return "EADDRINUSE"
     if errno == EADDRNOTAVAIL:

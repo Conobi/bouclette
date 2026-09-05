@@ -2,8 +2,8 @@
 
 _ConnectFutureState holds the per-operation Completion token, a copy of
 the target address storage (for pointer stability), and the raw
-completion result. ConnectFuture is the RAII handle returned to callers — it owns
-the heap-allocated state and decodes the result into a ConnectOutcome.
+completion result. ConnectFuture is the RAII handle returned to callers — it points
+at the slab-owned state and decodes the result into a ConnectOutcome.
 
 The state is shared with the WatchLoop that submitted the connect (see
 `_callback.mojo` for the ownership rules). Dropping the ConnectFuture

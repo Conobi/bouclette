@@ -283,6 +283,69 @@ struct AutoDriver(IoDriver):
             return self._uring.value().sendmsg(fd, msg, c)
         return self._epoll.value().sendmsg(fd, msg, c)
 
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg into provided buffers.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to the msghdr template.
+            group_id: A registered buffer group.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().multishot_recvmsg(fd, msg, group_id, c)
+        return self._epoll.value().multishot_recvmsg(fd, msg, group_id, c)
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Register a provided-buffer group.
+
+        Args:
+            base: Address of buffer 0.
+            size: Bytes per buffer.
+            count: Number of buffers.
+            group_id: Caller-chosen id.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().register_buffer_group(
+                base, size, count, group_id
+            )
+        return self._epoll.value().register_buffer_group(
+            base, size, count, group_id
+        )
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Tear down a provided-buffer group.
+
+        Args:
+            group_id: The group to remove.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().unregister_buffer_group(group_id)
+        return self._epoll.value().unregister_buffer_group(group_id)
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Return a delivered buffer to its group.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The id from the delivery's flags.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().return_buffer(group_id, buf_id)
+        return self._epoll.value().return_buffer(group_id, buf_id)
+
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism this driver uses."""
         return self._backend

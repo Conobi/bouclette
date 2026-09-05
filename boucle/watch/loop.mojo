@@ -72,7 +72,8 @@ struct WatchLoop(Movable):
 
     The driver is hidden behind a comptime alias. Users never see IoUringDriver.
     _pending tracks completions in flight — each operation adds 1, each
-    dispatched completion subtracts 1, managed entirely by run().
+    dispatched completion subtracts 1; both run() and step() drive that
+    bookkeeping.
 
     The eight slabs hold every operation state, simple and composite
     alike, and double as the registry of what is not yet settled; they
@@ -703,7 +704,10 @@ struct WatchLoop(Movable):
         call. The loop's own bookkeeping completions — the cancel a
         `connect_with_timeout` submits for its loser — are dispatched
         but not counted; a driver's sentinel timeout is skipped by the
-        driver before dispatch, so it never reaches step() at all.
+        driver before dispatch, so it never reaches step() at all. A
+        composite's losing completion (the cancelled timer's ECANCELED)
+        counts as observable too, so `connect_with_timeout` contributes
+        two to the returned total while its handle resolves once.
 
         Args:
             timeout_ms: Upper bound on the wait, in milliseconds. -1

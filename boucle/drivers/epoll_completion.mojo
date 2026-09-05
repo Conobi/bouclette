@@ -38,23 +38,34 @@ from boucle.socle.linux.raw import (
     EAGAIN,
     EEXIST,
     EINPROGRESS,
+    EINVAL,
     ECANCELED,
+    ENOBUFS,
     ENOENT,
     ETIME,
     F_GETFL,
     F_SETFL,
+    IORING_CQE_BUFFER_SHIFT,
+    IORING_CQE_F_BUFFER,
+    IORING_CQE_F_MORE,
+    MSG_DONTWAIT,
     MSG_NOSIGNAL,
+    MSG_TRUNC,
     O_CLOEXEC,
     O_NONBLOCK,
     SOL_SOCKET,
     SO_ERROR,
+    iovec,
+    msghdr,
 )
 from boucle.socle.linux.epoll.syscalls import epoll_create, epoll_wait
+from boucle.net.message import DELIVERY_HEADER_LEN, write_delivery_header
 from boucle.socle.linux.fd import close_unchecked
 from boucle.socle.linux.errno import _check_for_errors, unsafe_decode_result
 from boucle.socle.ptr import null_ptr
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
+from boucle.error import IOError
 from boucle.drivers.driver import IoDriver
 from boucle.drivers.backend import Backend
 from boucle.drivers.feature import DriverFeature
@@ -164,6 +175,7 @@ struct _OpKind(TrivialRegisterPassable):
     comptime SENDMSG = Self(6)
     comptime TIMEOUT = Self(7)
     comptime CANCEL = Self(8)
+    comptime MULTISHOT_RECVMSG = Self(9)
 
     var id: UInt8
 
@@ -186,6 +198,10 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     time the slot is freed so a stale epoll event (one whose op was
     cancelled or completed earlier in the same batch) is recognised
     and skipped instead of dispatching a freed or re-used slot.
+
+    `group_id` is only meaningful for a MULTISHOT_RECVMSG op: the
+    provided-buffer group its deliveries draw from. Such an op is the
+    one kind whose slot stays active while its completions fire.
     """
 
     var kind: _OpKind
@@ -201,6 +217,7 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     var pool_index: Int
     var generation: UInt32
     var active: Bool
+    var group_id: UInt16
 
     def __init__(out self, *, pool_index: Int):
         """Create an inactive op slot at the given pool index."""
@@ -217,6 +234,7 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
         self.pool_index = pool_index
         self.generation = UInt32(0)
         self.active = False
+        self.group_id = UInt16(0)
 
 
 @always_inline
@@ -243,6 +261,29 @@ struct _ReadyEntry(ImplicitlyCopyable, Movable):
     var completion: Pointer[Completion, MutUntrackedOrigin]
     var result: Int
     var flags: UInt32
+
+
+@fieldwise_init
+struct _BufGroup(Copyable, Movable):
+    """Userspace provided-buffer group backing the multishot emulation.
+
+    io_uring keeps provided buffers in a kernel ring; epoll has no such
+    thing, so the driver keeps the free ids itself and picks one per
+    datagram in `_deliver_multishot_recvmsg`.
+
+    Fields:
+        id: Group id chosen by the caller.
+        base: Address of buffer 0; buffer `i` starts at `base + i * size`.
+        size: Bytes per buffer.
+        count: Number of buffers in the group.
+        free: Ids not currently handed out by a delivery.
+    """
+
+    var id: UInt16
+    var base: UInt64
+    var size: UInt32
+    var count: UInt32
+    var free: List[UInt16]
 
 
 @fieldwise_init
@@ -370,12 +411,13 @@ struct _OpPool(Movable):
     in the driver retains a slot pointer across a call that can
     allocate: tick() re-derives the pointer from the event's index for
     every event, _dispatch_op and the timer path copy what they need
-    and free the slot BEFORE firing the callback (the only place user
-    code, and hence a nested operation method, can run), cancel scans
-    without allocating, and each operation method fills its freshly
-    allocated slot and registers it without allocating again. Everything that
-    outlives a call refers to slots by index (timer heap, epoll data),
-    never by address.
+    and free the slot BEFORE firing the callback, cancel scans without
+    allocating, and each operation method fills its freshly allocated
+    slot and registers it without allocating again. The one op that
+    stays registered while its callback runs, the multishot recvmsg
+    emulation, re-derives its slot pointer by index and re-checks the
+    generation after every callback. Everything that outlives a call
+    refers to slots by index (timer heap, epoll data), never by address.
     """
 
     var _slots: Pointer[_EpollOp, MutUntrackedOrigin]
@@ -510,9 +552,10 @@ struct _DriverState(Movable):
     var pool: _OpPool
     var timers: _TimerHeap
     var ready: List[_ReadyEntry]
+    var groups: List[_BufGroup]
 
     def __init__(out self, *, capacity: Int):
-        """Create the pool, an empty timer heap and an empty ready queue.
+        """Create the pool, an empty timer heap, an empty ready queue and no groups.
 
         Args:
             capacity: Number of op slots in the pool.
@@ -520,12 +563,14 @@ struct _DriverState(Movable):
         self.pool = _OpPool(capacity=capacity)
         self.timers = _TimerHeap()
         self.ready = List[_ReadyEntry]()
+        self.groups = List[_BufGroup]()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self.pool = move.pool^
         self.timers = move.timers^
         self.ready = move.ready^
+        self.groups = move.groups^
 
 
 # ── EpollCompletionDriver ────────────────────────────────────────────────────
@@ -595,7 +640,10 @@ struct EpollCompletionDriver(IoDriver):
         close_unchecked(unsafe_fd=self._epfd)
         # Free the event buffer.
         self._events.unsafe_free()
-        # Destroy the boxed state (pool, timers, ready queue) and free it.
+        # Destroy the boxed state (pool, timers, ready queue, buffer
+        # group table) and free it. Each group's free list is a List
+        # field, so this also frees the group table itself; the
+        # buffers a group points at are caller-owned and untouched.
         self._state.unsafe_deinit_pointee()
         self._state.unsafe_free()
 
@@ -760,16 +808,23 @@ struct EpollCompletionDriver(IoDriver):
         The slot is detached from epoll, released to the pool and its
         dup'd fd closed BEFORE the callback fires, so a callback that
         cancels this same completion sees "not found" and a callback
-        that submits a new op may legitimately re-use the slot.
+        that submits a new op may legitimately re-use the slot. The one
+        exception is a MULTISHOT_RECVMSG op, which stays registered and
+        keeps its slot while each delivery fires; only its terminal
+        completion detaches first. See `_deliver_multishot_recvmsg`.
 
         Args:
             op: Pointer to the live _EpollOp recovered from epoll_event.data.
 
         Returns:
-            1 if a completion was dispatched, 0 if EAGAIN (op stays pending).
+            The number of completions fired: 1 for a one-shot op, 0 if
+            EAGAIN (op stays pending), any count for a multishot op.
         """
         var kind = op[].kind
         var result = Int(0)
+
+        if kind is _OpKind.MULTISHOT_RECVMSG:
+            return self._deliver_multishot_recvmsg(op)
 
         if kind is _OpKind.RECV:
             var res = syscall[__NR_recvfrom, Scalar[DType.int64]](
@@ -862,6 +917,20 @@ struct EpollCompletionDriver(IoDriver):
         # firing. Remove the fd from epoll first: a stale registration
         # would otherwise wake on the next data with a dead slot index.
         var completion = op[].completion
+        self._detach_op(op)
+        completion[].fire(result, UInt32(0))
+        return 1
+
+    def _detach_op(mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]):
+        """Remove the op's fd from epoll, close its dup and free its slot.
+
+        The last thing done to an op before its terminal completion
+        fires, so a callback that cancels this same completion sees
+        "not found" and a callback that submits may reuse the slot.
+
+        Args:
+            op: Pointer to the live op being retired.
+        """
         var dup_fd = op[].dup_fd
         var tracked_fd = op[].fd
         if dup_fd != Int32(-1):
@@ -871,8 +940,120 @@ struct EpollCompletionDriver(IoDriver):
             close_unchecked(unsafe_fd=dup_fd)
         self._state[].pool.free(op[].pool_index)
 
-        completion[].fire(result, UInt32(0))
-        return 1
+    def _deliver_multishot_recvmsg(
+        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]
+    ) -> Int:
+        """Drain the socket into provided buffers, one completion per datagram.
+
+        For each datagram: take a free buffer id from the op's group, aim
+        the msghdr's name slot, control area and single iov at the regions
+        of that buffer that follow the 16-byte header (name capacity and
+        control capacity come from the caller's template), call recvmsg
+        with MSG_DONTWAIT | MSG_TRUNC so the return value is the full
+        datagram length even when the payload region is too small, write
+        the delivery header and fire with result = header + name capacity
+        + control capacity + bytes copied and flags IORING_CQE_F_BUFFER |
+        IORING_CQE_F_MORE | (buf_id << IORING_CQE_BUFFER_SHIFT). EAGAIN
+        returns the buffer and leaves the op armed. An empty free list is
+        the terminal -ENOBUFS (flags 0); a recvmsg error is terminal with
+        that errno; both detach the op before firing. A template whose
+        regions do not fit the buffer, or whose name or control capacity
+        is so large that the conversion to Int turns negative, ends the
+        op with -EINVAL.
+
+        The caller's template is only read: the driver builds its own
+        msghdr and iovec per datagram, so the template's pointers and
+        lengths are never overwritten.
+
+        The op stays registered across deliveries, so the slot pointer is
+        re-derived from the index and the generation re-checked after
+        every callback (the callback may have cancelled the op or grown
+        the pool).
+
+        Args:
+            op: Pointer to the live multishot op.
+
+        Returns:
+            The number of completions fired.
+        """
+        var index = op[].pool_index
+        var generation = op[].generation
+        var fired = 0
+        while True:
+            var live = self._state[].pool.slot_ptr(index)
+            if not live[].active or live[].generation != generation:
+                return fired
+            var completion = live[].completion
+            var gi = self._find_group(live[].group_id)
+            if gi < 0 or len(self._state[].groups[gi].free) == 0:
+                self._detach_op(live)
+                completion[].fire(-Int(ENOBUFS), UInt32(0))
+                return fired + 1
+
+            var size = Int(self._state[].groups[gi].size)
+            var bid = self._state[].groups[gi].free.pop()
+            var base = (
+                self._state[].groups[gi].base + UInt64(bid) * UInt64(size)
+            )
+            var tmpl = Pointer[msghdr, MutUntrackedOrigin](
+                unsafe_from_address=Int(live[].msg)
+            )
+            var name_cap = Int(tmpl[].msg_namelen)
+            var ctrl_cap = Int(tmpl[].msg_controllen)
+            var payload_off = DELIVERY_HEADER_LEN + name_cap + ctrl_cap
+            if name_cap < 0 or ctrl_cap < 0 or payload_off > size:
+                self._state[].groups[gi].free.append(bid)
+                self._detach_op(live)
+                completion[].fire(-Int(EINVAL), UInt32(0))
+                return fired + 1
+
+            var iov = iovec()
+            iov.iov_base = base + UInt64(payload_off)
+            iov.iov_len = UInt64(size - payload_off)
+            var hdr = msghdr()
+            if name_cap > 0:
+                hdr.msg_name = base + UInt64(DELIVERY_HEADER_LEN)
+                hdr.msg_namelen = UInt32(name_cap)
+            hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
+            hdr.msg_iovlen = UInt64(1)
+            if ctrl_cap > 0:
+                hdr.msg_control = base + UInt64(DELIVERY_HEADER_LEN + name_cap)
+                hdr.msg_controllen = UInt64(ctrl_cap)
+
+            var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
+                live[].fd,
+                Pointer(to=hdr),
+                Int32(MSG_DONTWAIT | MSG_TRUNC),
+            )
+            # The iovec is referenced by address from `hdr`; keep it
+            # alive past the syscall so ASAP destruction cannot reuse
+            # its stack slot before the kernel reads it.
+            _ = iov
+            if res == -Scalar[DType.int64](EAGAIN):
+                self._state[].groups[gi].free.append(bid)
+                return fired
+            if res < 0:
+                self._state[].groups[gi].free.append(bid)
+                self._detach_op(live)
+                completion[].fire(Int(res), UInt32(0))
+                return fired + 1
+
+            var payload_len = Int(res)
+            var copied = min(payload_len, size - payload_off)
+            write_delivery_header(
+                Pointer[UInt8, MutUntrackedOrigin](
+                    unsafe_from_address=Int(base)
+                ),
+                namelen=hdr.msg_namelen,
+                controllen=UInt32(Int(hdr.msg_controllen)),
+                payloadlen=UInt32(payload_len),
+                flags=UInt32(Int(hdr.msg_flags)),
+            )
+            var flags = UInt32(IORING_CQE_F_BUFFER | IORING_CQE_F_MORE) | (
+                UInt32(bid) << UInt32(IORING_CQE_BUFFER_SHIFT)
+            )
+            completion[].fire(payload_off + copied, flags)
+            fired += 1
 
     def _register_op(
         mut self,
@@ -1066,7 +1247,11 @@ struct EpollCompletionDriver(IoDriver):
         cancel op succeeds with result 0. If the target is not pending
         (already completed, already cancelled, or never submitted) the
         cancel op receives -ENOENT, matching io_uring. Both fire
-        during the next tick().
+        during the next tick(). A timer target is pulled from the timer
+        heap; every other kind goes through `_detach_op` (epoll removal,
+        dup close, slot release). A multishot recvmsg op is cancelled the
+        same way: it is deregistered and receives -ECANCELED without
+        IORING_CQE_F_MORE.
 
         Args:
             target: Pointer to the Completion of the op to cancel.
@@ -1082,15 +1267,9 @@ struct EpollCompletionDriver(IoDriver):
             # Found the pending target op.
             if op[].kind is _OpKind.TIMEOUT:
                 _ = self._state[].timers.remove_by_pool_index(i)
+                self._state[].pool.free(i)
             else:
-                var tracked_fd = op[].fd
-                if op[].dup_fd != Int32(-1):
-                    tracked_fd = op[].dup_fd
-                self._epoll_remove(tracked_fd)
-                if op[].dup_fd != Int32(-1):
-                    close_unchecked(unsafe_fd=op[].dup_fd)
-
-            self._state[].pool.free(i)
+                self._detach_op(op)
             self._state[].ready.append(
                 _ReadyEntry(target, -Int(ECANCELED), UInt32(0))
             )
@@ -1212,4 +1391,151 @@ struct EpollCompletionDriver(IoDriver):
         op[].msg = UInt64(Int(msg))
         op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
+
+    # ── Provided-buffer groups ───────────────────────────────────────────
+
+    def _find_group(self, group_id: UInt16) -> Int:
+        """Return the index of `group_id` in the group table, or -1.
+
+        Args:
+            group_id: The group to look up.
+        """
+        for i in range(len(self._state[].groups)):
+            if self._state[].groups[i].id == group_id:
+                return i
+        return -1
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Record `count` contiguous buffers of `size` bytes as group `group_id`.
+
+        Every id starts free; ids are handed out lowest first so the first
+        delivery lands in buffer 0, as with a freshly populated io_uring
+        ring.
+
+        `count` must be in `1..65536`: buffer ids are `UInt16`, so 65536 is
+        the largest free list that fits without wrapping, and it matches
+        the buffer-ring kernel ABI's own limit.
+
+        Args:
+            base: Address of buffer 0. Must stay valid until the group is
+                  unregistered.
+            size: Bytes per buffer.
+            count: Number of buffers, in `1..65536`.
+            group_id: Caller-chosen group id.
+
+        Raises:
+            IOError(EEXIST) if `group_id` is already registered.
+            IOError(EINVAL) if `size` is 0, or `count` is 0 or exceeds
+                65536.
+        """
+        if size <= 0:
+            raise IOError(positive_errno=EINVAL)
+        if count <= 0 or count > 65536:
+            raise IOError(positive_errno=EINVAL)
+        if self._find_group(group_id) >= 0:
+            raise IOError(positive_errno=EEXIST)
+        var free = List[UInt16](capacity=count)
+        var i = count - 1
+        while i >= 0:
+            free.append(UInt16(i))
+            i -= 1
+        self._state[].groups.append(
+            _BufGroup(group_id, UInt64(Int(base)), size, UInt32(count), free^)
+        )
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Forget group `group_id`.
+
+        Buffers still leased out (not yet returned via `return_buffer`)
+        are dropped along with the group's free list; whether that
+        leaves a caller holding a dangling `buf_id` is the loop's
+        problem, not this driver's -- the same contract io_uring gives
+        for `IORING_OP_REMOVE_BUFFERS` on a group with leases in flight.
+
+        Args:
+            group_id: The group to remove.
+
+        Raises:
+            IOError(ENOENT) if the group is not registered.
+        """
+        var idx = self._find_group(group_id)
+        if idx < 0:
+            raise IOError(positive_errno=ENOENT)
+        _ = self._state[].groups.pop(idx)
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Make `buf_id` available to the next delivery of group `group_id`.
+
+        Returning to an unknown group is a no-op: the group was
+        unregistered while a lease was still out, and there is nothing
+        left to return to.
+
+        Returning the same `buf_id` twice without an intervening take is
+        not checked here: append never corrupts the free list itself
+        (the id just appears twice, so it may be handed out twice),
+        but it would then hand one buffer to two deliveries at once,
+        corrupting data. This driver is a dumb free list; the "return
+        at most once" invariant is the caller's to keep, one layer up
+        where a leased buffer's lifetime is tracked.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The buffer id from the delivery's completion flags.
+        """
+        var idx = self._find_group(group_id)
+        if idx < 0:
+            return
+        self._state[].groups[idx].free.append(buf_id)
+
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg into buffers of group `group_id`.
+
+        `msg` is a template: only `msg_namelen` (peer address capacity)
+        and `msg_controllen` (control capacity) are read; the name,
+        control and payload regions live inside the selected buffer after
+        the 16-byte delivery header. The template must stay valid until
+        the terminal completion fires. One completion fires per datagram
+        with IORING_CQE_F_BUFFER | IORING_CQE_F_MORE and the buffer id in
+        the high 16 bits of the flags; the operation ends with -ENOBUFS
+        when the group has no free buffer, with -ECANCELED on cancel, or
+        with the recvmsg errno, all with flags 0. A zero-length receive
+        fires a delivery with IORING_CQE_F_MORE and keeps the op armed,
+        unlike io_uring, which ends the multishot on a zero-byte receive;
+        the op is therefore intended for datagram sockets only.
+
+        Unlike every one-shot op, the slot stays allocated and the fd
+        stays in epoll while deliveries fire; it is released only by the
+        terminal completion (see `_deliver_multishot_recvmsg`). Mixing a
+        one-shot `recvmsg` with an armed multishot op on the same socket
+        is undefined: whichever wakes first takes the datagram.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to the msghdr template.
+            group_id: A group registered with `register_buffer_group`.
+            c: Pointer to the caller-owned Completion token.
+
+        Raises:
+            If epoll registration fails.
+        """
+        var op = self._state[].pool.alloc()
+        op[].kind = _OpKind.MULTISHOT_RECVMSG
+        op[].fd = fd
+        op[].dup_fd = Int32(-1)
+        op[].msg = UInt64(Int(msg))
+        op[].group_id = group_id
+        op[].completion = c
+        self._register_op(op, UInt32(EPOLLIN))
 

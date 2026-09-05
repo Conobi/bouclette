@@ -194,6 +194,40 @@ def test_key_has_room_for_ten_kinds() raises:
     assert_equal(len(slab._free), 2)
 
 
+def test_active_count_and_rearmed_link() raises:
+    """`active()` counts occupied slots; `rearmed()` re-counts a state as live."""
+    var queue = List[Int]()
+    var slab = _Slab[_TimerFutureState](4, 5, _queue_ptr(queue))
+    assert_equal(slab.active(), 0)
+    assert_true(not slab.is_active(0), "no slot before the first alloc")
+    var p = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    assert_equal(slab.active(), 1)
+    assert_true(slab.is_active(0), "slot 0 holds the state")
+    assert_equal(slab.in_flight(), 1)
+
+    # A completion decrements live; a re-arm counts it live again.
+    p[]._link.completed(False)
+    assert_equal(slab.in_flight(), 0)
+    p[]._link.rearmed()
+    assert_equal(slab.in_flight(), 1)
+    p[]._link.completed(True)
+    assert_equal(slab.in_flight(), 0)
+    assert_equal(len(queue), 1, "the second event queues the key once")
+
+    # settle() debug_asserts owner_dropped(), so the real method is called
+    # here too, even though `done` is already True: that pushes a second,
+    # redundant key onto the queue (the slot was already queued above by
+    # the direct completed(True) call). Asserting the length makes the
+    # double push visible and intended rather than accidental; settle()
+    # below only consumes queue[0].
+    p[].done = True
+    p[].mark_owner_dropped()
+    assert_equal(len(queue), 2, "mark_owner_dropped queues a second, redundant key")
+    slab.settle(queue[0] >> _KIND_BITS)
+    assert_equal(slab.active(), 0)
+    assert_true(not slab.is_active(0), "settled slot is free")
+
+
 def main() raises:
     test_slab_grows_in_chunks_and_keeps_addresses()
     print("ok: slab grows in chunks and keeps addresses")
@@ -211,4 +245,6 @@ def main() raises:
     print("ok: future outliving a tiny loop reports loop gone")
     test_key_has_room_for_ten_kinds()
     print("ok: key has room for ten kinds")
+    test_active_count_and_rearmed_link()
+    print("ok: active count and rearmed link")
     print("PASS: test_slab.mojo")

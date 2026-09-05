@@ -4,6 +4,9 @@
 value and hand back: one payload buffer, a peer address slot, and a
 control byte area. `ControlMessages` walks the cmsghdr records in that
 area; `MessageResult` is what a completed message operation returns.
+`DeliveryHeader` decodes the 16-byte prefix a multishot recvmsg
+delivery prepends to a provided buffer, shared by the io_uring and
+epoll completion drivers.
 
 Control records follow the 64-bit Linux layout: a 16-byte `cmsghdr`
 (8-byte `cmsg_len`, `int` level, `int` type) followed by the data, with
@@ -560,3 +563,218 @@ struct MessageResult(Movable):
             The message the operation used, payload storage unchanged.
         """
         return self._msg^
+
+
+# ===----------------------------------------------------------------------=== #
+# DeliveryHeader — the 16-byte prefix of one multishot recvmsg delivery
+# ===----------------------------------------------------------------------=== #
+
+# Layout of io_uring's `struct io_uring_recvmsg_out`:
+#   __u32 namelen; __u32 controllen; __u32 payloadlen; __u32 flags;
+# The epoll completion driver writes the same four fields so one decoder
+# serves both backends.
+comptime DELIVERY_HEADER_LEN = 16
+comptime _DELIVERY_NAMELEN_OFFSET = 0
+comptime _DELIVERY_CONTROLLEN_OFFSET = 4
+comptime _DELIVERY_PAYLOADLEN_OFFSET = 8
+comptime _DELIVERY_FLAGS_OFFSET = 12
+
+
+def _verify_delivery_header_layout():
+    """Compile-time check that the header is four packed UInt32 fields."""
+    comptime assert size_of[UInt32]() == 4, "UInt32 size mismatch"
+    comptime assert DELIVERY_HEADER_LEN == 4 * size_of[UInt32](), (
+        "delivery header must be four UInt32"
+    )
+    comptime assert _DELIVERY_CONTROLLEN_OFFSET == size_of[UInt32]()
+    comptime assert _DELIVERY_PAYLOADLEN_OFFSET == 2 * size_of[UInt32]()
+    comptime assert _DELIVERY_FLAGS_OFFSET == 3 * size_of[UInt32]()
+
+
+comptime _DELIVERY_LAYOUT_VERIFIED: None = _verify_delivery_header_layout()
+
+
+def _store_u32(base: Pointer[UInt8, MutUntrackedOrigin], offset: Int, value: UInt32):
+    """Store `value` little-endian, one byte at a time, at `base + offset`.
+
+    Byte stores carry no alignment requirement, so a buffer of any size
+    (pools allow any size >= 64) can start a header.
+
+    Args:
+        base: Start of the buffer.
+        offset: Byte offset of the field.
+        value: The value to store.
+    """
+    for i in range(4):
+        base[unsafe_offset=offset + i] = UInt8(
+            (value >> UInt32(8 * i)) & UInt32(0xFF)
+        )
+
+
+def write_delivery_header(
+    base: Pointer[UInt8, MutUntrackedOrigin],
+    *,
+    namelen: UInt32,
+    controllen: UInt32,
+    payloadlen: UInt32,
+    flags: UInt32,
+):
+    """Write a delivery header at the start of a provided buffer.
+
+    Used by the epoll completion driver to mirror what the kernel writes
+    for an io_uring multishot recvmsg. `base` must point at a buffer of
+    at least `DELIVERY_HEADER_LEN` bytes.
+
+    Args:
+        base: Start of the provided buffer.
+        namelen: Length of the peer address the kernel wrote.
+        controllen: Length of the control data the kernel wrote.
+        payloadlen: Length of the datagram payload.
+        flags: The recvmsg `msg_flags` (MSG_TRUNC, MSG_CTRUNC).
+    """
+    _store_u32(base, _DELIVERY_NAMELEN_OFFSET, namelen)
+    _store_u32(base, _DELIVERY_CONTROLLEN_OFFSET, controllen)
+    _store_u32(base, _DELIVERY_PAYLOADLEN_OFFSET, payloadlen)
+    _store_u32(base, _DELIVERY_FLAGS_OFFSET, flags)
+
+
+struct DeliveryHeader[origin: Origin](Copyable, Movable):
+    """Decoder for the 16-byte header a multishot recvmsg delivery
+    prepends to a provided buffer. The layout is io_uring's
+    `io_uring_recvmsg_out`; the epoll driver writes the same layout so one
+    decoder serves both backends.
+
+    Header: four little-endian UInt32 at offsets 0, 4, 8, 12: namelen,
+    controllen, payloadlen, flags. namelen and controllen are the lengths
+    the kernel actually wrote and may exceed the capacities; a value above
+    capacity means that region was truncated. Regions follow with no
+    alignment padding, at offsets computed from the CAPACITIES the
+    operation was submitted with, not from the written lengths:
+        name    at 16
+        control at 16 + name_capacity
+        payload at 16 + name_capacity + control_capacity
+    matching liburing's io_uring_recvmsg_name / _cmsg_firsthdr / _payload.
+    name() and control() return min(written, capacity) bytes; payload()
+    returns payloadlen bytes, or the remaining buffer if payloadlen exceeds
+    it (flags then carry MSG_TRUNC). Capacities whose offsets fall beyond
+    the buffer clamp to empty regions rather than reading past its end.
+
+    Parameters:
+        origin: Origin of the buffer the header views.
+    """
+
+    var _buf: Span[UInt8, Self.origin]
+    var _name_capacity: Int
+    var _control_capacity: Int
+
+    def __init__(
+        out self,
+        buf: Span[UInt8, Self.origin],
+        name_capacity: Int,
+        control_capacity: Int,
+    ):
+        """View a buffer already known to hold a header.
+
+        Prefer `parse`, which checks the length. This constructor is for
+        callers that guarantee `len(buf) >= DELIVERY_HEADER_LEN`, such as
+        a `Datagram` over a pool buffer of at least 64 bytes.
+
+        Args:
+            buf: The provided buffer, header first.
+            name_capacity: `msg_namelen` the operation was submitted with.
+            control_capacity: `msg_controllen` the operation was submitted with.
+        """
+        self._buf = buf
+        self._name_capacity = name_capacity
+        self._control_capacity = control_capacity
+
+    @staticmethod
+    def parse(
+        buf: Span[UInt8, Self.origin],
+        *,
+        name_capacity: Int,
+        control_capacity: Int,
+    ) raises IOError -> Self:
+        """Validate the buffer length and view it as a delivery.
+
+        Args:
+            buf: The provided buffer, header first.
+            name_capacity: `msg_namelen` the operation was submitted with.
+            control_capacity: `msg_controllen` the operation was submitted with.
+
+        Returns:
+            A header view over `buf`.
+
+        Raises:
+            IOError(EINVAL) if `buf` is shorter than 16 bytes.
+        """
+        if len(buf) < DELIVERY_HEADER_LEN:
+            raise IOError(positive_errno=EINVAL)
+        return Self(buf, name_capacity, control_capacity)
+
+    def _read_u32(self, offset: Int) -> UInt32:
+        """Read the little-endian UInt32 at `offset`.
+
+        Args:
+            offset: One of the four field offsets.
+
+        Returns:
+            The field value.
+        """
+        return (
+            UInt32(self._buf[offset])
+            | (UInt32(self._buf[offset + 1]) << 8)
+            | (UInt32(self._buf[offset + 2]) << 16)
+            | (UInt32(self._buf[offset + 3]) << 24)
+        )
+
+    def _region(self, start: Int, length: Int) -> Span[UInt8, Self.origin]:
+        """Return `length` bytes from `start`, clamped to the buffer at
+        both ends: a negative or out-of-range `start` clamps to the
+        buffer's bounds before `length` is applied.
+
+        Args:
+            start: First byte of the region.
+            length: Requested length.
+
+        Returns:
+            The clamped sub-span (possibly empty).
+        """
+        var lo = max(min(start, len(self._buf)), 0)
+        var hi = min(lo + max(length, 0), len(self._buf))
+        return self._buf[lo:hi]
+
+    def namelen(self) -> UInt32:
+        """Return the peer address length the kernel wrote."""
+        return self._read_u32(_DELIVERY_NAMELEN_OFFSET)
+
+    def controllen(self) -> UInt32:
+        """Return the control data length the kernel wrote."""
+        return self._read_u32(_DELIVERY_CONTROLLEN_OFFSET)
+
+    def payloadlen(self) -> UInt32:
+        """Return the payload length the kernel reported."""
+        return self._read_u32(_DELIVERY_PAYLOADLEN_OFFSET)
+
+    def flags(self) -> UInt32:
+        """Return the recvmsg msg_flags: MSG_TRUNC, MSG_CTRUNC."""
+        return self._read_u32(_DELIVERY_FLAGS_OFFSET)
+
+    def name(ref self) -> Span[UInt8, Self.origin]:
+        """Return the peer address bytes: min(namelen, name_capacity) of them."""
+        var n = min(Int(self.namelen()), self._name_capacity)
+        return self._region(DELIVERY_HEADER_LEN, n)
+
+    def control(ref self) -> ControlMessages[Self.origin]:
+        """Return a walker over min(controllen, control_capacity) control bytes."""
+        var n = min(Int(self.controllen()), self._control_capacity)
+        return ControlMessages(
+            self._region(DELIVERY_HEADER_LEN + self._name_capacity, n)
+        )
+
+    def payload(ref self) -> Span[UInt8, Self.origin]:
+        """Return the payload: payloadlen bytes, or what remains of the buffer."""
+        return self._region(
+            DELIVERY_HEADER_LEN + self._name_capacity + self._control_capacity,
+            Int(self.payloadlen()),
+        )

@@ -107,6 +107,16 @@ struct _SlotLink(Copyable, ImplicitlyCopyable, Movable):
         if self.key >= 0 and done:
             self.queue[].append(self.key)
 
+    def rearmed(self):
+        """Count the state live again after a re-arm.
+
+        A stream that ended on an error called `completed(False)` and
+        stopped counting; resubmitting the operation makes it live once
+        more without touching the settle queue.
+        """
+        if self.key >= 0:
+            self.live[] += 1
+
 
 # Low bits of a slot key that carry the slab kind; the rest is the index.
 comptime _KIND_BITS = 4

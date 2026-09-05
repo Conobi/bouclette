@@ -4,7 +4,11 @@ Three cases: an idle driver bounded at 50 ms returns 0 no earlier than
 50 ms and well before 500 ms; a 0 ms bound polls; an unbounded wait
 with a 10 ms timeout operation returns exactly that one completion.
 The sentinel path (kernels without IORING_FEAT_EXT_ARG) runs through
-the same assertions; the sentinel is never counted.
+the same three bounded-wait assertions a second time, forced by
+setting `_supports_timeout_arg = False` directly on the driver since
+this host's kernel already reports the feature; a following
+`tick(True, 0)` right after the idle-bounded case confirms the
+sentinel's own completion is never counted.
 """
 
 from std.memory import Pointer
@@ -126,6 +130,67 @@ def test_bounded_wait_longer_than_timer_counts_only_the_timer() raises:
     _ = ts
 
 
+def test_sentinel_idle_bounded_tick_returns_zero_on_time() raises:
+    """Same as the EXT_ARG case, forced onto the no-EXT_ARG sentinel path.
+
+    A following `tick(True, 0)` on the same driver must also return 0:
+    the idle 50 ms wait already let the sentinel timeout fire and get
+    drained, so nothing is left for a later tick to miscount.
+    """
+    var driver = IoUringDriver(capacity=8)
+    driver._supports_timeout_arg = False
+    var t0 = perf_counter_ns()
+    var n = driver.tick(True, 50)
+    var elapsed_ms = (perf_counter_ns() - t0) // 1_000_000
+    assert_equal(n, 0)
+    assert_true(elapsed_ms >= 50, "returned early: " + String(elapsed_ms))
+    assert_true(elapsed_ms < 500, "returned late: " + String(elapsed_ms))
+    var n2 = driver.tick(True, 0)
+    assert_equal(
+        n2, 0, "the sentinel's own completion must not be counted"
+    )
+
+
+def test_sentinel_zero_bound_polls() raises:
+    """`tick(wait=True, timeout_ms=0)` on the sentinel path: 0 without blocking."""
+    var driver = IoUringDriver(capacity=8)
+    driver._supports_timeout_arg = False
+    var t0 = perf_counter_ns()
+    var n = driver.tick(True, 0)
+    var elapsed_ms = (perf_counter_ns() - t0) // 1_000_000
+    assert_equal(n, 0)
+    assert_true(elapsed_ms < 100, "poll blocked: " + String(elapsed_ms))
+
+
+def test_sentinel_bounded_wait_longer_than_timer_counts_only_the_timer() raises:
+    """A 10 ms timer under a 1000 ms bound, forced onto the sentinel path."""
+    var driver = IoUringDriver(capacity=8)
+    driver._supports_timeout_arg = False
+    var slot = Slot()
+    var cmp = Completion(
+        invoke=Slot.on_complete,
+        context=Pointer[NoneType, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=slot))
+        ),
+    )
+    var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=cmp))
+    )
+    var ts = __kernel_timespec(tv_sec=Int64(0), tv_nsec=Int64(10_000_000))
+    var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=ts))
+    )
+    driver.timeout(ts_ptr, cmp_ptr)
+    var t0 = perf_counter_ns()
+    var n = driver.tick(True, 1000)
+    var elapsed_ms = (perf_counter_ns() - t0) // 1_000_000
+    assert_equal(n, 1)
+    assert_true(slot.fired, "timer must have fired")
+    assert_true(elapsed_ms < 500, "waited for the bound, not the timer")
+    _ = cmp
+    _ = ts
+
+
 def main() raises:
     if not _has_io_uring():
         print("SKIP: io_uring not available")
@@ -134,4 +199,7 @@ def main() raises:
     test_zero_bound_polls()
     test_unbounded_wait_counts_only_the_timer()
     test_bounded_wait_longer_than_timer_counts_only_the_timer()
+    test_sentinel_idle_bounded_tick_returns_zero_on_time()
+    test_sentinel_zero_bound_polls()
+    test_sentinel_bounded_wait_longer_than_timer_counts_only_the_timer()
     print("PASS: test_io_uring_tick_timeout.mojo")

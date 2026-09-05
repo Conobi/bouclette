@@ -202,6 +202,78 @@ trait IoDriver(Movable):
         """
         ...
 
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg that receives into provided buffers.
+
+        One completion fires per datagram: result is the number of bytes
+        written into the selected buffer (16-byte delivery header, name
+        slot, control area, payload), flags carry the buffer id
+        (`buffer_id`) and whether the operation is still armed
+        (`has_more`). The operation ends with a completion lacking the
+        more flag: -ENOBUFS when the group is empty, -ECANCELED on
+        cancel, or another errno. A zero-length datagram may also be
+        terminal: io_uring ends the operation with result 0 and no more
+        flag, while the epoll emulation delivers it and stays armed.
+        Callers must treat any completion without `has_more` as the end,
+        whatever its result. On a forced io_uring backend whose kernel
+        lacks multishot recvmsg (before 6.0) the call raises EOPNOTSUPP.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to a platform msghdr template whose
+                 `msg_namelen` and `msg_controllen` set the name and
+                 control capacities. Must remain valid until the
+                 terminal completion fires.
+            group_id: A group registered with `register_buffer_group`.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Register `count` contiguous buffers of `size` bytes as a group.
+
+        Buffer `i` starts at `base + i * size`. The memory must stay
+        valid until `unregister_buffer_group`.
+
+        Args:
+            base: Address of buffer 0.
+            size: Bytes per buffer.
+            count: Number of buffers, in 1..65536.
+            group_id: Caller-chosen id, unique per driver.
+        """
+        ...
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Tear down a buffer group; no operation may still select from it.
+
+        Args:
+            group_id: The group to remove.
+        """
+        ...
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Make a delivered buffer available to the group again.
+
+        Never raises: returning to an unregistered group is a no-op.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The id read from the delivery's flags.
+        """
+        ...
+
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism this driver uses."""
         ...

@@ -91,6 +91,7 @@ from boucle.socle.linux.raw import (
     ENOMEM,
     ENOSYS,
     ENOTCONN,
+    EOPNOTSUPP,
     EPERM,
     EPIPE,
     ETIMEDOUT,

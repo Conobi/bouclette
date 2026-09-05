@@ -25,12 +25,22 @@ from boucle.socle.linux.io_uring.types import (
     IoUringSetupFlags,
     EnterArg,
 )
-from boucle.socle.linux.raw import IORING_RECV_MULTISHOT, ETIME, __kernel_timespec
+from boucle.socle.linux.raw import (
+    IORING_RECV_MULTISHOT,
+    EEXIST,
+    EINVAL,
+    ENOENT,
+    ETIME,
+    EOPNOTSUPP,
+    __kernel_timespec,
+)
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.socle.linux.raw import msghdr
 from boucle.socle.linux.errno import Errno
 from boucle.socle.linux.uname import kernel_version, KernelVersion
+from boucle.socle.linux.mm import get_page_size
 from boucle.handle import RawHandle
+from boucle.error import IOError
 from boucle.socle.ptr import null_ptr
 from boucle.drivers.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
 from boucle.proactor.completion import Completion
@@ -68,6 +78,19 @@ def _is_etime(e: Error) -> Bool:
         return Errno(error=e) is Errno(errno=UInt16(ETIME))
     except:
         return False
+
+
+def _unsupported() -> Error:
+    """Build the socle-style error for a feature this kernel lacks.
+
+    The text is the negated errno, the same contract every socle
+    syscall wrapper follows, so `IOError.from_error` recovers
+    EOPNOTSUPP from it.
+
+    Returns:
+        An Error whose message is `"-95"`.
+    """
+    return Error(String(-EOPNOTSUPP))
 
 
 def _timespec_from_ms(timeout_ms: Int) -> __kernel_timespec:
@@ -144,8 +167,15 @@ struct IoUringDriver(IoDriver):
     expose, and the setup feature flags for `IORING_FEAT_EXT_ARG`. The
     ring is always requested with `IORING_SETUP_NO_SQARRAY`.
 
+    Registered buffer rings are kept in `_groups`, keyed by group id, so
+    `return_buffer` can recycle a buffer without the caller holding the
+    `BufRing`. The table is heap-boxed because a completion callback may
+    call `return_buffer` while `tick()` holds `mut self`; going through a
+    loaded pointer guarantees the callback's writes are observed.
+
     Fields:
         _ring: The io_uring instance.
+        _groups: Registered buffer rings keyed by group id (see above).
         _setup_flags: The io_uring setup flags requested at construction
                       (always includes `IORING_SETUP_NO_SQARRAY`).
         _supports_multishot_recvmsg: RECVMSG probes as supported and the
@@ -158,6 +188,7 @@ struct IoUringDriver(IoDriver):
     """
 
     var _ring: IoUring[]
+    var _groups: Pointer[List[BufRing], MutUntrackedOrigin]
     var _setup_flags: IoUringSetupFlags
     var _supports_multishot_recvmsg: Bool
     var _supports_buffer_ring: Bool
@@ -195,6 +226,11 @@ struct IoUringDriver(IoDriver):
         params.flags |= IoUringSetupFlags.NO_SQARRAY
         self._ring = IoUring[](sq_entries=UInt32(capacity), params=params)
         self._setup_flags = params.flags
+        var groups = _heap_alloc[List[BufRing]](1)
+        groups.unsafe_write(List[BufRing]())
+        self._groups = Pointer[List[BufRing], MutUntrackedOrigin](
+            unsafe_from_address=Int(groups)
+        )
 
         var probe_ok: Bool
         var probe = IoUringProbe()
@@ -228,11 +264,27 @@ struct IoUringDriver(IoDriver):
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self._ring = move._ring^
+        self._groups = move._groups
         self._setup_flags = move._setup_flags
         self._supports_multishot_recvmsg = move._supports_multishot_recvmsg
         self._supports_buffer_ring = move._supports_buffer_ring
         self._supports_timeout_arg = move._supports_timeout_arg
         self._sentinel_ts = move._sentinel_ts
+
+    def __deinit__(deinit self):
+        """Unregister every buffer ring still in the table, then free it.
+
+        The ring is destroyed after this body returns, so the
+        unregister calls still have a live ring to talk to; failures are
+        ignored because closing the ring frees kernel-side rings anyway.
+        """
+        for i in range(len(self._groups[])):
+            try:
+                self.unregister_buf_ring(self._groups[][i].bgid)
+            except:
+                pass
+        self._groups.unsafe_deinit_pointee()
+        self._groups.unsafe_free()
 
     def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
         """Submit pending operations, wait at most `timeout_ms`, dispatch.
@@ -641,7 +693,15 @@ struct IoUringDriver(IoDriver):
                  lifetime of the multishot operation.
             buf_group: The provided buffer group ID to select from.
             c: Pointer to the caller-owned Completion token.
+
+        Raises:
+            EOPNOTSUPP (as the socle negated-errno string) when
+            `supports(DriverFeature.MULTISHOT_RECVMSG)` is False: below
+            kernel 6.0 the kernel would answer -EINVAL in the CQE, and
+            refusing at submission keeps the buffer ring untouched.
         """
+        if not self._supports_multishot_recvmsg:
+            raise _unsupported()
         if not self._ring.sq():
             raise "submission queue full"
         var sq = self._ring.unsynced_sq()
@@ -719,7 +779,9 @@ struct IoUringDriver(IoDriver):
 
         The ring requires a power-of-2 number of slots; `count` is
         rounded up if needed. Only `count` entries are populated,
-        so `buf_base` must hold at least `count * buf_size` bytes.
+        so `buf_base` must hold at least `count * buf_size` bytes. The
+        ring memory is allocated page-aligned, as the kernel requires
+        of `ring_addr`.
 
         Args:
             buf_base: Base pointer for the data buffers.
@@ -729,14 +791,30 @@ struct IoUringDriver(IoDriver):
 
         Returns:
             A populated BufRing ready for multishot recv operations.
+
+        Raises:
+            EOPNOTSUPP (as the socle negated-errno string) when
+            `supports(DriverFeature.BUFFER_RING)` is False (kernel below
+            5.19); otherwise whatever `io_uring_register` raises. Unlike
+            `multishot_recvmsg`'s submitted op, this call reaches the
+            kernel via `io_uring_register` directly, so an unsupported
+            kernel would answer EINVAL synchronously here rather than
+            deep in a CQE.
         """
+        if not self._supports_buffer_ring:
+            raise _unsupported()
         var entries = UInt32(_next_pow2(count))
         debug_assert(
             Int(entries) <= Int(UInt32.MAX) // _IO_URING_BUF_SIZE,
             "ring too large",
         )
+        # The kernel rejects a ring whose address is not page-aligned
+        # (EINVAL), so the ring memory is aligned explicitly rather than
+        # relying on where the allocator happens to place a small block.
         var ring_bytes = Int(entries) * _IO_URING_BUF_SIZE
-        var ring_mem = _heap_alloc[UInt8](ring_bytes).as_unsafe_any_origin()
+        var ring_mem = _heap_alloc[UInt8](
+            ring_bytes, alignment=Int(get_page_size())
+        ).as_unsafe_any_origin()
         for i in range(ring_bytes):
             ring_mem[unsafe_offset=i] = UInt8(0)
 
@@ -779,3 +857,126 @@ struct IoUringDriver(IoDriver):
             unsafe_opcode=IoUringRegisterOp.UNREGISTER_PBUF_RING
         )
         _ = self._ring.register(arg)
+
+    # ── Buffer group table ───────────────────────────────────────────────
+
+    def _find_group(self, group_id: UInt16) -> Int:
+        """Return the table index of `group_id`, or -1.
+
+        Args:
+            group_id: The buffer group to look up.
+
+        Returns:
+            The index into `_groups`, or -1 when the id is not registered.
+        """
+        for i in range(len(self._groups[])):
+            if self._groups[][i].bgid == group_id:
+                return i
+        return -1
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Register a buffer ring for `count` buffers of `size` bytes and keep it.
+
+        Wraps `register_buf_ring`; the returned `BufRing` is stored in the
+        table so `return_buffer` and `unregister_buffer_group` can reach
+        it by id. The ring rounds `count` up to a power of two but only
+        populates `count` entries, so `base` needs exactly
+        `count * size` bytes.
+
+        `count` must be in `1..65536`: buffer ids are `UInt16`, so 65536
+        is the largest count whose ids fit without wrapping, and the
+        rounded ring size then never exceeds 65536 either. The kernel
+        itself caps a ring at 32768 entries and answers EINVAL above
+        that, which `register_buf_ring` surfaces synchronously.
+
+        Args:
+            base: Address of buffer 0; must stay valid until unregistered.
+            size: Bytes per buffer.
+            count: Number of buffers, in `1..65536`.
+            group_id: Caller-chosen group id.
+
+        Raises:
+            IOError(EINVAL) if `size` is 0, or `count` is 0 or exceeds
+                65536; checked before the ring is touched.
+            IOError(EEXIST) if the id is already in the table.
+            Whatever `register_buf_ring` raises otherwise.
+        """
+        if size <= 0:
+            raise IOError(positive_errno=EINVAL)
+        if count <= 0 or count > 65536:
+            raise IOError(positive_errno=EINVAL)
+        if self._find_group(group_id) >= 0:
+            raise IOError(positive_errno=EEXIST)
+        var ring = self.register_buf_ring(base, size, count, group_id)
+        self._groups[].append(ring^)
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Unregister the ring behind `group_id` and drop it from the table.
+
+        Args:
+            group_id: The group to tear down.
+
+        The kernel call runs first; if it raises, the ring stays in the
+        table so a later call can retry.
+
+        Raises:
+            IOError(ENOENT) if the id is not in the table; whatever
+            `unregister_buf_ring` raises otherwise.
+        """
+        var idx = self._find_group(group_id)
+        if idx < 0:
+            raise IOError(positive_errno=ENOENT)
+        self.unregister_buf_ring(group_id)
+        _ = self._groups[].pop(idx)
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Hand `buf_id` back to the kernel through the group's ring.
+
+        A userspace store on the ring tail; no syscall. Returning to an
+        unknown group is a no-op.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The buffer id from the completion flags.
+        """
+        var idx = self._find_group(group_id)
+        if idx < 0:
+            return
+        self._groups[][idx].add_buffer(buf_id)
+
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg from an opaque msghdr pointer.
+
+        The trait-shaped form of the `Pointer[msghdr, ...]` overload
+        above; both queue the same operation and share its
+        feature gate.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to the msghdr template; must stay valid
+                 for the life of the operation.
+            group_id: The provided-buffer group to select from.
+            c: Pointer to the caller-owned Completion token.
+
+        Raises:
+            EOPNOTSUPP (as the socle negated-errno string) when
+            `supports(DriverFeature.MULTISHOT_RECVMSG)` is False.
+        """
+        self.multishot_recvmsg(
+            fd,
+            Pointer[msghdr, MutUntrackedOrigin](unsafe_from_address=Int(msg)),
+            group_id,
+            c,
+        )

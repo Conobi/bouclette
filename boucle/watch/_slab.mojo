@@ -201,6 +201,27 @@ struct _Slab[F: _InFlightState](Movable):
         """Return how many operations are submitted and not yet done."""
         return self._live[]
 
+    def is_active(self, index: Int) -> Bool:
+        """Return True if a state currently lives in slot `index`.
+
+        Args:
+            index: Global slot index; out-of-range indices are inactive.
+        """
+        return index >= 0 and index < len(self._flags) and (
+            self._flags[index] & _ACTIVE
+        ) != 0
+
+    def active(self) -> Int:
+        """Return how many slots hold a state (done or not, owned or not).
+
+        Diagnostic for tests: 0 once every state has been settled.
+        """
+        var n = 0
+        for index in range(len(self._flags)):
+            if self._flags[index] & _ACTIVE:
+                n += 1
+        return n
+
     def abandon_all(mut self):
         """Ask every unfinished state to give up its kernel-visible memory.
 

@@ -207,6 +207,66 @@ struct CompletionLoop(Movable):
         """
         self._inner.driver.sendmsg(fd, msg, c)
 
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg into provided buffers.
+
+        Decode each completion's flags with `buffer_id` and `has_more`;
+        parse the buffer with `boucle.net.message.DeliveryHeader`. The
+        terminal cases are those of `IoDriver.multishot_recvmsg`; note
+        that a zero-length datagram may also be terminal: io_uring ends
+        the operation with result 0 and no more flag, while the epoll
+        emulation delivers it and stays armed. Treat any completion
+        without `has_more` as the end, whatever its result.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to the msghdr template; its `msg_namelen`
+                 and `msg_controllen` are the name and control capacities.
+            group_id: A group registered with `register_buffer_group`.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._inner.driver.multishot_recvmsg(fd, msg, group_id, c)
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Register `count` contiguous buffers of `size` bytes as a group.
+
+        Args:
+            base: Address of buffer 0; valid until unregistered.
+            size: Bytes per buffer.
+            count: Number of buffers, in 1..65536.
+            group_id: Caller-chosen id.
+        """
+        self._inner.driver.register_buffer_group(base, size, count, group_id)
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Tear down a buffer group.
+
+        Args:
+            group_id: The group to remove.
+        """
+        self._inner.driver.unregister_buffer_group(group_id)
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Return a delivered buffer to its group.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The id from the delivery's flags.
+        """
+        self._inner.driver.return_buffer(group_id, buf_id)
+
     def backend(self) -> Backend:
         """Return which kernel I/O mechanism is active."""
         return self._inner.driver.backend()
