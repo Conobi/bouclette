@@ -9,10 +9,9 @@ disarmed stream settles without a cancel, a pool dropped while its
 stream is still settling keeps its slot until the stream is gone, and
 handles are inert once the loop is gone, the pool's memory being
 leaked when a stream was attached so a surviving datagram still reads
-its bytes.
+its bytes, whether the pool's own handle outlived the loop or not.
 """
 
-from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.drivers.backend import Backend
@@ -31,9 +30,8 @@ def _send(ref sender: Socket, ref to: SocketAddrV4, n: Int) raises:
 def _run(backend: Backend) raises:
     """Drop while armed with two deliveries queued; both slots are released.
 
-    A post-drop delivery is recycled driver-side too: on epoll the
-    group's free list is full again, and on either backend a second
-    stream over the same pool gets one delivery per buffer.
+    A post-drop delivery is recycled driver-side too: a second stream
+    over the same pool gets one delivery per buffer.
     """
     var loop = WatchLoop(capacity=8, backend=backend)
     var receiver = Socket.udp_v4()
@@ -77,14 +75,6 @@ def _run(backend: Backend) raises:
         observed, 0, "no completion of a dropped stream is reported"
     )
     assert_equal(pool.available(), 4, "a post-drop delivery is recycled")
-    if loop.backend() == Backend.EPOLL:
-        # The driver's free list holds every buffer again: the one the
-        # post-drop delivery took went straight back.
-        var groups = Pointer(to=loop._driver._epoll.value()._state[].groups)
-        assert_equal(len(groups[]), 1, "one group registered")
-        assert_equal(
-            len(groups[][0].free), 4, "every buffer is back in the group"
-        )
     # A second stream on the same pool still gets one delivery per
     # buffer, so every buffer is back in the ring on both backends.
     var again = loop.recv_msg_multishot(receiver, pool)
@@ -282,17 +272,69 @@ def test_datagram_survives_loop_destruction(backend: Backend) raises:
     sender.close()
 
 
+def test_orphaned_pool_keeps_memory_for_a_held_datagram(backend: Backend) raises:
+    """A pool orphaned with its stream still armed leaks its memory for a held datagram.
+
+    The stream and the pool handles are both dropped without a step in
+    between, so the loop dies with the cancel never submitted: the
+    stream is still armed and the pool still referenced when the
+    destructor runs. The pool is marked abandoned and its memory kept,
+    so the datagram held across the destruction still reads its bytes,
+    and dropping it afterwards is inert.
+
+    Args:
+        backend: The loop backend to force.
+    """
+    var loop = WatchLoop(capacity=8, backend=backend)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    var pool = loop.buffer_pool(2, 256)
+    var stream = loop.recv_msg_multishot(receiver, pool)
+    _ = loop.step(0)
+    _send(sender, to, 5)
+    var rounds = 0
+    while stream.pending() < 1:
+        _ = loop.step(1000)
+        rounds += 1
+        assert_true(rounds < 200, "the delivery did not arrive")
+    var first = stream.next()
+    var held = first.take()
+    var pool_state = pool._state
+
+    _ = stream^  # armed: the cancel waits for a step that never comes
+    _ = pool^
+    assert_equal(pool_state[].streams, 1, "the stream still references the pool")
+    _ = loop^
+    assert_true(held.buffer._pool[]._abandoned, "the orphaned pool leaks its memory")
+    assert_true(
+        Int(held.buffer._pool[].memory) != 0, "the memory pointer is kept"
+    )
+
+    var payload = held.payload()
+    assert_equal(len(payload), 1, "payload still readable")
+    assert_equal(payload[0], UInt8(5))
+    assert_equal(held.count(), 1)
+    assert_equal(held.peer_v4().port, sender.local_addr_v4().port)
+    _ = held^  # inert: the lease cannot return to a gone loop
+    receiver.close()
+    sender.close()
+
+
 def main() raises:
     _run(Backend.AUTO)
     test_drop_while_disarmed_settles_without_cancel(Backend.AUTO)
     test_pool_waits_for_the_stream(Backend.AUTO)
     test_handles_inert_after_loop_destruction(Backend.AUTO)
     test_datagram_survives_loop_destruction(Backend.AUTO)
+    test_orphaned_pool_keeps_memory_for_a_held_datagram(Backend.AUTO)
     print("ok: AUTO")
     _run(Backend.EPOLL)
     test_drop_while_disarmed_settles_without_cancel(Backend.EPOLL)
     test_pool_waits_for_the_stream(Backend.EPOLL)
     test_handles_inert_after_loop_destruction(Backend.EPOLL)
     test_datagram_survives_loop_destruction(Backend.EPOLL)
+    test_orphaned_pool_keeps_memory_for_a_held_datagram(Backend.EPOLL)
     print("ok: EPOLL")
     print("PASS: test_stream_drop.mojo")

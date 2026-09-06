@@ -29,6 +29,7 @@ from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true
 
 from boucle.net.message import write_delivery_header
+from boucle.net.options import AddrFamily
 from boucle.socle.platform import (
     EAGAIN,
     EBADF,
@@ -44,7 +45,12 @@ from boucle.socle.platform import (
 from boucle.watch._callback import _KIND_BITS, _SlotLink
 from boucle.watch._shared import _LoopShared
 from boucle.watch.pool import _PoolState, LeasedBuffer
-from boucle.watch.stream import _is_queue_full, _StreamState, DatagramStream
+from boucle.watch.stream import (
+    _is_queue_full,
+    _StreamState,
+    Datagram,
+    DatagramStream,
+)
 
 comptime BUF_SIZE = 128
 comptime BUF_COUNT = 4
@@ -226,6 +232,7 @@ def test_delivery_benign_end_and_error() raises:
     assert_equal(Int(dg.buffer.id()), 2)
     var payload = dg.payload()
     assert_equal(len(payload), 5)
+    assert_equal(dg.count(), 5, "count() is the full datagram length")
     assert_equal(Int(payload[0]), ord("h"))
     assert_equal(dg.peer_family().id, UInt16(2))
     var peer = dg.peer_v4()
@@ -466,6 +473,17 @@ def test_out_of_range_buffer_id_is_ignored() raises:
     assert_equal(len(stray.bytes()), 0, "no bytes for an id past the pool")
     _ = stray^
     assert_equal(fx.pool[].available, BUF_COUNT, "its return changed nothing")
+
+    # A Datagram over such a lease decodes as empty rather than reading
+    # past a buffer it does not have.
+    var empty = Datagram(LeasedBuffer(fx.pool, UInt16(BUF_COUNT)), UInt32(0), 0)
+    assert_true(empty.peer_family() == AddrFamily.UNSPEC, "no name: UNSPEC")
+    assert_true(not empty.truncated())
+    assert_true(not empty.control_truncated())
+    assert_equal(len(empty.payload()), 0)
+    assert_equal(empty.count(), 0)
+    _ = empty^
+    assert_equal(fx.pool[].available, BUF_COUNT)
 
 
 def test_error_with_more_flag_is_terminal() raises:

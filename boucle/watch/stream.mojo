@@ -598,20 +598,17 @@ struct Datagram(Movable):
 
     Fields:
         buffer: The lease; dropping the datagram returns it to the pool.
-        _result: The completion result.
         _flags: The completion flags.
         _control_capacity: Control bytes reserved in the buffer.
     """
 
     var buffer: LeasedBuffer
-    var _result: Int
     var _flags: UInt32
     var _control_capacity: Int
 
     def __init__(
         out self,
         var buffer: LeasedBuffer,
-        result: Int,
         flags: UInt32,
         control_capacity: Int,
     ):
@@ -619,19 +616,16 @@ struct Datagram(Movable):
 
         Args:
             buffer: The lease over the buffer the kernel or loop filled.
-            result: The completion result.
             flags: The completion flags.
             control_capacity: Control bytes reserved in the buffer.
         """
         self.buffer = buffer^
-        self._result = result
         self._flags = flags
         self._control_capacity = control_capacity
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
         self.buffer = move.buffer^
-        self._result = move._result
         self._flags = move._flags
         self._control_capacity = move._control_capacity
 
@@ -648,6 +642,15 @@ struct Datagram(Movable):
     def payload(ref self) -> Span[UInt8, MutUntrackedOrigin]:
         """Return the datagram payload (header, name and control excluded)."""
         return self._header().payload()
+
+    def count(self) -> Int:
+        """Return the full length of the datagram as the kernel reported it.
+
+        Equal to `len(payload())` unless the datagram did not fit the
+        buffer's payload region: then `truncated()` is True and this is
+        the larger, original length. Zero for a lease naming no buffer.
+        """
+        return Int(self._header().payloadlen())
 
     def peer_family(self) -> AddrFamily:
         """Return the peer's address family, UNSPEC when no name was written."""
@@ -773,7 +776,6 @@ struct DatagramStream(Movable):
         return Optional[Datagram](
             Datagram(
                 LeasedBuffer(self._state[].pool, d.buf_id),
-                d.result,
                 d.flags,
                 self._state[].control_capacity,
             )

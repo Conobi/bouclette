@@ -18,7 +18,7 @@ from boucle.drivers.backend import Backend
 from boucle.net.addr import SocketAddrV4
 from boucle.net.options import Shutdown
 from boucle.net.socket import Socket
-from boucle.socle.platform import EBADF, ENOBUFS, close_unchecked
+from boucle.socle.platform import EBADF, ECONNRESET, ENOBUFS, close_unchecked
 from boucle.watch import WatchLoop
 from boucle.watch.stream import Datagram
 
@@ -293,6 +293,11 @@ def test_read_shutdown_ends_the_stream() raises:
         rounds += 1
         assert_true(rounds < 10, "the read shutdown never ended the stream")
     assert_true(not stream.armed())
+    assert_equal(
+        stream.error().value().errno_value(),
+        ECONNRESET,
+        "a read-shut socket reports ECONNRESET",
+    )
     assert_equal(stream.pending(), 0)
     assert_equal(pool.available(), 4, "no buffer was leased")
 

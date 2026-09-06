@@ -3,8 +3,8 @@ recvmsg delivery, decoded from hand-built buffers.
 
 Covers the golden byte layout, capacity-based region offsets, truncated
 control and payload regions, a name written longer than its capacity,
-capacities whose sum overruns the buffer, and a buffer shorter than the
-header.
+capacities whose sum overruns the buffer, a buffer shorter than the
+header (refused by `parse`, decoded as all-zero by the constructor).
 """
 
 from std.memory import Pointer
@@ -201,6 +201,38 @@ def test_short_buffer_raises_einval() raises:
     assert_true(raised, "parse must raise EINVAL on a short buffer")
 
 
+def test_short_buffer_constructor_reads_zero() raises:
+    """The unchecked constructor over fewer than 16 bytes reads every field as zero.
+
+    A `Datagram` over a lease that names no buffer views an empty span;
+    every accessor must degrade to zero and empty rather than index past
+    the end.
+    """
+    var buf = List[UInt8](length=8, fill=0)
+    var hdr = DeliveryHeader(Span(buf), NAME_CAP, 0)
+    assert_equal(Int(hdr.flags()), 0)
+    assert_equal(Int(hdr.namelen()), 0)
+    assert_equal(Int(hdr.controllen()), 0)
+    assert_equal(Int(hdr.payloadlen()), 0)
+    assert_equal(len(hdr.name()), 0, "no name region")
+    assert_equal(len(hdr.payload()), 0, "no payload region")
+    var records = 0
+    for _ in hdr.control():
+        records += 1
+    assert_equal(records, 0, "the control walker yields nothing")
+    assert_true(not hdr.control().ecn())
+
+    # The two fields that do fit in eight bytes may hold anything: the
+    # regions they describe lie past the buffer and still clamp to empty.
+    var noisy = List[UInt8](length=8, fill=UInt8(0xFF))
+    var garbage = DeliveryHeader(Span(noisy), NAME_CAP, FULL_CTRL_CAP)
+    assert_equal(Int(garbage.payloadlen()), 0, "past the buffer: zero")
+    assert_equal(Int(garbage.flags()), 0)
+    assert_equal(len(garbage.name()), 0, "a huge namelen names no bytes")
+    assert_equal(len(garbage.payload()), 0)
+    assert_true(not garbage.control().ecn())
+
+
 def main() raises:
     test_golden_layout()
     test_regions_follow_capacities_not_written_lengths()
@@ -208,4 +240,5 @@ def main() raises:
     test_name_longer_than_capacity_is_clamped()
     test_capacities_beyond_buffer_clamp_to_empty()
     test_short_buffer_raises_einval()
+    test_short_buffer_constructor_reads_zero()
     print("PASS: test_delivery_header.mojo")

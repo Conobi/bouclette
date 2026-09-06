@@ -253,7 +253,7 @@ def test_stream_truncation(backend: Backend) raises:
     assert_equal(len(payload), ROOM, "the payload is cut at the region")
     for i in range(ROOM):
         assert_equal(payload[i], UInt8(i & 0xFF))
-    assert_equal(Int(dg._header().payloadlen()), 300, "full length kept")
+    assert_equal(dg.count(), 300, "full length kept")
     assert_true(stream.armed(), "a truncated delivery does not end the stream")
     _ = dg^
     _ = stream^
@@ -284,6 +284,9 @@ def test_multishot_refuses_stream_socket(backend: Backend) raises:
     listener.listen(Backlog(4))
     var pool = loop.buffer_pool(2, 256)
     var before = loop.in_flight_count()
+    # Whether the driver took an op slot (and with it a dup of the
+    # socket) has no public witness: the loop's counts only cover its
+    # own slabs. The epoll pool's free count is read directly for that.
     var slots_before = -1
     if loop.backend() == Backend.EPOLL:
         slots_before = loop._driver._epoll.value()._state[].pool.free_count()

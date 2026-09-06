@@ -45,14 +45,14 @@ from boucle.handle import RawHandle
 from boucle.error import IOError
 from boucle.socle.ptr import null_ptr
 from boucle.drivers.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
-
-# Largest provided-buffer ring the kernel registers (IO_RING_MAX_ENTRIES).
-comptime _MAX_RING_ENTRIES = 32768
 from boucle.proactor.completion import Completion
 from boucle.drivers.backend import Backend
 from boucle.drivers.driver import IoDriver
 from boucle.drivers.feature import DriverFeature
 
+
+# Largest provided-buffer ring the kernel registers (IO_RING_MAX_ENTRIES).
+comptime _MAX_RING_ENTRIES = 32768
 
 # Kernel versions that introduced the features the opcode probe cannot see.
 comptime _MULTISHOT_RECVMSG_MAJOR = 6

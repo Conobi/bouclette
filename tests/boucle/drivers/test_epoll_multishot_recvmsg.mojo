@@ -9,8 +9,8 @@ deliveries fire and is gone once a terminal completion fired. Returned
 buffers are handed out again, an oversized datagram reports MSG_TRUNC with
 its full length, a one-shot sendmsg on the same fd keeps working while
 the multishot op is armed, and a socket that reports readable forever
-without ever yielding a datagram (read shutdown) ends the op instead of
-spinning the driver.
+without ever yielding a datagram (read shutdown, or a pending socket
+error) ends the op with that errno instead of spinning the driver.
 """
 
 from std.memory import Pointer
@@ -30,6 +30,8 @@ from boucle.socle.linux.raw import (
     msghdr,
     __NR_fcntl,
     ECANCELED,
+    ECONNREFUSED,
+    ECONNRESET,
     ENOBUFS,
     IORING_CQE_BUFFER_SHIFT,
     IORING_CQE_F_BUFFER,
@@ -834,7 +836,9 @@ def test_read_shutdown_ends_multishot() raises:
     receiver.shutdown(Shutdown.RD)
     _tick_until(driver, tracker, 1, "the read shutdown never ended the op")
     assert_equal(tracker.count, 1, "exactly one terminal")
-    assert_true(tracker.results[0] < 0, "the terminal carries an errno")
+    assert_equal(
+        tracker.results[0], -Int(ECONNRESET), "a read-shut socket is ECONNRESET"
+    )
     assert_equal(Int(tracker.flags[0]), 0, "no MORE on a terminal")
     assert_equal(driver._state[].pool.free_count(), slots_before, "slot freed")
     assert_equal(len(driver._state[].groups[0].free), BUF_COUNT, "no buffer taken")
@@ -844,6 +848,62 @@ def test_read_shutdown_ends_multishot() raises:
     var elapsed_ms = (perf_counter_ns() - start) // 1_000_000
     assert_true(elapsed_ms >= 150, "the driver blocked for the whole timeout")
     assert_equal(tracker.count, 1, "the terminal fired once")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    _ = cmp
+    _ = tmpl
+
+
+def _closed_loopback_port() raises -> SocketAddrV4:
+    """Return a loopback UDP address nothing listens on.
+
+    A socket is bound to an ephemeral port and closed again; a datagram
+    sent there draws an ICMP port-unreachable.
+    """
+    var probe = Socket.udp_v4()
+    probe.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var addr = probe.local_addr_v4()
+    probe.close()
+    return addr
+
+
+def test_socket_error_ends_multishot_with_econnrefused() raises:
+    """An ICMP port-unreachable on a connected UDP socket ends the op with -ECONNREFUSED.
+
+    Without `IP_RECVERR` the error reaches the socket as its pending
+    error alone: the socket reports EPOLLERR, the drain wakes, and the
+    errno comes out of the first receive on it (or, had that receive
+    reported EAGAIN, out of `SO_ERROR`). Either way the terminal carries
+    -ECONNREFUSED with flags 0, the slot is freed and no buffer is kept.
+    """
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    receiver.connect(_closed_loopback_port())
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var tracker = Tracker()
+    var cmp = _completion(tracker)
+    var slots_before = driver._state[].pool.free_count()
+
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(cmp),
+    )
+    var ping = List[UInt8](length=4, fill=UInt8(1))
+    assert_equal(receiver.send(Span(ping)), 4)
+    _tick_until(driver, tracker, 1, "the socket error never ended the op")
+    assert_equal(tracker.count, 1, "exactly one terminal")
+    assert_equal(tracker.results[0], -Int(ECONNREFUSED))
+    assert_equal(Int(tracker.flags[0]), 0, "no MORE on a terminal")
+    assert_equal(driver._state[].pool.free_count(), slots_before, "slot freed")
+    assert_equal(len(driver._state[].groups[0].free), BUF_COUNT, "no buffer taken")
+    assert_equal(driver.tick(wait=False), 0, "nothing left to fire")
 
     driver.unregister_buffer_group(UInt16(GROUP))
     mem.unsafe_free()
@@ -864,4 +924,5 @@ def main() raises:
     test_truncation_reports_full_length()
     test_sendmsg_on_same_fd_while_armed()
     test_read_shutdown_ends_multishot()
+    test_socket_error_ends_multishot_with_econnrefused()
     print("PASS: test_epoll_multishot_recvmsg.mojo")
