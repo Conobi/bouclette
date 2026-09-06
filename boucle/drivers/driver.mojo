@@ -171,8 +171,15 @@ trait IoDriver(Movable):
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
     ) raises:
         """Queue a recvmsg on socket `fd`.
+
+        `flags` are the caller's `recvmsg(2)` flags, passed to the kernel
+        as given (a driver may add what its own mechanism needs, such as
+        MSG_DONTWAIT). The caller decides per socket: MSG_TRUNC makes a
+        datagram socket report the full datagram length, but makes a
+        stream socket discard the bytes instead of copying them.
 
         Args:
             fd: The socket file descriptor.
@@ -180,6 +187,7 @@ trait IoDriver(Movable):
                  (e.g. msghdr on Linux). Must remain valid until completion
                  fires.
             c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through; 0 for none.
         """
         ...
 
@@ -218,10 +226,16 @@ trait IoDriver(Movable):
         (`has_more`). The operation ends with a completion lacking the
         more flag: -ENOBUFS when the group is empty, -ECANCELED on
         cancel, or another errno. A zero-length datagram may also be
-        terminal: io_uring ends the operation with result 0 and no more
-        flag, while the epoll emulation delivers it and stays armed.
-        Callers must treat any completion without `has_more` as the end,
-        whatever its result. On a forced io_uring backend whose kernel
+        terminal: io_uring ends the operation on it with no more flag
+        and a positive result (the header, name and control capacities
+        with an empty payload), while the epoll emulation delivers it
+        and stays armed. A socket that is readable forever without
+        yielding a datagram (shut down for reading, or holding a pending
+        error) diverges the other way: the epoll emulation ends the
+        operation with the pending `SO_ERROR`, else ECONNRESET, else
+        EIO, while io_uring fires nothing and the operation stays armed
+        until it is cancelled. Callers must treat any completion without
+        `has_more` as the end, whatever its result. On a forced io_uring backend whose kernel
         lacks multishot recvmsg (before 6.0) the call raises EOPNOTSUPP.
 
         Args:

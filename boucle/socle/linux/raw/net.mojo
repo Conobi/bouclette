@@ -118,6 +118,7 @@ comptime SOL_IP = 0
 comptime SOL_IPV6 = 41
 comptime SOL_UDP = 17
 comptime SO_REUSEADDR = 2
+comptime SO_TYPE = 3
 comptime SO_ERROR = 4
 comptime SO_SNDBUF = 7
 comptime SO_RCVBUF = 8

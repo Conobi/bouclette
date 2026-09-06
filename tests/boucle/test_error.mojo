@@ -72,6 +72,7 @@ def test_write_to_names_the_errno() raises:
     assert_equal(String(IOError.from_errno(-111)), "ECONNREFUSED (111)")
     assert_equal(String(IOError(Errno.EAGAIN)), "EAGAIN (11)")
     assert_equal(String(IOError(Errno.ETIMEDOUT)), "ETIMEDOUT (110)")
+    assert_equal(String(IOError.from_errno(-5)), "EIO (5)")
 
 
 def _raise_socle_style(text: String) raises:

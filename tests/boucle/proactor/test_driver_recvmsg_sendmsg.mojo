@@ -5,11 +5,13 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc as _heap_alloc
 from std.testing import assert_true
 
-from boucle.socle.linux.raw import msghdr
+from boucle.socle.linux.raw import iovec, msghdr, MSG_TRUNC
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
 from boucle.drivers.auto import AutoDriver
 from boucle.drivers.backend import Backend
+from boucle.net.addr import SocketAddrV4
+from boucle.net.socket import Socket
 
 comptime AF_INET = 2
 comptime SOCK_DGRAM = 2
@@ -265,6 +267,72 @@ def test_driver_recvmsg_sendmsg(backend: Backend) raises:
     _ = recv_cmp
 
 
+def _ptr[T: AnyType](ref value: T) -> Pointer[T, MutUntrackedOrigin]:
+    """Untracked pointer to a caller-owned value."""
+    return Pointer[T, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=value))
+    )
+
+
+def test_recvmsg_truncation_reports_full_length(backend: Backend) raises:
+    """A 300-byte datagram into a 100-byte iov, MSG_TRUNC requested: 300 and MSG_TRUNC.
+
+    Args:
+        backend: The completion backend to force (IO_URING or EPOLL).
+    """
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    var driver = AutoDriver(capacity=8, backend=backend)
+
+    comptime ROOM = 100
+    comptime BIG = 300
+    var inbox = List[UInt8](length=ROOM, fill=0)
+    var iov = iovec()
+    iov.iov_base = UInt64(Int(inbox.unsafe_ptr()))
+    iov.iov_len = UInt64(ROOM)
+    var hdr = msghdr()
+    hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
+    hdr.msg_iovlen = UInt64(1)
+    var tracker = ResultTracker()
+    var cmp = Completion(
+        invoke=ResultTracker.on_complete,
+        context=_ptr(tracker).unsafe_bitcast[NoneType](),
+    )
+    driver.recvmsg(
+        receiver.raw(),
+        _ptr(hdr).unsafe_bitcast[NoneType](),
+        _ptr(cmp),
+        UInt32(MSG_TRUNC),
+    )
+
+    var payload = List[UInt8](length=BIG, fill=0)
+    for i in range(BIG):
+        payload[i] = UInt8(i & 0xFF)
+    assert_true(sender.send_to(Span(payload), to) == BIG, "sendto")
+    var seen = _ptr(tracker)
+    var ticks = 0
+    while not seen[].fired:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 20, "the truncated recvmsg never completed")
+    assert_true(
+        seen[].result == BIG,
+        "result is the full datagram length, got " + String(seen[].result),
+    )
+    assert_true((Int(hdr.msg_flags) & MSG_TRUNC) != 0, "MSG_TRUNC set")
+    for i in range(ROOM):
+        assert_true(Int(inbox[i]) == (i & 0xFF), "copied bytes intact")
+
+    receiver.close()
+    sender.close()
+    _ = cmp
+    _ = hdr
+    _ = iov
+    _ = inbox
+
+
 def _has_io_uring() -> Bool:
     """Probe whether io_uring is available on this kernel."""
     try:
@@ -278,7 +346,9 @@ def _has_io_uring() -> Bool:
 def main() raises:
     if _has_io_uring():
         test_driver_recvmsg_sendmsg(Backend.IO_URING)
+        test_recvmsg_truncation_reports_full_length(Backend.IO_URING)
     else:
         print("SKIP: io_uring not available")
     test_driver_recvmsg_sendmsg(Backend.EPOLL)
+    test_recvmsg_truncation_reports_full_length(Backend.EPOLL)
     print("PASS: test_driver_recvmsg_sendmsg.mojo")

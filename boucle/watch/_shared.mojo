@@ -31,17 +31,18 @@ struct _LoopShared(Movable):
         deferred: The loop's deferred-submission queue of slot keys;
                   a state pushes its key to request a re-arm or a cancel.
         stream_completions: Completions fired this tick by stream
-                            callbacks that `step()` reports (deliveries
-                            queued for a live stream, and every
-                            terminal, including the one that ends an
-                            owner-dropped stream, which no handle sees).
-                            They were never counted in `_pending`, so
-                            the loop must not subtract them.
+                            callbacks that `step()` reports: deliveries
+                            queued for a held stream and the terminal
+                            that ends a held stream. They were never
+                            counted in `_pending`, so the loop must not
+                            subtract them.
         internal_completions: Completions fired this tick that no handle
                               can observe: internal cancel operations
-                              and deliveries recycled after the stream's
-                              handle dropped. Not pending, and not
-                              reported by `step()` either.
+                              and every completion of a stream whose
+                              handle has dropped, deliveries recycled
+                              into the pool and the terminal alike. Not
+                              pending, and not reported by `step()`
+                              either.
     """
 
     var driver: Pointer[_WatchDriver, MutUntrackedOrigin]

@@ -18,7 +18,7 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 
 - **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`/`SocketAddrV6`, `IOError` and `Backend`. No adapter layers.
 - **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
-- **Automatic backend selection.** `Backend.AUTO` picks io_uring when the kernel supports it, falls back to epoll otherwise. A single binary works across kernel versions.
+- **Automatic backend selection.** `Backend.AUTO` picks io_uring only when the kernel serves the datagram path natively (multishot recvmsg and provided-buffer rings, 6.0+), epoll otherwise. A single binary works across kernel versions.
 - **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value* and `send_msg`/`recv_msg` take a `Message` the same way. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count, and a failed operation hands it back inside the typed `TransferFailed`/`MessageFailed` error. Dropping the future without running the loop is harmless.
 - **One errno type.** Every failure carries an `IOError` with the errno, printing as `ECONNREFUSED (111)`. `Socket` calls raise it directly; the completion futures wrap it in `TransferFailed`/`MessageFailed` so the in-flight buffer rides back with the error.
 - **`socle/` is private.** OS abstractions (syscalls, fd, errno, epoll/io_uring wrappers) live in `boucle/socle/`, and `boucle/socle/platform.mojo` is the single seam where the portable layer names a concrete OS. Platform-specific features require an explicit `socle/` import — the path makes the portability trade-off visible.
@@ -140,11 +140,11 @@ typed failure: ECONNREFUSED (111)
 
 **Buffer ownership.** `recv`/`send` take `var buf: List[UInt8]`, so the loop owns the bytes for exactly as long as the operation is in flight. You get them back from `result()` as a `TransferResult`: `count` bytes moved, `transferred()` is a span over them, `take_buffer()` returns the list itself. The buffer's *length* is the recv window — a list of length 32 asks for at most 32 bytes — and the length is not changed by the operation. Dropping a future instead of calling `result()` simply gives the buffer up.
 
-**Datagrams.** `send_msg`/`recv_msg` take a `Message`: a payload list, an optional peer (`set_peer`) and a control area (`control_capacity`). `send_to(socket, buf, addr)` and `recv_from(socket, buf)` are the two-line wrappers. The `MessageResult` carries `count`, `peer_v4()`/`peer_v6()`, `control()` (a walker over cmsg records, with `ecn()` for the codepoint), `truncated()`/`control_truncated()`, and `take_message()`. To receive ECN, call `socket.set_recv_tos()` and give the receiving message at least 24 bytes of control capacity; to send it, `msg.set_ecn(mark)` after `set_peer` (a v4-mapped v6 peer gets an `IP_TOS` record, as the kernel requires).
+**Datagrams.** `send_msg`/`recv_msg` take a `Message`: a payload list, an optional peer (`set_peer`) and a control area (`control_capacity`). `send_to(socket, buf, addr)` and `recv_from(socket, buf)` are the two-line wrappers. The `MessageResult` carries `count`, `peer_v4()`/`peer_v6()`, `control()` (a walker over cmsg records, with `ecn()` for the codepoint), `truncated()`/`control_truncated()`, and `take_message()`. To receive ECN, call `socket.set_recv_tos()` and give the receiving message at least 24 bytes of control capacity; to send it, `msg.set_ecn(mark)` after `set_peer` (a v4-mapped v6 peer gets an `IP_TOS` record, as the kernel requires); `set_ecn` replaces whatever the control area held, it never appends. `recv_msg` on a datagram socket reports the full datagram length even past the window; on a stream socket it reports the bytes copied and discards nothing.
 
-**Multishot datagrams.** `loop.buffer_pool(count, size)` returns a `BufferPool` the loop owns; `loop.recv_msg_multishot(socket, pool)` returns a `DatagramStream` that keeps receiving into that pool until dropped or ended. `stream.next()` yields a `Datagram` — payload span, `peer_v4()`/`peer_v6()`, `control()` — whose `LeasedBuffer` goes back to the pool when it is dropped. Drive the stream with `loop.step()`, not `run()`: `run()` returns as soon as no one-shot operation is pending. When every buffer is leased the stream ends with `ENOBUFS` — `armed()` turns False and `error()` is set — and `rearm()` resumes it once leases have been dropped.
+**Multishot datagrams.** `loop.buffer_pool(count, size)` returns a `BufferPool` the loop owns; `loop.recv_msg_multishot(socket, pool)` returns a `DatagramStream` that keeps receiving into that pool until dropped or ended. `stream.next()` yields a `Datagram` — payload span, `peer_v4()`/`peer_v6()`, `control()` — whose `LeasedBuffer` goes back to the pool when it is dropped. Drive the stream with `loop.step()`, not `run()`: `run()` returns as soon as no one-shot operation is pending. When every buffer is leased the stream ends with `ENOBUFS` — `armed()` turns False and `error()` is set — and `rearm()` resumes it once leases have been dropped. `buffer_pool` accepts a count in 1..32768 (rounded up to a power of two) and a size from 64 bytes to 16 MiB; anything else raises `IOError(EINVAL)`.
 
-**Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned).
+**Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned). The submitting verbs raise the same types: `loop.recv`/`loop.send` raise `TransferFailed` and `recv_msg`/`send_msg`/`send_to`/`recv_from` raise `MessageFailed`, always with reason `IO` and the buffer or message inside, when the socket handle is invalid or the driver refuses the submission; nothing stays in flight in that case.
 
 **Lifetimes.** Sockets are *not* moved into the loop: they must stay alive across `run()`, and you close them yourself.
 
@@ -283,6 +283,7 @@ boucle/                              Public API — what developers import
 │   ├── driver.mojo                  IoDriver, ReadinessDriver traits
 │   ├── auto.mojo                    AutoDriver (io_uring, falling back to epoll)
 │   ├── backend.mojo                 Backend (AUTO, IO_URING, EPOLL)
+│   ├── feature.mojo                 DriverFeature (multishot recvmsg, buffer ring, ...)
 │   ├── io_uring.mojo                IoUringDriver (completion)
 │   ├── epoll_completion.mojo        EpollCompletionDriver (completion over epoll)
 │   ├── epoll.mojo                   EpollDriver (readiness)
@@ -322,6 +323,7 @@ boucle/                              Public API — what developers import
         ├── mm.mojo                  Memory mapping (mmap, munmap, mprotect)
         ├── ucontext.mojo            ucontext wrappers (getcontext, makecontext, swapcontext)
         ├── ucontext_stack.mojo      RAII coroutine stack (guard page, context setup)
+        ├── uname.mojo               uname(2) wrapper, KernelVersion (major.minor)
         └── utils.mojo               Internal helpers
 ```
 

@@ -58,7 +58,8 @@ def test_receiving_state_points_the_header_at_its_own_slot() raises:
     assert_true(s[].is_done())
     assert_equal(s[]._result, 5)
     assert_equal(Int(s[].msg._peer.addr_len()), 16, "peer length follows msg_namelen")
-    assert_equal(s[].msg._control_len, 24, "control length follows msg_controllen")
+    assert_equal(s[].msg._control_received, 24, "control length follows msg_controllen")
+    assert_equal(s[].msg._control_appended, 0, "nothing of it goes out on a send")
     assert_equal(Int(s[].flags()), 32)
 
     var back = s[].take_message()
@@ -148,6 +149,36 @@ def test_sending_state_with_unused_control_capacity_offers_none() raises:
     assert_equal(len(queue), 0, "the operation never completed: nothing to settle")
 
 
+def test_wiring_a_receive_clears_the_previous_peer() raises:
+    """A reused message never carries the previous peer into a receive:
+    `wire()` zeroes the name slot, so a receive that writes no name
+    (connected socket, `msg_namelen` 0) reports UNSPEC, not the old peer."""
+    var queue = List[Int]()
+    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var msg = Message(List[UInt8](length=4, fill=0))
+    msg.set_peer(SocketAddrV4(10, 1, 2, 3, port=4444))
+    var s = slab.alloc(_MessageState(msg^, receiving=True))
+    s[].wire()
+    assert_equal(Int(s[].msg._peer.addr_len()), 0, "the slot length is reset")
+    assert_true(s[].msg.peer_family() == AddrFamily.UNSPEC)
+    var bytes = Pointer(to=s[].msg._peer.addr).unsafe_bitcast[UInt8]()
+    for i in range(size_of[sockaddr_in6]()):
+        assert_equal(Int(bytes[unsafe_offset=i]), 0, "the slot bytes are zero")
+    assert_equal(Int(s[]._hdr.msg_name), Int(Pointer(to=s[].msg._peer.addr)))
+    assert_equal(Int(s[]._hdr.msg_namelen), size_of[sockaddr_in6]())
+
+    # The kernel wrote no name at all.
+    s[]._hdr.msg_namelen = 0
+    s[].set_result(4)
+    s[].notify_done()
+    assert_true(
+        s[].msg.peer_family() == AddrFamily.UNSPEC,
+        "no name written: UNSPEC, not the previous peer",
+    )
+    s[].mark_owner_dropped()
+    slab.settle(queue[0] >> _KIND_BITS)
+
+
 def main() raises:
     test_receiving_state_points_the_header_at_its_own_slot()
     print("ok: receiving state points the header at its own slot")
@@ -159,4 +190,6 @@ def main() raises:
     print("ok: receiving state with no control capacity offers none")
     test_sending_state_with_unused_control_capacity_offers_none()
     print("ok: sending state with unused control capacity offers none")
+    test_wiring_a_receive_clears_the_previous_peer()
+    print("ok: wiring a receive clears the previous peer")
     print("PASS: test_message_state.mojo")

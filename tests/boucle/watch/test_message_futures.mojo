@@ -16,6 +16,7 @@ from boucle.net.addr import SocketAddrV4
 from boucle.net.options import AddrFamily
 from boucle.socle.platform import ECANCELED, EINVAL, ENOTCONN, MSG_TRUNC
 from boucle.watch import FailureReason, RecvMsgFuture, SendMsgFuture
+from boucle.watch._callback import _KIND_BITS
 from boucle.watch._message import _MessageState
 from boucle.watch._slab import _Slab
 
@@ -58,7 +59,7 @@ def test_result_before_completion_is_not_done() raises:
     s[].set_result(4)
     s[].notify_done()
     assert_equal(len(queue), 1, "completion is the second event")
-    slab.settle(queue[0] >> 4)
+    slab.settle(queue[0] >> _KIND_BITS)
 
 
 def test_result_after_loop_gone_is_loop_gone() raises:
@@ -109,7 +110,7 @@ def test_dropping_a_done_future_queues_the_slot() raises:
     b[].notify_done()
     assert_equal(len(queue), 2)
     for key in queue:
-        slab.settle(key >> 4)
+        slab.settle(key >> _KIND_BITS)
     assert_equal(len(slab._free), 2)
 
 
@@ -150,7 +151,7 @@ def test_result_after_receive_decodes_the_message() raises:
     var back = got^.take_message()
     assert_equal(Int(back.payload().unsafe_ptr()), storage, "payload identity preserved")
     assert_equal(len(queue), 1, "result() let go of a done slot: queued exactly once")
-    slab.settle(queue[0] >> 4)
+    slab.settle(queue[0] >> _KIND_BITS)
     assert_equal(len(slab._free), 2)
 
 
@@ -182,7 +183,7 @@ def test_result_after_failed_receive_is_io_with_the_message() raises:
     assert_equal(len(msg.payload()), 16, "payload length unchanged")
     assert_equal(Int(msg.payload().unsafe_ptr()), storage, "same allocation")
     assert_equal(len(queue), 1, "the failed slot is queued exactly once")
-    slab.settle(queue[0] >> 4)
+    slab.settle(queue[0] >> _KIND_BITS)
 
 
 def main() raises:

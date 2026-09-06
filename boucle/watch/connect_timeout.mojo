@@ -239,6 +239,24 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._cancel_target = UInt8(0)
         return 1
 
+    def orphan_without_timer(mut self):
+        """Settle a composite whose timer the driver refused after the connect went out.
+
+        The connect is in flight and nothing can take it back, so the
+        state stays in its slot with no handle: the timer that never
+        existed is counted as already complete, the result is marked
+        resolved so the connect's own completion only counts, and a
+        cancel of the connect is flagged for the next flush. Two
+        completions then close the composite — the connect's and the
+        cancel's — and the sweep releases the slot.
+        """
+        self._total_completions = 1
+        self._result_set = True
+        self._resolved_by = UInt8(1)
+        self._cancel_target = UInt8(2)
+        self._cancel_submitted = True
+        self._owner_dropped = True
+
     def take_internal_completions(mut self) -> Int:
         """Return the cancel completions seen since the last call, and reset.
 

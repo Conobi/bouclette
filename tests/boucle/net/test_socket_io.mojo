@@ -37,6 +37,7 @@ def main() raises:
     var fds = _socketpair()
     var sender = Socket(OwnedHandle(raw=fds[0]))
     var receiver = Socket(OwnedHandle(raw=fds[1]))
+    assert_true(not sender.is_datagram(), "an adopted SOCK_STREAM reads its type")
 
     # --- Send "ping" from sender ---
     var msg = String("ping")

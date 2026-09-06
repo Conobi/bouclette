@@ -18,6 +18,7 @@ from std.memory.alloc import unsafe_alloc
 
 from boucle.error import IOError
 from boucle.handle import OwnedHandle
+from boucle.net.options import SocketType
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.socle.platform import close_unchecked
@@ -247,7 +248,9 @@ struct AcceptFuture(Movable):
         self._state[].consumed = True
         if self._state[]._error_code != Int32(0):
             raise IOError.from_errno(Int(self._state[]._error_code))
-        return Socket(OwnedHandle(raw=self._state[]._socket_fd))
+        return Socket(
+            OwnedHandle(raw=self._state[]._socket_fd), type=SocketType.STREAM
+        )
 
     def done(self) -> Bool:
         """Return True if the accept operation has completed.

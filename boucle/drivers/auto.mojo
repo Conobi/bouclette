@@ -22,6 +22,23 @@ from boucle.drivers.epoll_completion import EpollCompletionDriver
 from boucle.socle import is_linux
 
 
+def _native_datagram_path_rule(multishot: Bool, buffer_ring: Bool) -> Bool:
+    """The selection rule as a pure function of the two probed features.
+
+    Kept apart from the driver so it can be pinned as a truth table
+    without a ring: io_uring serves the datagram path natively only
+    when both multishot recvmsg and provided-buffer rings are there.
+
+    Args:
+        multishot: Whether `MULTISHOT_RECVMSG` is supported.
+        buffer_ring: Whether `BUFFER_RING` is supported.
+
+    Returns:
+        True if both are supported.
+    """
+    return multishot and buffer_ring
+
+
 def _native_datagram_path(ref driver: IoUringDriver) -> Bool:
     """Return True when io_uring can serve the datagram path natively.
 
@@ -29,10 +46,12 @@ def _native_datagram_path(ref driver: IoUringDriver) -> Bool:
         driver: A freshly constructed io_uring driver.
 
     Returns:
-        True if both `MULTISHOT_RECVMSG` and `BUFFER_RING` are supported.
+        `_native_datagram_path_rule` applied to the driver's answers for
+        `MULTISHOT_RECVMSG` and `BUFFER_RING`.
     """
-    return driver.supports(DriverFeature.MULTISHOT_RECVMSG) and driver.supports(
-        DriverFeature.BUFFER_RING
+    return _native_datagram_path_rule(
+        driver.supports(DriverFeature.MULTISHOT_RECVMSG),
+        driver.supports(DriverFeature.BUFFER_RING),
     )
 
 
@@ -254,6 +273,7 @@ struct AutoDriver(IoDriver):
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -261,10 +281,11 @@ struct AutoDriver(IoDriver):
             fd: The socket file descriptor.
             msg: Opaque pointer to a platform-specific message header.
             c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through; 0 for none.
         """
         if self._backend is Backend.IO_URING:
-            return self._uring.value().recvmsg(fd, msg, c)
-        return self._epoll.value().recvmsg(fd, msg, c)
+            return self._uring.value().recvmsg(fd, msg, c, flags)
+        return self._epoll.value().recvmsg(fd, msg, c, flags)
 
     def sendmsg(
         mut self,

@@ -8,10 +8,12 @@ one delivery, a `LeasedBuffer` plus the decoded header.
 
 Termination policy per completion: MORE set and result >= 0 enqueues and
 stays armed; no MORE and result >= 0 enqueues and queues a re-arm on the
-loop's deferred list; result < 0 while the handle is held disarms the
-stream and sets `error()` (ENOBUFS is the expected case, re-arm after
-returning leases); result < 0 after the handle dropped is the terminal
-completion and settles the slot. Dropping an armed stream queues an
+loop's deferred list (a re-arm the driver refuses only because its
+submission queue is momentarily full is retried at the next flush; any
+other refusal disarms with that error); result < 0 while the handle is
+held disarms the stream and sets `error()` (ENOBUFS is the expected
+case, re-arm after returning leases); result < 0 after the handle
+dropped is the terminal completion and settles the slot. Dropping an armed stream queues an
 internal cancel whose own result is ignored; completions arriving in
 between return their buffer to the pool instead of queueing. The
 terminal and the cancel's own completion may land in either order (on
@@ -41,6 +43,7 @@ from boucle.net.options import AddrFamily
 from boucle.proactor.completion import Completion, buffer_id, has_more
 from boucle.socle.platform import (
     EAFNOSUPPORT,
+    MSG_CTRUNC,
     MSG_TRUNC,
     iovec,
     msghdr,
@@ -54,6 +57,24 @@ from boucle.watch.pool import _PoolState, LeasedBuffer
 
 # Name slot capacity of every stream: the largest supported sockaddr.
 comptime _NAME_CAPACITY = size_of[sockaddr_in6]()
+
+
+def _is_queue_full(e: Error) -> Bool:
+    """Return True when the driver refused a submission only because its queue is full.
+
+    The io_uring driver reports a submission queue still full after its
+    flush as EAGAIN in socle's negated-errno text; that is the one
+    refusal a stream retries at the next flush instead of disarming.
+    Any other errno, and any text that is not an errno, is a genuine
+    driver error.
+
+    Args:
+        e: The error the driver raised.
+
+    Returns:
+        True for `-EAGAIN`; False for anything else.
+    """
+    return IOError.from_error(e).is_would_block()
 
 
 @fieldwise_init
@@ -96,6 +117,8 @@ struct _StreamState(_InFlightState):
         cancel_requested: A cancel waits on the deferred list.
         cancel_submitted: The cancel was handed to the driver.
         cancel_done: The cancel's own completion arrived.
+        cancel_failed: The driver refused the cancel for a genuine error;
+                       the slot waits for the operation to end on its own.
         pool_detached: This stream no longer counts against the pool.
         _finished: The slot key was pushed on the settle queue.
         _live_counted: The slab still counts this state live.
@@ -121,6 +144,7 @@ struct _StreamState(_InFlightState):
     var cancel_requested: Bool
     var cancel_submitted: Bool
     var cancel_done: Bool
+    var cancel_failed: Bool
     var pool_detached: Bool
     var _finished: Bool
     var _live_counted: Bool
@@ -169,6 +193,7 @@ struct _StreamState(_InFlightState):
         self.cancel_requested = False
         self.cancel_submitted = False
         self.cancel_done = False
+        self.cancel_failed = False
         self.pool_detached = False
         self._finished = False
         self._live_counted = True
@@ -202,6 +227,7 @@ struct _StreamState(_InFlightState):
         self.cancel_requested = move.cancel_requested
         self.cancel_submitted = move.cancel_submitted
         self.cancel_done = move.cancel_done
+        self.cancel_failed = move.cancel_failed
         self.pool_detached = move.pool_detached
         self._finished = move._finished
         self._live_counted = move._live_counted
@@ -295,14 +321,17 @@ struct _StreamState(_InFlightState):
         Idempotent: the terminal completion and the cancel's own
         completion each try to finish the stream when they arrive
         second, and on io_uring their order is not fixed. Only the first
-        call pushes the slot key.
+        call pushes the slot key. The stream's key is queued before the
+        pool is detached, so when the detach makes the pool reclaimable
+        its key follows the stream's and the sweep releases the stream
+        first: a pool always outlives the streams that reference it.
         """
         if self._finished:
             return
         self._finished = True
         self._return_queued_leases()
-        self._detach_pool()
         self._release_live_and_queue()
+        self._detach_pool()
 
     def _disarm(mut self, err: IOError):
         """End the stream on an error while the handle is held.
@@ -334,14 +363,40 @@ struct _StreamState(_InFlightState):
             return
         self._finish()
 
+    def _cancel_refused(mut self):
+        """Give up on cancelling; the slot waits for the operation to end.
+
+        The refusal proves nothing about the multishot itself, which may
+        still be armed kernel-side and can complete into this slot at
+        any time. So the state stays armed and `is_done()` stays False:
+        the slot is never settled here. The cancel is not retried either
+        (a genuine error would only repeat), so the slot stays allocated
+        until the operation ends on its own, when the terminal
+        completion settles it through `_on_op_ended` exactly as if no
+        cancel had been asked for; failing that, it stays allocated for
+        the life of the loop and the destructor releases it once the
+        driver, and with it any chance of a completion, is gone.
+        """
+        self.cancel_requested = False
+        self.cancel_submitted = False
+        self.cancel_failed = True
+
     def flush_deferred(mut self, mut driver: _WatchDriver):
         """Submit the deferred cancel or re-arm, whichever is requested.
 
         Called by the loop outside completion processing. A cancel takes
         priority over a re-arm: once the handle is gone nothing must be
-        resubmitted. A cancel that cannot be submitted (submission queue
-        full) stays requested and re-queues the key for the next flush;
-        a failed re-arm ends the stream with the driver's error.
+        resubmitted. A cancel refused because the submission queue is
+        still full after the driver's own flush (`_is_queue_full`) stays
+        requested and re-queues the key for the next flush. A cancel
+        refused for any other reason is given up on (`_cancel_refused`):
+        the operation may still be armed, so settling the slot would
+        let a later completion write into freed or reused memory. The
+        slot is kept instead, a bounded leak for the loop's life at
+        worst, and settles when the operation ends on its own. A re-arm
+        refused because the queue is full stays requested and re-queues
+        the key the same way; any other driver error ends the stream
+        with that error set.
 
         Args:
             driver: The loop's driver.
@@ -352,11 +407,13 @@ struct _StreamState(_InFlightState):
                 driver.cancel(self.completion_ptr(), self.cancel_ptr())
                 self.cancel_requested = False
                 self.cancel_submitted = True
-            except:
-                self._queue_deferred()
+            except e:
+                if _is_queue_full(e):
+                    self._queue_deferred()
+                else:
+                    self._cancel_refused()
             return
         if self.rearm_requested:
-            self.rearm_requested = False
             try:
                 driver.multishot_recvmsg(
                     self.fd,
@@ -364,8 +421,26 @@ struct _StreamState(_InFlightState):
                     self.group_id,
                     self.completion_ptr(),
                 )
+                self.rearm_requested = False
             except e:
-                self._disarm(IOError.from_error(e))
+                self._rearm_refused(e)
+
+    def _rearm_refused(mut self, e: Error):
+        """Handle a re-arm the driver refused.
+
+        A submission queue still full after the driver's own flush
+        (`_is_queue_full`) keeps the re-arm requested and re-queues the
+        key for the next flush. Any other error ends the stream with
+        that error set: the request is dropped and the state disarmed.
+
+        Args:
+            e: The error the driver raised.
+        """
+        if _is_queue_full(e):
+            self._queue_deferred()
+        else:
+            self.rearm_requested = False
+            self._disarm(IOError.from_error(e))
 
     @staticmethod
     def _on_delivery(
@@ -377,10 +452,15 @@ struct _StreamState(_InFlightState):
         frees the state; the sweep does that once the key is queued.
 
         Every completion is tallied in the shared box so the loop does
-        not subtract it from `_pending`. A non-terminal delivery that
-        lands after the handle dropped is recycled straight into the
-        pool and counted as internal, because no handle can observe
-        it; everything else counts as a stream completion.
+        not subtract it from `_pending`. Once the handle has dropped no
+        completion of the stream can be observed, so every one of them
+        counts as internal: a delivery is recycled straight into the
+        pool, and the terminal only settles the slot. While the handle
+        is held every completion counts as a stream completion, except
+        a delivery naming a buffer id past the pool: that buffer is
+        never dereferenced, the delivery is dropped (the buffer it names
+        is leaked) and counted as internal, and only the more-flag is
+        honoured.
 
         Args:
             ctx: Pointer to the owning `_StreamState`.
@@ -389,33 +469,38 @@ struct _StreamState(_InFlightState):
         """
         var st = ctx.unsafe_bitcast[_StreamState]()
         var more = has_more(flags)
+        if st[]._owner_dropped:
+            st[]._shared[].internal_completions += 1
+            if result >= 0:
+                var bid = buffer_id(flags)
+                if bid:
+                    st[].pool[].recycle(bid.value())
+                if more:
+                    return
+            st[]._on_op_ended()
+            return
         if result >= 0:
             var bid = buffer_id(flags)
+            var dropped = False
             if bid:
-                if st[]._owner_dropped:
-                    st[].pool[].recycle(bid.value())
-                    if more:
-                        st[]._shared[].internal_completions += 1
-                        return
-                else:
+                if st[].pool[].holds(bid.value()):
                     st[].pool[].lease_taken()
                     st[].deliveries.append(
                         _Delivery(bid.value(), result, flags)
                     )
-            st[]._shared[].stream_completions += 1
+                else:
+                    dropped = True
+            if dropped:
+                st[]._shared[].internal_completions += 1
+            else:
+                st[]._shared[].stream_completions += 1
             if more:
                 return
-            if st[]._owner_dropped:
-                st[]._on_op_ended()
-            else:
-                st[].rearm_requested = True
-                st[]._queue_deferred()
+            st[].rearm_requested = True
+            st[]._queue_deferred()
             return
         st[]._shared[].stream_completions += 1
-        if st[]._owner_dropped:
-            st[]._on_op_ended()
-        else:
-            st[]._disarm(IOError.from_errno(result))
+        st[]._disarm(IOError.from_errno(result))
 
     @staticmethod
     def _on_cancel_cb(
@@ -551,7 +636,11 @@ struct Datagram(Movable):
         self._control_capacity = move._control_capacity
 
     def _header(ref self) -> DeliveryHeader[MutUntrackedOrigin]:
-        """View the buffer as a delivery; pools guarantee >= 64 bytes."""
+        """View the buffer as a delivery; pools guarantee >= 64 bytes.
+
+        An empty view (the lease names no buffer of its pool) decodes as
+        zero fields and empty regions rather than reading past its end.
+        """
         return DeliveryHeader(
             self.buffer.bytes(), _NAME_CAPACITY, self._control_capacity
         )
@@ -568,7 +657,9 @@ struct Datagram(Movable):
         """Return the IPv4 peer.
 
         Raises:
-            IOError(EAFNOSUPPORT) if the peer is not AF_INET.
+            IOError(EAFNOSUPPORT) if the peer is not AF_INET, or if the
+            name the kernel wrote is shorter than a `sockaddr_in` (a
+            short or absent name is never decoded).
         """
         var name = self._header().name()
         if (
@@ -586,7 +677,9 @@ struct Datagram(Movable):
         """Return the IPv6 peer.
 
         Raises:
-            IOError(EAFNOSUPPORT) if the peer is not AF_INET6.
+            IOError(EAFNOSUPPORT) if the peer is not AF_INET6, or if the
+            name the kernel wrote is shorter than a `sockaddr_in6` (a
+            short or absent name is never decoded).
         """
         var name = self._header().name()
         if (
@@ -608,6 +701,10 @@ struct Datagram(Movable):
         """Return True if the payload did not fit the buffer (MSG_TRUNC)."""
         return (self._header().flags() & UInt32(MSG_TRUNC)) != 0
 
+    def control_truncated(self) -> Bool:
+        """Return True if the control records did not fit the control area (MSG_CTRUNC)."""
+        return (self._header().flags() & UInt32(MSG_CTRUNC)) != 0
+
 
 # ===----------------------------------------------------------------------=== #
 # DatagramStream — handle returned by WatchLoop.recv_msg_multishot
@@ -623,6 +720,12 @@ struct DatagramStream(Movable):
     resubmits the operation once the leases are back. Dropping the handle
     cancels the operation and returns queued leases. Once the loop is
     gone the handle is inert.
+
+    A socket that will never yield a datagram again ends the stream on
+    epoll only: a read-shut socket reports ECONNRESET, a pending socket
+    error is reported as is. On io_uring a read-shut or errored socket
+    never terminates the stream; it stays armed with no completion, so
+    drop the stream to release it.
 
     Fields:
         _state: The slab-owned stream state.
@@ -643,7 +746,14 @@ struct DatagramStream(Movable):
         self._state = move._state
 
     def __deinit__(deinit self):
-        """Hand the stream to the loop, or do nothing if the loop is gone."""
+        """Hand the stream to the loop, or do nothing if the loop is gone.
+
+        The operation is cancelled at the next `step()` or `run()`, not
+        here. On epoll the operation holds a private dup of the socket,
+        so the socket's open file stays alive until that tick retires
+        the operation even if the caller closed its descriptor: a bind
+        to the same port before then gets EADDRINUSE.
+        """
         if not self._state[]._loop_gone:
             self._state[].mark_owner_dropped()
 
@@ -687,10 +797,10 @@ struct DatagramStream(Movable):
         Legal only when `error()` is set. The socket is not checked:
         ENOBUFS after returning leases is the expected case, and reuse
         of a closed descriptor is the caller's responsibility. The
-        submission is deferred to the next `step()`, or the flush that
-        opens the next `run()` iteration; `run()` with no one-shot
-        pending never flushes it. Deliveries resume from the following
-        step. The state counts live again from this call, so
+        submission is deferred to the flush that opens the next
+        `step()` or `run()`, whether or not anything is pending.
+        Deliveries resume from the following step. The state counts
+        live again from this call, so
         `in_flight_count()` includes the stream before the resubmission
         is actually handed to the driver.
 

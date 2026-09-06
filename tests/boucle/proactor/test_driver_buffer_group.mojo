@@ -101,7 +101,7 @@ def test_group_table() raises:
 
 
 def test_invalid_arguments_raise_before_touching_the_ring() raises:
-    """A zero size, a zero count or a count past the 16-bit id space raise EINVAL."""
+    """A zero size, a zero count or a count past the largest ring raise EINVAL."""
     var driver = IoUringDriver(capacity=16)
     var mem = Pointer[UInt8, MutUntrackedOrigin](
         unsafe_from_address=Int(unsafe_alloc[UInt8](1))
@@ -109,10 +109,10 @@ def test_invalid_arguments_raise_before_touching_the_ring() raises:
 
     var too_many = False
     try:
-        driver.register_buffer_group(mem, UInt32(64), 65537, UInt16(5))
+        driver.register_buffer_group(mem, UInt32(64), 32769, UInt16(5))
     except e:
         too_many = "EINVAL" in String(e)
-    assert_true(too_many, "count above 65536 must raise EINVAL")
+    assert_true(too_many, "a count that rounds past 32768 must raise EINVAL")
 
     var zero_count = False
     try:

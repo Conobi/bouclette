@@ -157,6 +157,31 @@ def test_walker_stops_before_a_wrapping_record_length() raises:
     assert_equal(Int(ControlMessages(Span(buf)).ecn().value()), 2)
 
 
+def test_next_past_the_end_yields_an_empty_record() raises:
+    """A manual `__next__` on an exhausted walker returns an empty record
+    and never reads beyond the span, even one shorter than a header."""
+    var short = List[UInt8](length=8, fill=0xFF)
+    var walker = ControlMessages(Span(short))
+    assert_true(not walker.__has_next__(), "8 bytes hold no header")
+    var cm = walker.__next__()
+    assert_equal(Int(cm.level), 0)
+    assert_equal(Int(cm.type), 0)
+    assert_equal(len(cm.data()), 0)
+    assert_equal(walker._offset, 8, "the cursor stops at the end of the span")
+    var again = walker.__next__()
+    assert_equal(len(again.data()), 0, "still empty, still at the end")
+    assert_equal(walker._offset, 8)
+
+    var one = _two_records()
+    var full = ControlMessages(Span(one))
+    _ = full.__next__()
+    _ = full.__next__()
+    assert_true(not full.__has_next__())
+    var past = full.__next__()
+    assert_equal(len(past.data()), 0, "past the last record: empty")
+    assert_equal(full._offset, 48)
+
+
 def test_ecn_takes_the_first_tos_record() raises:
     """`ecn()` is the low two bits of the first IP_TOS or IPV6_TCLASS record."""
     var buf = _two_records()
@@ -210,6 +235,16 @@ def test_message_owns_payload_and_starts_without_peer() raises:
     assert_equal(Int(back.unsafe_ptr()), storage, "same storage comes back")
 
 
+def test_negative_control_capacity_clamps_to_zero() raises:
+    """A negative control capacity reserves nothing rather than a wrapped length."""
+    var msg = Message(List[UInt8](), control_capacity=-24)
+    assert_equal(msg.control_capacity(), 0)
+    var n = 0
+    for _ in msg.control():
+        n += 1
+    assert_equal(n, 0)
+
+
 def test_set_peer_records_the_family() raises:
     """`set_peer` stores a v4 or v6 address; the family follows."""
     var msg = Message(List[UInt8]())
@@ -228,13 +263,13 @@ def test_payload_mutates_in_place() raises:
     assert_equal(Int(msg.payload()[2]), 9, "the appended byte is readable")
 
 
-def test_set_control_len_clamps_to_capacity() raises:
+def test_set_control_received_clamps_to_capacity() raises:
     """A kernel-reported control length past the capacity is clamped, so
     the walker never reads past the 24-byte area."""
     var msg = Message(List[UInt8](), control_capacity=24)
     msg.set_peer(SocketAddrV4(127, 0, 0, 1, port=1))
     msg.set_ecn(2)  # writes exactly one 24-byte record
-    msg._set_control_len(100)
+    msg._set_control_received(100)
     assert_equal(msg.control_capacity(), 24, "capacity itself is unaffected")
     var n = 0
     for cm in msg.control():
@@ -302,18 +337,101 @@ def test_set_ecn_with_explicit_family_and_no_peer() raises:
 
 
 def test_set_ecn_explicit_family_and_masking() raises:
-    """An explicit family overrides the peer; only two bits are kept."""
+    """An explicit family overrides the peer; only two bits are kept; a
+    second call replaces the record rather than stacking behind it."""
     var msg = Message(List[UInt8](), control_capacity=48)
     msg.set_peer(SocketAddrV4(127, 0, 0, 1, port=1))
     msg.set_ecn(0xFF, family=AddrFamily.INET6)
-    msg.set_ecn(0x02)
     var levels = List[Int32]()
     for cm in msg.control():
         levels.append(cm.level)
-    assert_equal(len(levels), 2)
+    assert_equal(len(levels), 1)
     assert_equal(Int(levels[0]), SOL_IPV6)
-    assert_equal(Int(levels[1]), SOL_IP)
     assert_equal(Int(msg.control().ecn().value()), 3, "0xFF masked to 3")
+    msg.set_ecn(0x02)
+    levels = List[Int32]()
+    for cm in msg.control():
+        levels.append(cm.level)
+    assert_equal(len(levels), 1, "replaced, not stacked")
+    assert_equal(Int(levels[0]), SOL_IP)
+    assert_equal(Int(msg.control().ecn().value()), 2)
+    assert_equal(msg._control_appended, 24, "one record is offered to a send")
+
+
+def _receive_one_tos_record(mut msg: Message, tos: UInt8):
+    """Write an `IP_TOS` record into `msg`'s control area the way a
+    receive does: bytes in place, then the kernel-reported length.
+
+    Args:
+        msg: A message with at least 24 bytes of control capacity.
+        tos: The TOS byte the record carries.
+    """
+    _put_u64(msg._control, 0, 17)
+    _put_i32(msg._control, 8, Int32(SOL_IP))
+    _put_i32(msg._control, 12, Int32(IP_TOS))
+    msg._control[16] = tos
+    msg._set_control_received(24)
+
+
+def test_a_send_offers_only_the_appended_record() raises:
+    """Kernel-written records are never offered to a send: after a receive
+    the appended length is 0, `set_ecn` writes its own record at the
+    start of the area, and `clear_control` drops both lengths."""
+    var msg = Message(List[UInt8](), control_capacity=48)
+    msg.set_peer(SocketAddrV4(127, 0, 0, 1, port=1))
+    _receive_one_tos_record(msg, 0xE0)
+    assert_equal(msg._control_received, 24, "the kernel wrote one record")
+    assert_equal(msg._control_appended, 0, "nothing goes out on a send")
+    var n = 0
+    for cm in msg.control():
+        n += 1
+        assert_equal(Int(cm.data()[0]), 0xE0)
+    assert_equal(n, 1, "the received record is readable")
+
+    msg.set_ecn(1)
+    assert_equal(msg._control_appended, 24, "one record to send")
+    assert_equal(msg._control_received, 0, "the received record is gone")
+    n = 0
+    for cm in msg.control():
+        n += 1
+        assert_equal(Int(cm.level), SOL_IP)
+        assert_equal(Int(cm.data()[0]), 1, "ECN 1, DSCP 0: not the peer's byte")
+    assert_equal(n, 1)
+
+    msg.clear_control()
+    assert_equal(msg._control_received, 0)
+    assert_equal(msg._control_appended, 0)
+    n = 0
+    for _ in msg.control():
+        n += 1
+    assert_equal(n, 0, "nothing left to walk")
+
+
+def test_message_result_control_walks_only_the_received_bytes() raises:
+    """`MessageResult.control()` never shows a record the caller appended,
+    and `take_message` hands the message back with no received bytes."""
+    var appended = Message(List[UInt8](), control_capacity=24)
+    appended.set_ecn(1, family=AddrFamily.INET)
+    var sent = MessageResult(0, appended^, 0)
+    var n = 0
+    for _ in sent.control():
+        n += 1
+    assert_equal(n, 0, "a send result has no kernel-written records")
+
+    var received = Message(List[UInt8](), control_capacity=24)
+    _receive_one_tos_record(received, 0xE0)
+    var got = MessageResult(0, received^, 0)
+    n = 0
+    for _ in got.control():
+        n += 1
+    assert_equal(n, 1, "a receive result walks what the kernel wrote")
+    var back = got^.take_message()
+    assert_equal(back._control_received, 0, "reuse starts clean")
+    assert_equal(back._control_appended, 0)
+    n = 0
+    for _ in back.control():
+        n += 1
+    assert_equal(n, 0)
 
 
 def test_set_ecn_raises_einval_without_family_or_room() raises:
@@ -399,6 +517,34 @@ def test_message_result_v4_peer_and_ctrunc() raises:
     assert_true(wrong, "no name written: EAFNOSUPPORT")
 
 
+def test_peer_decoders_reject_a_short_name() raises:
+    """A family byte alone is not a peer: the written name length must
+    cover the whole sockaddr, else EAFNOSUPPORT."""
+    var v4 = Message(List[UInt8]())
+    v4.set_peer(SocketAddrV4(10, 1, 2, 3, port=53))
+    v4._peer.set_len(2)  # the kernel wrote only the family
+    var r4 = MessageResult(0, v4^, 0)
+    assert_true(r4.peer_family() == AddrFamily.INET, "the family still reads")
+    var short = False
+    try:
+        _ = r4.peer_v4()
+    except e:
+        short = e.errno_value() == EAFNOSUPPORT
+    assert_true(short, "2 bytes of AF_INET name: EAFNOSUPPORT, not stale bytes")
+
+    var v6 = Message(List[UInt8]())
+    v6.set_peer(SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 1, port=9))
+    v6._peer.set_len(16)  # a sockaddr_in worth of an AF_INET6 name
+    var r6 = MessageResult(0, v6^, 0)
+    assert_true(r6.peer_family() == AddrFamily.INET6)
+    short = False
+    try:
+        _ = r6.peer_v6()
+    except e:
+        short = e.errno_value() == EAFNOSUPPORT
+    assert_true(short, "16 bytes of AF_INET6 name: EAFNOSUPPORT")
+
+
 def test_message_result_transferred_clamps_count_above_payload_length() raises:
     """A kernel-reported count past the payload (MSG_TRUNC) must not abort
     transferred(); it clamps to the payload's own length instead."""
@@ -412,18 +558,23 @@ def main() raises:
     test_walker_yields_each_record()
     test_walker_stops_at_a_record_past_the_end()
     test_walker_stops_before_a_wrapping_record_length()
+    test_next_past_the_end_yields_an_empty_record()
     test_ecn_takes_the_first_tos_record()
     test_ecn_skips_a_leading_non_tos_record()
     test_message_owns_payload_and_starts_without_peer()
+    test_negative_control_capacity_clamps_to_zero()
     test_set_peer_records_the_family()
     test_payload_mutates_in_place()
-    test_set_control_len_clamps_to_capacity()
+    test_set_control_received_clamps_to_capacity()
     test_set_ecn_derives_the_record_from_the_peer()
     test_set_ecn_treats_a_mapped_peer_as_v4()
     test_set_ecn_with_explicit_family_and_no_peer()
     test_set_ecn_explicit_family_and_masking()
+    test_a_send_offers_only_the_appended_record()
+    test_message_result_control_walks_only_the_received_bytes()
     test_set_ecn_raises_einval_without_family_or_room()
     test_message_result_exposes_count_peer_and_flags()
     test_message_result_v4_peer_and_ctrunc()
+    test_peer_decoders_reject_a_short_name()
     test_message_result_transferred_clamps_count_above_payload_length()
     print("PASS: test_message.mojo")

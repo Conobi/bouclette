@@ -175,6 +175,27 @@ struct _Slab[F: _InFlightState](Movable):
         self._flags[index] = UInt8(0)
         self._free.append(index)
 
+    def discard(mut self, index: Int):
+        """Release a slot whose operation was never handed to the driver.
+
+        The loop allocates a state before it submits the operation, so
+        a driver that refuses the submission leaves a state that no
+        completion will ever visit and no handle will ever own. This
+        undoes the `alloc`: the state is destroyed, the slot returns to
+        the free list and the live count is decremented, exactly as if
+        the state had never existed. Valid only while nothing has been
+        submitted for the slot; anything the kernel could still touch
+        must be taken out of the state first.
+
+        Args:
+            index: Global index of the slot `alloc` just handed out.
+        """
+        debug_assert(
+            (self._flags[index] & _ACTIVE) != 0, "discard on a free slot"
+        )
+        self._live[] -= 1
+        self._release(index)
+
     def settle(mut self, index: Int):
         """Release one slot whose key was queued.
 

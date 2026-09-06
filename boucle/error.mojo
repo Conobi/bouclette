@@ -28,6 +28,7 @@ from boucle.socle.platform import (
     EINPROGRESS,
     EINTR,
     EINVAL,
+    EIO,
     ENETUNREACH,
     ENOENT,
     ENOMEM,
@@ -64,6 +65,8 @@ def _errno_name(errno: Int) -> StaticString:
         return "EINTR"
     if errno == EBADF:
         return "EBADF"
+    if errno == EIO:
+        return "EIO"
     if errno == EAGAIN:
         return "EAGAIN"
     if errno == ENOMEM:

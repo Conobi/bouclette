@@ -209,11 +209,12 @@ struct BufRing(Movable):
 
     def add_buffer(mut self, buf_id: UInt16):
         """Return a buffer (identified by `buf_id` from a recv CQE) to
-        the ring so the kernel can pick it for a future arrival."""
-        debug_assert(
-            UInt32(buf_id) < self.buf_count,
-            "buf_id exceeds buf_count",
-        )
+        the ring so the kernel can pick it for a future arrival.
+
+        An id at or past `buf_count` names no buffer of this ring and is
+        ignored: nothing is written to the ring for it."""
+        if UInt32(buf_id) >= self.buf_count:
+            return
         var tp = self._tail_ptr()
         var current_tail = tp[]
         var slot = UInt32(current_tail) & self.mask

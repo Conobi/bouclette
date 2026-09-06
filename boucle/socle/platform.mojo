@@ -86,6 +86,7 @@ from boucle.socle.linux.raw import (
     EINPROGRESS,
     EINTR,
     EINVAL,
+    EIO,
     ENETUNREACH,
     ENOBUFS,
     ENOENT,
@@ -231,6 +232,7 @@ from boucle.socle.linux.raw import (
     SO_REUSEADDR,
     SO_REUSEPORT,
     SO_SNDTIMEO,
+    SO_TYPE,
 )
 
 # --- Coroutine stacks (portable) --------------------------------------

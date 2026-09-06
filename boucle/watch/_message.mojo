@@ -24,6 +24,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 
+from boucle.net.addr import SocketAddrStorAny
 from boucle.net.message import Message
 from boucle.proactor.completion import Completion
 from boucle.socle.platform import iovec, msghdr, sockaddr_in6, socklen_t
@@ -41,7 +42,8 @@ struct _MessageState(_FutureCallback):
         _iov: The single iovec `_hdr.msg_iov` points at.
         _receiving: True for recvmsg (offer the name slot and the whole
                     control area; record what the kernel wrote), False
-                    for sendmsg (offer the peer and records if set).
+                    for sendmsg (offer the peer if set and the record
+                    `set_ecn` wrote; never what a receive wrote).
         _result: Raw completion result (bytes >= 0, or negative errno).
         done: True once the completion callback has fired.
         _owner_dropped: True if the future was dropped before done.
@@ -105,17 +107,22 @@ struct _MessageState(_FutureCallback):
         """Point the msghdr and iovec at this slot's own fields.
 
         Must run after the state is in its slab slot and before the
-        operation is submitted. For a receive the whole name slot and
-        the whole control area are offered; for a send only a set peer
-        and appended control records are. The payload window may be
-        empty (`iov_len` 0) for a zero-length send or a receive with no
-        bytes requested.
+        operation is submitted. For a receive the name slot is zeroed
+        (a reused message never carries its previous peer; a receive
+        that writes no name reports UNSPEC) and offered whole, as is the
+        whole control area; for a send only a set peer and the control
+        record `set_ecn` wrote are offered. Bytes the kernel wrote on an
+        earlier receive are never offered to a send. The payload window
+        may be empty (`iov_len` 0) for a zero-length send or a receive
+        with no bytes requested.
         """
         self._iov[0].iov_base = UInt64(Int(self.msg._payload.unsafe_ptr()))
         self._iov[0].iov_len = UInt64(len(self.msg._payload))
         self._hdr = msghdr()
         self._hdr.msg_iov = UInt64(Int(Pointer(to=self._iov)))
         self._hdr.msg_iovlen = 1
+        if self._receiving:
+            self.msg._peer = SocketAddrStorAny()
         var name_ptr = self.msg._peer.addr_unsafe_mut_ptr()
         if self._receiving:
             self._hdr.msg_name = UInt64(Int(name_ptr))
@@ -129,11 +136,11 @@ struct _MessageState(_FutureCallback):
             if self.msg._peer.addr_len() > 0:
                 self._hdr.msg_name = UInt64(Int(name_ptr))
                 self._hdr.msg_namelen = UInt32(self.msg._peer.addr_len())
-            if self.msg._control_len > 0:
+            if self.msg._control_appended > 0:
                 self._hdr.msg_control = UInt64(
                     Int(self.msg._control.unsafe_ptr())
                 )
-                self._hdr.msg_controllen = UInt64(self.msg._control_len)
+                self._hdr.msg_controllen = UInt64(self.msg._control_appended)
 
     def msghdr_ptr(self) -> Pointer[NoneType, MutUntrackedOrigin]:
         """Return the opaque msghdr pointer the driver takes.
@@ -197,7 +204,7 @@ struct _MessageState(_FutureCallback):
         self.done = True
         if self._receiving and result >= 0:
             self.msg._peer.set_len(socklen_t(self._hdr.msg_namelen))
-            self.msg._set_control_len(Int(self._hdr.msg_controllen))
+            self.msg._set_control_received(Int(self._hdr.msg_controllen))
 
     def is_done(self) -> Bool:
         """Return True once the completion callback has fired.

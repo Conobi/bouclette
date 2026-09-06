@@ -11,8 +11,11 @@ active backend reports through `boucle.socle.platform`.
 """
 
 
-struct SocketType(TrivialRegisterPassable):
-    """`SOCK_*` constants for use with `socket`."""
+struct SocketType(TrivialRegisterPassable, Equatable):
+    """`SOCK_*` constants for use with `socket`.
+
+    Two types are equal when they carry the same `SOCK_*` id.
+    """
 
     comptime STREAM = Self(unsafe_id=1)    # SOCK_STREAM
     comptime DGRAM = Self(unsafe_id=2)     # SOCK_DGRAM
@@ -25,6 +28,30 @@ struct SocketType(TrivialRegisterPassable):
     @always_inline("nodebug")
     def __init__(out self, *, unsafe_id: Int32):
         self.id = unsafe_id
+
+    @always_inline("nodebug")
+    def __eq__(self, rhs: Self) -> Bool:
+        """Return True when both carry the same SOCK_* id.
+
+        Args:
+            rhs: The type to compare against.
+
+        Returns:
+            True if the ids match.
+        """
+        return self.id == rhs.id
+
+    @always_inline("nodebug")
+    def __ne__(self, rhs: Self) -> Bool:
+        """Return True when the SOCK_* ids differ.
+
+        Args:
+            rhs: The type to compare against.
+
+        Returns:
+            True if the ids differ.
+        """
+        return self.id != rhs.id
 
 
 struct SocketFlags(TrivialRegisterPassable, Defaultable):

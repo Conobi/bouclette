@@ -14,10 +14,12 @@ buffer itself is wanted back.
 
 Failure keeps the same promise. `TransferFailed` (recv/send) and
 `MessageFailed` (recv_msg/send_msg) are the one error type each
-`result()` raises; on an I/O failure they carry the buffer or message
-that was in flight, so a caller recovers it from the `except` block.
-The reason names why no result exists: `IO` (the completion's errno),
-`NOT_DONE` (the loop has not run it yet; the buffer is still in flight),
+`result()` raises, and the one error type the submitting verb raises
+when the driver refuses the operation; on an I/O failure they carry the
+buffer or message that was in flight, so a caller recovers it from the
+`except` block. The reason names why no result exists: `IO` (the
+completion's errno, or the driver's refusal at submission), `NOT_DONE`
+(the loop has not run it yet; the buffer is still in flight),
 `LOOP_GONE` (the loop was destroyed first; its destructor abandoned the
 buffer). Both are `Writable`, so a bare `raises` caller sees
 `"<reason>: <errno name> (<number>)"`.
@@ -99,7 +101,8 @@ struct TransferResult(Movable):
 struct FailureReason(TrivialRegisterPassable, Equatable, Writable):
     """Why a future's result() had no result to give.
 
-    - IO: the operation completed with an errno; the buffer comes back.
+    - IO: the operation completed with an errno, or the driver refused
+      to submit it; the buffer comes back either way.
     - NOT_DONE: result() was called before the completion arrived; the
       loop still owns the buffer and releases it when the operation
       finishes.
@@ -170,11 +173,12 @@ struct FailureReason(TrivialRegisterPassable, Equatable, Writable):
 
 
 struct TransferFailed(Movable, Writable):
-    """Raised by RecvFuture.result and SendFuture.result.
+    """Raised by RecvFuture.result and SendFuture.result, and by WatchLoop.recv and send.
 
     Fields:
-        error: An IOError wrapping the errno. The completion's errno for
-               IO; EINVAL for NOT_DONE; ECANCELED for LOOP_GONE.
+        error: An IOError wrapping the errno. The completion's errno, or
+               the driver's at submission, for IO; EINVAL for NOT_DONE;
+               ECANCELED for LOOP_GONE.
         reason: Why there is no result.
     """
 
@@ -277,11 +281,12 @@ struct TransferFailed(Movable, Writable):
 
 
 struct MessageFailed(Movable, Writable):
-    """Raised by RecvMsgFuture.result and SendMsgFuture.result.
+    """Raised by the message futures' result() and by the message verbs of WatchLoop.
 
     Fields:
-        error: An IOError wrapping the errno. The completion's errno for
-               IO; EINVAL for NOT_DONE; ECANCELED for LOOP_GONE.
+        error: An IOError wrapping the errno. The completion's errno, or
+               the driver's at submission, for IO; EINVAL for NOT_DONE;
+               ECANCELED for LOOP_GONE.
         reason: Why there is no result.
     """
 

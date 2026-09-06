@@ -7,22 +7,28 @@ bits. When the group runs dry the op ends with -ENOBUFS and flags 0; a
 cancel ends it with -ECANCELED and flags 0. The op stays registered while
 deliveries fire and is gone once a terminal completion fired. Returned
 buffers are handed out again, an oversized datagram reports MSG_TRUNC with
-its full length, and a one-shot sendmsg on the same fd keeps working while
-the multishot op is armed.
+its full length, a one-shot sendmsg on the same fd keeps working while
+the multishot op is armed, and a socket that reports readable forever
+without ever yielding a datagram (read shutdown) ends the op instead of
+spinning the driver.
 """
 
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true
+from std.time import perf_counter_ns
 
 from boucle.drivers.epoll_completion import EpollCompletionDriver
 from boucle.net.addr import SocketAddrV4
 from boucle.net.message import DELIVERY_HEADER_LEN, DeliveryHeader
+from boucle.net.options import Shutdown
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
 from boucle.socle.linux.raw import (
+    syscall,
     iovec,
     msghdr,
+    __NR_fcntl,
     ECANCELED,
     ENOBUFS,
     IORING_CQE_BUFFER_SHIFT,
@@ -63,6 +69,41 @@ struct Tracker:
             self_ptr[].results[i] = result
             self_ptr[].flags[i] = flags
         self_ptr[].count += 1
+
+
+struct ReturningTracker:
+    """Counts deliveries and hands every buffer straight back to the driver.
+
+    Models a consumer that never holds a lease, the shape under which an
+    unbounded drain loop would never run out of buffers.
+    """
+
+    var driver: Pointer[EpollCompletionDriver, MutUntrackedOrigin]
+    var count: Int
+    var last_flags: UInt32
+
+    def __init__(out self, ref driver: EpollCompletionDriver):
+        """Bind the tracker to `driver` with a zero count."""
+        self.driver = Pointer[EpollCompletionDriver, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=driver))
+        )
+        self.count = 0
+        self.last_flags = UInt32(0)
+
+    @staticmethod
+    def on_complete(
+        ctx: Pointer[NoneType, MutUntrackedOrigin], result: Int, flags: UInt32
+    ):
+        """Count the delivery and return its buffer to GROUP."""
+        var self_ptr = Pointer[ReturningTracker, MutUntrackedOrigin](
+            unsafe_from_address=Int(ctx)
+        )
+        self_ptr[].count += 1
+        self_ptr[].last_flags = flags
+        if (flags & UInt32(IORING_CQE_F_BUFFER)) != 0:
+            self_ptr[].driver[].return_buffer(
+                UInt16(GROUP), UInt16(flags >> UInt32(IORING_CQE_BUFFER_SHIFT))
+            )
 
 
 def _completion(ref tracker: Tracker) -> Completion:
@@ -127,6 +168,23 @@ def _tick_until(
         _ = driver.tick(wait=True, timeout_ms=1000)
         ticks += 1
         assert_true(ticks < 50, what)
+
+
+comptime F_GETFD = 1
+
+
+def _fd_is_open(fd: Int32) -> Bool:
+    """Return True if `fd` names an open descriptor (fcntl F_GETFD succeeds)."""
+    return syscall[__NR_fcntl, Scalar[DType.int64]](fd, Int32(F_GETFD), Int32(0)) >= 0
+
+
+def _armed_dup(ref driver: EpollCompletionDriver, target: Pointer[Completion, MutUntrackedOrigin]) -> Int32:
+    """Return the driver-owned dup of the active op whose completion is `target`, or -1."""
+    for i in range(driver._state[].pool.capacity()):
+        var op = driver._state[].pool.slot_ptr(i)
+        if op[].active and Int(op[].completion) == Int(target):
+            return op[].dup_fd
+    return Int32(-1)
 
 
 def _buffer_id(flags: UInt32) -> Int:
@@ -398,6 +456,220 @@ def test_cancel_ends_multishot_with_ecanceled() raises:
     _ = tmpl
 
 
+def test_deliveries_per_tick_are_bounded() raises:
+    """A consumer that returns every buffer gets at most 32 deliveries per tick; the rest follow.
+
+    Forty datagrams wait on the socket before the first tick. Without a
+    bound the drain loop would deliver all of them in one tick, and a
+    peer that keeps sending would keep it there, starving timers and
+    every other descriptor.
+    """
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var tracker = ReturningTracker(driver)
+    var cmp = Completion(
+        invoke=ReturningTracker.on_complete,
+        context=Pointer[NoneType, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=tracker))
+        ),
+    )
+    var slots_before = driver._state[].pool.free_count()
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(cmp),
+    )
+    comptime TOTAL = 40
+    for tag in range(TOTAL):
+        _send(sender, to, UInt8(tag))
+
+    var seen = Pointer[ReturningTracker, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=tracker))
+    )
+    var first = driver.tick(wait=True, timeout_ms=1000)
+    assert_equal(first, seen[].count)
+    assert_true(first > 0, "the first tick delivered something")
+    assert_true(first <= 32, "at most 32 deliveries in one tick")
+    assert_true(
+        (seen[].last_flags & UInt32(IORING_CQE_F_MORE)) != 0,
+        "the op is still armed after the bounded tick",
+    )
+    assert_equal(
+        driver._state[].pool.free_count(), slots_before - 1, "slot still held"
+    )
+
+    # The remainder arrives on later ticks without any new datagram.
+    var ticks = 0
+    while seen[].count < TOTAL:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 10, "the remaining datagrams never arrived")
+    assert_equal(seen[].count, TOTAL)
+    assert_true(
+        (seen[].last_flags & UInt32(IORING_CQE_F_MORE)) != 0, "still armed at the end"
+    )
+    assert_equal(driver._state[].pool.free_count(), slots_before - 1)
+    assert_equal(len(driver._state[].groups[0].free), BUF_COUNT, "every buffer returned")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = cmp
+    _ = tmpl
+
+
+def test_unregistered_group_ends_multishot_with_enobufs() raises:
+    """Unregistering the group under an armed op ends it with -ENOBUFS on the next datagram."""
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var tracker = Tracker()
+    var cmp = _completion(tracker)
+    var slots_before = driver._state[].pool.free_count()
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(cmp),
+    )
+    var dup = _armed_dup(driver, _ptr(cmp))
+    assert_true(dup >= 0, "armed op holds a dup")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    _send(sender, to, UInt8(1))
+    _tick_until(driver, tracker, 1, "terminal completion did not fire")
+    assert_equal(tracker.count, 1)
+    assert_equal(tracker.results[0], -Int(ENOBUFS))
+    assert_equal(Int(tracker.flags[0]), 0, "terminal completion carries no flags")
+    assert_equal(driver._state[].pool.free_count(), slots_before, "slot freed")
+    assert_true(not _fd_is_open(dup), "dup closed at the terminal")
+    for i in range(BUF_COUNT * BUF_SIZE):
+        assert_equal(Int(mem[unsafe_offset=i]), 0, "no buffer of the gone group was written")
+
+    # The datagram is still queued on the socket, untouched.
+    var inbox = List[UInt8](length=16, fill=0)
+    assert_equal(receiver.recv_from_v4(Span(inbox))[0], 4)
+
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = cmp
+    _ = tmpl
+
+
+def test_control_messages_are_delivered() raises:
+    """With a 64-byte control capacity the delivery carries the sender's TOS record after the name."""
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    receiver.set_recv_tos()
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    sender.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    sender.set_tos(UInt8(2))
+    var sender_port = Int(sender.local_addr_v4().port)
+
+    comptime CTRL_CAP = 64
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    tmpl.msg_controllen = UInt64(CTRL_CAP)
+    var tracker = Tracker()
+    var cmp = _completion(tracker)
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(cmp),
+    )
+    _send(sender, to, UInt8(6))
+    _tick_until(driver, tracker, 1, "delivery with control did not arrive")
+    assert_equal(tracker.count, 1)
+    var bid = _buffer_id(tracker.flags[0])
+    var buf = Span[UInt8, MutUntrackedOrigin](
+        unsafe_ptr=mem.unsafe_offset(bid * BUF_SIZE), length=BUF_SIZE
+    )
+    var hdr = DeliveryHeader.parse(
+        buf, name_capacity=NAME_CAP, control_capacity=CTRL_CAP
+    )
+    assert_true(Int(hdr.controllen()) > 0, "a control record was written")
+    assert_true(Int(hdr.controllen()) <= CTRL_CAP, "it fits the capacity")
+    assert_equal(Int(hdr.namelen()), 16)
+    var name = hdr.name()
+    assert_equal(Int(name[0]), 2, "AF_INET")
+    assert_equal((Int(name[2]) << 8) | Int(name[3]), sender_port, "peer port")
+    assert_equal(Int(hdr.payloadlen()), 4)
+    assert_equal(
+        tracker.results[0], DELIVERY_HEADER_LEN + NAME_CAP + CTRL_CAP + 4
+    )
+    var mark = hdr.control().ecn()
+    assert_true(Bool(mark), "an IP_TOS record is in the control area")
+    assert_equal(Int(mark.value()), 2)
+    assert_equal(Int(hdr.payload()[1]), 6)
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = cmp
+    _ = tmpl
+
+
+def test_cancel_after_close_releases_slot_and_dup() raises:
+    """Closing the socket under an armed multishot, then cancelling, frees the slot and closes the dup."""
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var target = Tracker()
+    var target_cmp = _completion(target)
+    var cancel = Tracker()
+    var cancel_cmp = _completion(cancel)
+    var slots_before = driver._state[].pool.free_count()
+
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(target_cmp),
+    )
+    var dup = _armed_dup(driver, _ptr(target_cmp))
+    assert_true(dup >= 0, "the driver holds its own dup of the socket")
+    assert_true(Int(dup) != Int(receiver.raw()), "the dup is a distinct number")
+    assert_true(_fd_is_open(dup), "the dup is open while armed")
+
+    receiver.close()
+    assert_true(_fd_is_open(dup), "closing the user's fd leaves the dup open")
+
+    driver.cancel(_ptr(target_cmp), _ptr(cancel_cmp))
+    assert_equal(driver.tick(wait=False), 2)
+    assert_equal(target.results[0], -Int(ECANCELED))
+    assert_equal(cancel.results[0], 0)
+    assert_equal(driver._state[].pool.free_count(), slots_before, "slot freed")
+    assert_true(not _fd_is_open(dup), "the dup is closed at detach")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    _ = target_cmp
+    _ = cancel_cmp
+    _ = tmpl
+
+
 def test_truncation_reports_full_length() raises:
     """A datagram larger than the payload room is cut, flagged MSG_TRUNC and sized in full."""
     var driver = EpollCompletionDriver(capacity=8)
@@ -482,8 +754,8 @@ def test_sendmsg_on_same_fd_while_armed() raises:
     var bid = _buffer_id(tracker.flags[0])
     var slots_armed = driver._state[].pool.free_count()
 
-    # Reply to the peer named in the delivery, through the same fd the
-    # multishot op holds in epoll (the driver dups it for the second op).
+    # Reply to the peer named in the delivery, through the same socket
+    # the multishot op is armed on (each op holds its own dup in epoll).
     var reply = List[UInt8](length=3, fill=0)
     reply[0] = UInt8(ord("a"))
     reply[1] = UInt8(ord("c"))
@@ -535,11 +807,61 @@ def test_sendmsg_on_same_fd_while_armed() raises:
     _ = reply
 
 
+def test_read_shutdown_ends_multishot() raises:
+    """`shutdown(SHUT_RD)` on the socket ends the op with one terminal, then the driver blocks again.
+
+    A read-shut UDP socket is reported readable forever while recvmsg
+    keeps returning EAGAIN. The op must end on that wake instead of
+    staying armed and turning every epoll_wait into a busy loop.
+    """
+    var driver = EpollCompletionDriver(capacity=8)
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    receiver.connect(receiver.local_addr_v4())
+    var mem = _alloc_group(driver)
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var tracker = Tracker()
+    var cmp = _completion(tracker)
+    var slots_before = driver._state[].pool.free_count()
+
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(cmp),
+    )
+    receiver.shutdown(Shutdown.RD)
+    _tick_until(driver, tracker, 1, "the read shutdown never ended the op")
+    assert_equal(tracker.count, 1, "exactly one terminal")
+    assert_true(tracker.results[0] < 0, "the terminal carries an errno")
+    assert_equal(Int(tracker.flags[0]), 0, "no MORE on a terminal")
+    assert_equal(driver._state[].pool.free_count(), slots_before, "slot freed")
+    assert_equal(len(driver._state[].groups[0].free), BUF_COUNT, "no buffer taken")
+
+    var start = perf_counter_ns()
+    assert_equal(driver.tick(wait=True, timeout_ms=200), 0, "nothing left to fire")
+    var elapsed_ms = (perf_counter_ns() - start) // 1_000_000
+    assert_true(elapsed_ms >= 150, "the driver blocked for the whole timeout")
+    assert_equal(tracker.count, 1, "the terminal fired once")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    _ = cmp
+    _ = tmpl
+
+
 def main() raises:
     test_deliveries_then_enobufs()
     test_returned_buffers_are_reused()
     test_exact_fill_ends_with_enobufs()
     test_cancel_ends_multishot_with_ecanceled()
+    test_cancel_after_close_releases_slot_and_dup()
+    test_deliveries_per_tick_are_bounded()
+    test_unregistered_group_ends_multishot_with_enobufs()
+    test_control_messages_are_delivered()
     test_truncation_reports_full_length()
     test_sendmsg_on_same_fd_while_armed()
+    test_read_shutdown_ends_multishot()
     print("PASS: test_epoll_multishot_recvmsg.mojo")

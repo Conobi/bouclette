@@ -9,6 +9,12 @@ I/O is performed, and the Completion callback is invoked -- all within
 tick(). Operations that complete without epoll (nop, cancel,
 immediate connect) go through a deferred-ready queue drained at
 the start of each tick().
+
+Every fd-bound operation is registered through a private
+close-on-exec dup (`fcntl(F_DUPFD_CLOEXEC)`) of the caller's descriptor
+that the driver owns for the life of the operation; the caller's
+number is never handed to epoll_ctl. See `EpollCompletionDriver` for
+why.
 """
 
 from std.ffi import external_call
@@ -19,7 +25,6 @@ from boucle.socle.linux.raw import (
     syscall,
     epoll_event,
     __NR_epoll_ctl,
-    __NR_dup,
     __NR_close,
     __NR_fcntl,
     __NR_recvfrom,
@@ -33,16 +38,22 @@ from boucle.socle.linux.raw import (
     EPOLLIN,
     EPOLLOUT,
     EPOLLET,
+    EPOLLERR,
+    EPOLLHUP,
+    EPOLLRDHUP,
     EPOLL_CTL_ADD,
     EPOLL_CTL_DEL,
     EAGAIN,
+    ECONNRESET,
     EEXIST,
     EINPROGRESS,
     EINVAL,
+    EIO,
     ECANCELED,
     ENOBUFS,
     ENOENT,
     ETIME,
+    F_DUPFD_CLOEXEC,
     F_GETFL,
     F_SETFL,
     IORING_CQE_BUFFER_SHIFT,
@@ -61,7 +72,7 @@ from boucle.socle.linux.raw import (
 from boucle.socle.linux.epoll.syscalls import epoll_create, epoll_wait
 from boucle.net.message import DELIVERY_HEADER_LEN, write_delivery_header
 from boucle.socle.linux.fd import close_unchecked
-from boucle.socle.linux.errno import _check_for_errors, unsafe_decode_result
+from boucle.socle.linux.errno import _check_for_errors
 from boucle.socle.ptr import null_ptr
 from boucle.proactor.completion import Completion
 from boucle.handle import RawHandle
@@ -81,6 +92,13 @@ comptime _INITIAL_POOL_CAPACITY = 64
 # Hard ceiling on pool slots: the slot index travels in the low 32 bits
 # of epoll_event.data, so no more than 2^32 slots can be addressed.
 comptime _MAX_POOL_CAPACITY = 1 << 32
+
+# Most datagrams one multishot recvmsg op delivers per tick(). A consumer
+# that returns buffers from its callback would otherwise let a flooding
+# peer keep the drain loop inside one tick for as long as it likes,
+# starving timers and every other descriptor. The value is io_uring's
+# own MULTISHOT_MAX_RETRY.
+comptime _MULTISHOT_MAX_PER_TICK = 32
 
 
 # ── Helper: monotonic clock ───────────────────────────────────────────────────
@@ -202,6 +220,30 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     `group_id` is only meaningful for a MULTISHOT_RECVMSG op: the
     provided-buffer group its deliveries draw from. Such an op is the
     one kind whose slot stays active while its completions fire.
+
+    Fields:
+        kind: Which operation this slot holds.
+        fd: The descriptor the caller submitted; kept for reference
+            only, never passed to a syscall after submission.
+        dup_fd: The driver's private `dup()` of `fd`, taken by
+                `_register_op`. Every epoll_ctl and every I/O syscall
+                the driver issues for this op runs on it, and
+                `_detach_op` closes it. -1 for NOP and TIMEOUT, which
+                have no descriptor.
+        buf: Address of the caller's buffer (RECV, SEND).
+        len: Length of that buffer.
+        addr: Unused; kept for layout parity with the connect path.
+        addr_len: Unused; see `addr`.
+        msg: Address of the caller's msghdr (RECVMSG, SENDMSG,
+             MULTISHOT_RECVMSG template).
+        flags: The caller's `recvmsg(2)` flags, added to MSG_DONTWAIT
+               (RECVMSG).
+        completion: The caller-owned Completion to fire.
+        deadline_ns: Absolute CLOCK_MONOTONIC deadline (TIMEOUT).
+        pool_index: This slot's index in the pool.
+        generation: Bumped on every free; part of the epoll user data.
+        active: Whether the slot is allocated.
+        group_id: The provided-buffer group (MULTISHOT_RECVMSG).
     """
 
     var kind: _OpKind
@@ -212,6 +254,7 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     var addr: UInt64
     var addr_len: UInt64
     var msg: UInt64
+    var flags: UInt32
     var completion: Pointer[Completion, MutUntrackedOrigin]
     var deadline_ns: Int64
     var pool_index: Int
@@ -229,6 +272,7 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
         self.addr = UInt64(0)
         self.addr_len = UInt64(0)
         self.msg = UInt64(0)
+        self.flags = UInt32(0)
         self.completion = null_ptr[Completion, MutUntrackedOrigin]()
         self.deadline_ns = Int64(-1)
         self.pool_index = pool_index
@@ -586,6 +630,29 @@ struct EpollCompletionDriver(IoDriver):
     non-blocking I/O is performed, and the Completion callback is
     invoked.
 
+    The driver owns every epoll registration outright: each fd-bound
+    op registers a private `dup()` of the caller's descriptor, performs
+    its I/O on that dup and, on completion or cancel, removes and
+    closes only that dup. The caller's number is never given to
+    epoll_ctl. Two reasons. First, correctness: a caller may close its
+    socket while an op is still armed (the kernel then drops the
+    registration silently) and a new socket may be handed the same
+    number; an EPOLL_CTL_DEL on the remembered number would then strip
+    a registration that belongs to a different, live op, whose
+    completion would never fire. A dup refers to the same open file
+    description, so I/O through it is equivalent, but its number is
+    the driver's alone until the driver closes it. Second, uniformity:
+    two ops on one socket are simply two dups with two epoll entries,
+    so no EEXIST special case exists. The cost is one extra descriptor
+    per in-flight fd-bound operation, which counts against the
+    process's RLIMIT_NOFILE alongside the caller's own sockets; an
+    application that keeps many operations armed at once should size
+    that limit accordingly. io_uring has no such per-op descriptor.
+    The dup also keeps the socket's open file alive: a caller that
+    closes its descriptor with an operation armed releases the file
+    only when the next `tick()` retires the operation, so a bind to
+    the same port before that tick gets EADDRINUSE.
+
     Operations that complete without epoll (nop, cancel, immediate
     connect result) enqueue a _ReadyEntry. At the start of tick(),
     the ready queue is drained before calling epoll_wait(). ALL
@@ -741,7 +808,9 @@ struct EpollCompletionDriver(IoDriver):
                 # and its slot re-used) by a callback earlier in this
                 # batch; its completion has already been accounted for.
                 continue
-            dispatched += self._dispatch_op(op)
+            dispatched += self._dispatch_op(
+                op, self._events[unsafe_offset=i].events()
+            )
 
         # 5. Fire expired timers. Free the slot BEFORE firing so a
         #    callback that cancels this very completion sees "not found"
@@ -780,11 +849,12 @@ struct EpollCompletionDriver(IoDriver):
     def _epoll_remove(self, fd: Int32):
         """Remove fd from the epoll interest list, ignoring errors.
 
-        Used when an op completes or is cancelled. ENOENT (fd already
-        gone, e.g. closed by the user) is harmless here.
+        Used when an op completes or is cancelled. The fd is always the
+        op's private dup, so nothing but this driver could have removed
+        it; an error here would be a driver bug, not a caller's close.
 
         Args:
-            fd: The tracked fd (the original or its dup) to remove.
+            fd: The op's dup to remove.
         """
         var dummy_ev = epoll_event()
         _ = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
@@ -795,18 +865,22 @@ struct EpollCompletionDriver(IoDriver):
         )
 
     def _dispatch_op(
-        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]
+        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin], events: UInt32
     ) -> Int:
         """Perform non-blocking I/O for the given op and fire its callback.
 
         Called from tick() when epoll_wait returns a live event for this
         _EpollOp. The actual I/O syscall happens here (not during
-        operation methods). If the syscall reports EAGAIN (spurious wake-up, or
-        another op on a dup of the same fd consumed the readiness), the
-        op stays registered and nothing fires.
+        operation methods), on the op's private dup. If the syscall
+        reports EAGAIN (spurious wake-up, or another op on the same
+        socket consumed the readiness), the op stays registered and
+        nothing fires -- unless the wake carried a hang-up bit or the
+        socket holds a pending error, in which case the socket will
+        never yield anything and the op ends with that errno (see
+        `_on_would_block`).
 
         The slot is detached from epoll, released to the pool and its
-        dup'd fd closed BEFORE the callback fires, so a callback that
+        dup closed BEFORE the callback fires, so a callback that
         cancels this same completion sees "not found" and a callback
         that submits a new op may legitimately re-use the slot. The one
         exception is a MULTISHOT_RECVMSG op, which stays registered and
@@ -815,6 +889,7 @@ struct EpollCompletionDriver(IoDriver):
 
         Args:
             op: Pointer to the live _EpollOp recovered from epoll_event.data.
+            events: The event mask epoll reported for the op's dup.
 
         Returns:
             The number of completions fired: 1 for a one-shot op, 0 if
@@ -824,11 +899,11 @@ struct EpollCompletionDriver(IoDriver):
         var result = Int(0)
 
         if kind is _OpKind.MULTISHOT_RECVMSG:
-            return self._deliver_multishot_recvmsg(op)
+            return self._deliver_multishot_recvmsg(op, events)
 
         if kind is _OpKind.RECV:
             var res = syscall[__NR_recvfrom, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 Pointer[UInt8, MutUntrackedOrigin](
                     unsafe_from_address=Int(op[].buf)
                 ),
@@ -838,12 +913,12 @@ struct EpollCompletionDriver(IoDriver):
                 UInt(0),
             )
             if res == -Scalar[DType.int64](EAGAIN):
-                return 0
+                return self._on_would_block(op, events)
             result = Int(res)
 
         elif kind is _OpKind.SEND:
             var res = syscall[__NR_sendto, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 Pointer[UInt8, MutUntrackedOrigin](
                     unsafe_from_address=Int(op[].buf)
                 ),
@@ -853,14 +928,14 @@ struct EpollCompletionDriver(IoDriver):
                 UInt(0),
             )
             if res == -Scalar[DType.int64](EAGAIN):
-                return 0
+                return self._on_would_block(op, events)
             result = Int(res)
 
         elif kind is _OpKind.CONNECT:
             var optval = Int32(0)
             var optlen = Int32(4)
             var gso_res = syscall[__NR_getsockopt, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 Int32(SOL_SOCKET),
                 Int32(SO_ERROR),
                 Pointer(to=optval),
@@ -875,7 +950,7 @@ struct EpollCompletionDriver(IoDriver):
 
         elif kind is _OpKind.ACCEPT:
             var res = syscall[__NR_accept4, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 UInt(0),
                 UInt(0),
                 Int32(O_CLOEXEC | O_NONBLOCK),
@@ -883,65 +958,161 @@ struct EpollCompletionDriver(IoDriver):
             if res == -Scalar[DType.int64](EAGAIN):
                 # Another accept on (a dup of) this listener took the
                 # connection; stay armed for the next one.
-                return 0
+                return self._on_would_block(op, events)
             result = Int(res)
 
         elif kind is _OpKind.RECVMSG:
             var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 Pointer[NoneType, MutUntrackedOrigin](
                     unsafe_from_address=Int(op[].msg)
                 ),
-                Int32(0),
+                Int32(UInt32(MSG_DONTWAIT) | op[].flags),
             )
             if res == -Scalar[DType.int64](EAGAIN):
-                return 0
+                return self._on_would_block(op, events)
             result = Int(res)
 
         elif kind is _OpKind.SENDMSG:
             var res = syscall[__NR_sendmsg, Scalar[DType.int64]](
-                op[].fd,
+                op[].dup_fd,
                 Pointer[NoneType, MutUntrackedOrigin](
                     unsafe_from_address=Int(op[].msg)
                 ),
                 Int32(MSG_NOSIGNAL),
             )
             if res == -Scalar[DType.int64](EAGAIN):
-                return 0
+                return self._on_would_block(op, events)
             result = Int(res)
 
         else:
             debug_assert(False, "unexpected op kind in _dispatch_op")
 
         # Copy what the callback needs, then release everything before
-        # firing. Remove the fd from epoll first: a stale registration
+        # firing. Remove the dup from epoll first: a stale registration
         # would otherwise wake on the next data with a dead slot index.
         var completion = op[].completion
         self._detach_op(op)
         completion[].fire(result, UInt32(0))
         return 1
 
+    def _pending_error(self, dup_fd: Int32) -> Int:
+        """Read and clear the socket's pending error (`SO_ERROR`).
+
+        `getsockopt(SO_ERROR)` consumes the error on the open file, which
+        every dup of the socket shares. It is therefore reported once, to
+        the first op dispatched for that wake; a second op on the same
+        socket sees a clean 0 and decides from the event bits alone.
+
+        Args:
+            dup_fd: The op's dup, the descriptor to query.
+
+        Returns:
+            The positive pending errno, or 0 when there is none (or the
+            query itself failed).
+        """
+        var optval = Int32(0)
+        var optlen = Int32(4)
+        var gso_res = syscall[__NR_getsockopt, Scalar[DType.int64]](
+            dup_fd,
+            Int32(SOL_SOCKET),
+            Int32(SO_ERROR),
+            Pointer(to=optval),
+            Pointer(to=optlen),
+        )
+        if gso_res < 0:
+            return 0
+        return Int(optval)
+
+    def _hangup_result(self, dup_fd: Int32, events: UInt32) -> Int:
+        """Derive the terminal errno for a wake that carried ERR/HUP/RDHUP.
+
+        The socket's pending error (`SO_ERROR`) wins when there is one:
+        that is what an ICMP error queued by `IP_RECVERR` or a reset
+        peer reports. Reading it consumes it from the shared open file
+        (see `_pending_error`), so it reaches the first op dispatched.
+        Without one, a hang-up bit (the socket was shut down for
+        reading, or the peer closed) reads as ECONNRESET and a bare
+        EPOLLERR as EIO.
+
+        Args:
+            dup_fd: The op's dup, the descriptor to query.
+            events: The reported event mask, holding at least one of
+                    EPOLLERR, EPOLLHUP, EPOLLRDHUP.
+
+        Returns:
+            The negated errno the terminal completion carries.
+        """
+        var pending = self._pending_error(dup_fd)
+        if pending != 0:
+            return -pending
+        if (events & UInt32(EPOLLHUP | EPOLLRDHUP)) != 0:
+            return -Int(ECONNRESET)
+        return -Int(EIO)
+
+    def _on_would_block(
+        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin], events: UInt32
+    ) -> Int:
+        """Decide what a one-shot op does when its syscall returned EAGAIN.
+
+        A plain readiness wake that another op consumed (or a spurious
+        one) leaves the op armed and fires nothing. A wake carrying
+        EPOLLHUP or EPOLLRDHUP, or one whose socket holds a pending
+        error, will never be followed by data: the socket was shut down,
+        the peer hung up or an error is queued. Such an op ends here
+        with the pending error, else ECONNRESET, detached before the
+        callback fires like every other terminal.
+
+        A bare EPOLLERR with a clean `SO_ERROR` is not terminal. An
+        `IP_RECVERR` socket keeps EPOLLERR asserted for as long as its
+        error queue holds a record, even after the pending error was
+        consumed by a socket call, so the very first wake after arming
+        carries it; a datagram would still wake and complete the op.
+        The op is edge-triggered, so leaving it armed cannot spin.
+
+        Args:
+            op: The live one-shot op.
+            events: The event mask epoll reported.
+
+        Returns:
+            0 when the op stays armed, 1 when its terminal fired.
+        """
+        if (events & UInt32(EPOLLERR | EPOLLHUP | EPOLLRDHUP)) == 0:
+            return 0
+        var result: Int
+        var pending = self._pending_error(op[].dup_fd)
+        if pending != 0:
+            result = -pending
+        elif (events & UInt32(EPOLLHUP | EPOLLRDHUP)) != 0:
+            result = -Int(ECONNRESET)
+        else:
+            return 0
+        var completion = op[].completion
+        self._detach_op(op)
+        completion[].fire(result, UInt32(0))
+        return 1
+
     def _detach_op(mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]):
-        """Remove the op's fd from epoll, close its dup and free its slot.
+        """Remove the op's dup from epoll, close it and free the slot.
 
         The last thing done to an op before its terminal completion
         fires, so a callback that cancels this same completion sees
         "not found" and a callback that submits may reuse the slot.
+        Only the op's own dup is touched: the caller's descriptor, and
+        any other op's registration on the same socket, are left alone.
 
         Args:
             op: Pointer to the live op being retired.
         """
         var dup_fd = op[].dup_fd
-        var tracked_fd = op[].fd
         if dup_fd != Int32(-1):
-            tracked_fd = dup_fd
-        self._epoll_remove(tracked_fd)
-        if dup_fd != Int32(-1):
+            self._epoll_remove(dup_fd)
             close_unchecked(unsafe_fd=dup_fd)
+            op[].dup_fd = Int32(-1)
         self._state[].pool.free(op[].pool_index)
 
     def _deliver_multishot_recvmsg(
-        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin]
+        mut self, op: Pointer[_EpollOp, MutUntrackedOrigin], events: UInt32
     ) -> Int:
         """Drain the socket into provided buffers, one completion per datagram.
 
@@ -954,13 +1125,28 @@ struct EpollCompletionDriver(IoDriver):
         the delivery header and fire with result = header + name capacity
         + control capacity + bytes copied and flags IORING_CQE_F_BUFFER |
         IORING_CQE_F_MORE | (buf_id << IORING_CQE_BUFFER_SHIFT). EAGAIN
-        returns the buffer and leaves the op armed. An empty free list,
+        returns the buffer and leaves the op armed, with one exception:
+        a wake that delivered nothing and carried EPOLLERR, EPOLLHUP or
+        EPOLLRDHUP. The op is level-triggered, so a socket that is
+        readable forever without ever yielding a datagram (shut down
+        for reading, peer hung up, an error queued by `IP_RECVERR`)
+        would otherwise make every epoll_wait return at once; instead
+        the op ends with the errno `_hangup_result` derives (the
+        pending `SO_ERROR`, else ECONNRESET for a hang-up, else EIO),
+        flags 0. An empty free list,
         or a group id no longer registered (the group was unregistered
         under a live op), is the terminal -ENOBUFS (flags 0); a recvmsg
         error is terminal with that errno; a template whose regions do
         not fit the buffer, or whose name or control capacity is so
         large that the conversion to Int turns negative, is the terminal
         -EINVAL. Every terminal detaches the op before firing.
+
+        At most `_MULTISHOT_MAX_PER_TICK` datagrams are delivered per
+        call; past that the loop stops with the op still armed and data
+        possibly still queued. The op's registration is level-triggered
+        (see `multishot_recvmsg`), so the next epoll_wait reports the
+        socket again at once and the remainder is drained on the next
+        tick, after timers and every other descriptor had their turn.
 
         The caller's template is only read: the driver builds its own
         msghdr and iovec per datagram, so the template's pointers and
@@ -973,6 +1159,7 @@ struct EpollCompletionDriver(IoDriver):
 
         Args:
             op: Pointer to the live multishot op.
+            events: The event mask epoll reported for the op's dup.
 
         Returns:
             The number of completions fired.
@@ -980,7 +1167,7 @@ struct EpollCompletionDriver(IoDriver):
         var index = op[].pool_index
         var generation = op[].generation
         var fired = 0
-        while True:
+        while fired < _MULTISHOT_MAX_PER_TICK:
             var live = self._state[].pool.slot_ptr(index)
             if not live[].active or live[].generation != generation:
                 return fired
@@ -1022,7 +1209,7 @@ struct EpollCompletionDriver(IoDriver):
                 hdr.msg_controllen = UInt64(ctrl_cap)
 
             var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
-                live[].fd,
+                live[].dup_fd,
                 Pointer(to=hdr),
                 Int32(MSG_DONTWAIT | MSG_TRUNC),
             )
@@ -1032,7 +1219,14 @@ struct EpollCompletionDriver(IoDriver):
             _ = iov
             if res == -Scalar[DType.int64](EAGAIN):
                 self._state[].groups[gi].free.append(bid)
-                return fired
+                if fired > 0 or (
+                    events & UInt32(EPOLLERR | EPOLLHUP | EPOLLRDHUP)
+                ) == 0:
+                    return fired
+                var terminal = self._hangup_result(live[].dup_fd, events)
+                self._detach_op(live)
+                completion[].fire(terminal, UInt32(0))
+                return 1
             if res < 0:
                 self._state[].groups[gi].free.append(bid)
                 self._detach_op(live)
@@ -1055,79 +1249,77 @@ struct EpollCompletionDriver(IoDriver):
             )
             completion[].fire(payload_off + copied, flags)
             fired += 1
+        return fired
 
     def _register_op(
         mut self,
         op: Pointer[_EpollOp, MutUntrackedOrigin],
         events: UInt32,
+        *,
+        edge_triggered: Bool = True,
     ) raises:
-        """Register the op's fd with epoll for the given events.
+        """Take a private dup of the op's fd and register it with epoll.
 
-        If the fd is already registered (EEXIST), dup the fd and
-        register the duplicate instead. The dup'd fd is stored in
-        op[].dup_fd and closed after I/O completion.
+        The dup is made with `fcntl(F_DUPFD_CLOEXEC)`, so like every
+        other descriptor the library creates it does not leak across an
+        exec. It is stored in op[].dup_fd; every later syscall for this
+        op runs on it and `_detach_op` closes it. Registering the dup
+        rather than the caller's number is what keeps a caller's close,
+        and the kernel's reuse of that number, from ever touching this
+        driver's interest list (see the struct docstring). Because each
+        op has its own dup, a second op on the same socket never sees
+        EEXIST.
 
-        If registration fails (e.g. EPERM for a file that cannot be
-        polled, or dup failure), the slot is returned to the pool and
-        any dup'd fd is closed before the error propagates, so a
-        failed submit leaves the driver exactly as it was.
+        If the dup fails (e.g. EMFILE) there is nothing to close and the
+        slot is returned to the pool; if epoll_ctl fails (e.g. EPERM for
+        a file that cannot be polled) the dup is closed and the slot
+        returned. Either way the error propagates from a driver left
+        exactly as it was.
+
+        Every EPOLLIN registration also asks for EPOLLRDHUP, so a
+        socket shut down for reading (or whose peer half-closed) is
+        reported with that bit and the op can end instead of waiting
+        for data that will never come; EPOLLERR and EPOLLHUP are always
+        reported. A one-shot op ends on a hang-up bit or a pending
+        socket error but not on a bare EPOLLERR; the level-triggered
+        multishot op ends on any of them. See `_on_would_block` and
+        `_deliver_multishot_recvmsg`.
 
         Args:
             op: Pointer to the freshly allocated _EpollOp to register.
             events: Epoll event flags (EPOLLIN and/or EPOLLOUT).
-                    EPOLLET is added automatically.
+            edge_triggered: Add EPOLLET (the default, right for every
+                            one-shot op, which consumes the readiness
+                            it is woken for). False registers
+                            level-triggered, for an op that may leave
+                            data behind on purpose.
 
         Raises:
-            If epoll_ctl or dup fails.
+            If the dup or epoll_ctl fails.
         """
-        try:
-            self._add_to_epoll(op, events)
-        except e:
-            if op[].dup_fd != Int32(-1):
-                close_unchecked(unsafe_fd=op[].dup_fd)
-                op[].dup_fd = Int32(-1)
-            self._state[].pool.free(op[].pool_index)
-            raise e
-
-    def _add_to_epoll(
-        mut self,
-        op: Pointer[_EpollOp, MutUntrackedOrigin],
-        events: UInt32,
-    ) raises:
-        """Issue the epoll_ctl(ADD) for op, dup'ing the fd on EEXIST.
-
-        Args:
-            op: Pointer to the _EpollOp to register.
-            events: Epoll event flags (EPOLLIN and/or EPOLLOUT).
-                    EPOLLET is added automatically.
-
-        Raises:
-            If epoll_ctl or dup fails. On dup failure op[].dup_fd is
-            left at -1; on a failed second epoll_ctl it holds the
-            dup'd fd for the caller to close.
-        """
-        var ev = epoll_event(
-            events=events | UInt32(EPOLLET), data=_event_data(op)
+        var dup_res = syscall[__NR_fcntl, Scalar[DType.int64]](
+            op[].fd, Int32(F_DUPFD_CLOEXEC), Int32(0)
         )
+        if dup_res < 0:
+            self._state[].pool.free(op[].pool_index)
+            _check_for_errors(dup_res)
+        op[].dup_fd = dup_res.cast[DType.int32]()
+        var ev_flags = events
+        if (events & UInt32(EPOLLIN)) != 0:
+            ev_flags |= UInt32(EPOLLRDHUP)
+        if edge_triggered:
+            ev_flags |= UInt32(EPOLLET)
+        var ev = epoll_event(events=ev_flags, data=_event_data(op))
         var res = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
             self._epfd,
             Int32(EPOLL_CTL_ADD),
-            op[].fd,
+            op[].dup_fd,
             Pointer(to=ev),
         )
-        if res == -Scalar[DType.int64](EEXIST):
-            # fd already registered -- dup and retry.
-            var dup_res = syscall[__NR_dup, Scalar[DType.int64]](op[].fd)
-            var dup_fd = unsafe_decode_result[DType.int32](dup_res)
-            op[].dup_fd = dup_fd
-            var res2 = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
-                self._epfd,
-                Int32(EPOLL_CTL_ADD),
-                dup_fd,
-                Pointer(to=ev),
-            )
-            _check_for_errors(res2)
-        else:
+        if res < 0:
+            close_unchecked(unsafe_fd=op[].dup_fd)
+            op[].dup_fd = Int32(-1)
+            self._state[].pool.free(op[].pool_index)
             _check_for_errors(res)
 
     # ── Operation methods ─────────────────────────────────────────────────
@@ -1156,8 +1348,8 @@ struct EpollCompletionDriver(IoDriver):
         O_NONBLOCK is set for the duration of connect(2) and the
         original flags are restored right after (an in-progress
         handshake keeps progressing regardless). If connect returns
-        EINPROGRESS, the fd is registered for EPOLLOUT and the result
-        is read from SO_ERROR in tick(). An immediate result (success
+        EINPROGRESS, a private dup of the fd is registered for EPOLLOUT
+        and the result is read from SO_ERROR in tick(). An immediate result (success
         or an error such as -ECONNREFUSED) is enqueued to the ready
         queue and fires on the next tick().
 
@@ -1354,20 +1546,33 @@ struct EpollCompletionDriver(IoDriver):
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
     ) raises:
         """Queue a recvmsg on socket fd.
+
+        The receive in `_dispatch_op` runs with MSG_DONTWAIT | `flags`:
+        it never blocks inside tick() whatever the socket's blocking
+        mode, and the caller's flags reach the kernel as given. With
+        MSG_TRUNC on a datagram socket the completion result is the
+        full datagram length even when the iov was too small (the
+        copied bytes are capped at the iov, `msg_flags` carries
+        MSG_TRUNC), the same contract the io_uring driver gives; on a
+        stream socket MSG_TRUNC discards, so the caller must not ask
+        for it there.
 
         Args:
             fd: The socket file descriptor.
             msg: Opaque pointer to msghdr. Must remain valid until
                  completion fires.
             c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through; 0 for none.
         """
         var op = self._state[].pool.alloc()
         op[].kind = _OpKind.RECVMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].msg = UInt64(Int(msg))
+        op[].flags = flags
         op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
@@ -1420,8 +1625,9 @@ struct EpollCompletionDriver(IoDriver):
         ring.
 
         `count` must be in `1..65536`: buffer ids are `UInt16`, so 65536 is
-        the largest free list that fits without wrapping, and it matches
-        the buffer-ring kernel ABI's own limit.
+        the largest free list the 16-bit buffer-id space can address
+        without wrapping (io_uring's own ring stops at 32768, and
+        `WatchLoop.buffer_pool` caps there for both backends).
 
         Args:
             base: Address of buffer 0. Must stay valid until the group is
@@ -1475,7 +1681,8 @@ struct EpollCompletionDriver(IoDriver):
 
         Returning to an unknown group is a no-op: the group was
         unregistered while a lease was still out, and there is nothing
-        left to return to.
+        left to return to. So is returning an id at or past the group's
+        `count`, which names no buffer.
 
         Returning the same `buf_id` twice without an intervening take is
         not checked here: append never corrupts the free list itself
@@ -1490,7 +1697,7 @@ struct EpollCompletionDriver(IoDriver):
             buf_id: The buffer id from the delivery's completion flags.
         """
         var idx = self._find_group(group_id)
-        if idx < 0:
+        if idx < 0 or UInt32(buf_id) >= self._state[].groups[idx].count:
             return
         self._state[].groups[idx].free.append(buf_id)
 
@@ -1514,16 +1721,31 @@ struct EpollCompletionDriver(IoDriver):
         unregistering a group a live stream selects from ends that
         stream with ENOBUFS), with -EINVAL when the template's regions
         do not fit a buffer of the group, with -ECANCELED on cancel, or
-        with the recvmsg errno, all with flags 0. A zero-length receive
-        fires a delivery with IORING_CQE_F_MORE and keeps the op armed,
-        unlike io_uring, which ends the multishot on a zero-byte receive;
-        the op is therefore intended for datagram sockets only.
+        with the recvmsg errno, all with flags 0. A wake that yields no
+        datagram but reports an error or hang-up (the socket was shut
+        down for reading, or `IP_RECVERR` queued an ICMP error) ends
+        the op too, with the socket's pending error, else ECONNRESET
+        for a hang-up, else EIO; an `IP_RECVERR` socket must have its
+        error queue drained (`MSG_ERRQUEUE`) before the op is armed
+        again, or the next wake ends it the same way. A zero-length
+        receive fires a delivery with IORING_CQE_F_MORE and keeps the
+        op armed, unlike io_uring, which ends the multishot on a
+        zero-byte receive; the op is therefore intended for datagram
+        sockets only.
 
-        Unlike every one-shot op, the slot stays allocated and the fd
-        stays in epoll while deliveries fire; it is released only by the
-        terminal completion (see `_deliver_multishot_recvmsg`). Mixing a
-        one-shot `recvmsg` with an armed multishot op on the same socket
-        is undefined: whichever wakes first takes the datagram.
+        Unlike every one-shot op, the slot stays allocated and the op's
+        dup stays in epoll while deliveries fire; it is released only by
+        the terminal completion (see `_deliver_multishot_recvmsg`).
+        Mixing a one-shot `recvmsg` with an armed multishot op on the
+        same socket is undefined: whichever wakes first takes the
+        datagram.
+
+        Deliveries are bounded at `_MULTISHOT_MAX_PER_TICK` per tick, so
+        the op is the one registration made level-triggered rather than
+        edge-triggered: when a tick stops with datagrams still queued,
+        the next epoll_wait reports the socket again without waiting
+        for a new arrival. An edge-triggered entry would have lost that
+        edge and left the remainder waiting for the peer's next send.
 
         Args:
             fd: The datagram socket.
@@ -1541,5 +1763,5 @@ struct EpollCompletionDriver(IoDriver):
         op[].msg = UInt64(Int(msg))
         op[].group_id = group_id
         op[].completion = c
-        self._register_op(op, UInt32(EPOLLIN))
+        self._register_op(op, UInt32(EPOLLIN), edge_triggered=False)
 

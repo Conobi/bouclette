@@ -6,7 +6,6 @@ by the buffer-pool test, whose leaked pool state keeps the box readable.
 from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
-from boucle.socle.platform import ENOBUFS
 from boucle.watch import WatchLoop
 from boucle.watch._shared import _LoopShared
 
@@ -54,7 +53,6 @@ def test_tally_is_reset_per_tick() raises:
     shared.reset_tally()
     assert_equal(shared.stream_completions, 0)
     assert_equal(shared.internal_completions, 0)
-    assert_equal(ENOBUFS, 105)
     assert_equal(len(deferred), 0)
 
 

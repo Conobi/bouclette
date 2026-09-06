@@ -145,5 +145,8 @@ comptime O_NONBLOCK = 2048
 comptime O_CLOEXEC = 524288
 
 # fcntl constants
+comptime F_GETFD = 1
 comptime F_GETFL = 3
 comptime F_SETFL = 4
+comptime F_DUPFD_CLOEXEC = 1030
+comptime FD_CLOEXEC = 1

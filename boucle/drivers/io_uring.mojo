@@ -27,6 +27,8 @@ from boucle.socle.linux.io_uring.types import (
 )
 from boucle.socle.linux.raw import (
     IORING_RECV_MULTISHOT,
+    MSG_TRUNC,
+    EAGAIN,
     EEXIST,
     EINVAL,
     ENOENT,
@@ -43,6 +45,9 @@ from boucle.handle import RawHandle
 from boucle.error import IOError
 from boucle.socle.ptr import null_ptr
 from boucle.drivers.bufring import BufRing, _next_pow2, _IO_URING_BUF_SIZE
+
+# Largest provided-buffer ring the kernel registers (IO_RING_MAX_ENTRIES).
+comptime _MAX_RING_ENTRIES = 32768
 from boucle.proactor.completion import Completion
 from boucle.drivers.backend import Backend
 from boucle.drivers.driver import IoDriver
@@ -91,6 +96,22 @@ def _unsupported() -> Error:
         An Error whose message is `"-95"`.
     """
     return Error(String(-EOPNOTSUPP))
+
+
+def _queue_full() -> Error:
+    """Build the socle-style error for a submission queue still full after a flush.
+
+    Every submitting method enters the ring without waiting when the
+    queue is full and retries once; a queue still full after that means
+    the kernel did not consume the entries. That is a transient condition
+    the caller may retry at its next flush, so it is reported as EAGAIN
+    in the same negated-errno text every socle wrapper uses and
+    `IOError.from_error` recovers, never as a plain message.
+
+    Returns:
+        An Error whose message is `"-11"`.
+    """
+    return Error(String(-EAGAIN))
 
 
 def _timespec_from_ms(timeout_ms: Int) -> __kernel_timespec:
@@ -367,7 +388,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var ts_cv = Pointer[c_void, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=self._sentinel_ts))
@@ -386,7 +407,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         _ = Nop(sq.__next__()).user_data(UInt64(Int(c)))
 
@@ -408,7 +429,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var addr_cv = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(addr)
@@ -432,7 +453,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var ts_cv = Pointer[c_void, MutUntrackedOrigin](
             unsafe_from_address=Int(ts)
@@ -456,7 +477,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         _ = AsyncCancel(sq.__next__(), UInt64(Int(target))).user_data(
             UInt64(Int(c))
@@ -476,7 +497,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd).user_data(UInt64(Int(c)))
 
@@ -498,7 +519,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
@@ -525,7 +546,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf)
@@ -539,24 +560,37 @@ struct IoUringDriver(IoDriver):
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
     ) raises:
         """Queue a recvmsg on socket `fd`.
+
+        `flags` go to the kernel as the SQE's receive flags. A caller
+        that passes MSG_TRUNC on a datagram socket gets the full
+        datagram length as the completion result even when the iov was
+        too small (the copied bytes are still capped at the iov, and
+        `msg_flags` carries MSG_TRUNC); on a stream socket MSG_TRUNC
+        discards instead, so the caller must not ask for it there. The
+        epoll driver receives the same way, so a caller reads one
+        contract on both backends.
 
         Args:
             fd: The socket file descriptor.
             msg: Opaque pointer to msghdr (and all referenced buffers).
                  Must remain valid until completion fires.
             c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through; 0 for none.
         """
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
-        _ = RecvMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
+        _ = RecvMsg(sq.__next__(), fd, msg_ptr)
+            .recv_flags(flags)
+            .user_data(UInt64(Int(c)))
 
     def sendmsg(
         mut self,
@@ -577,7 +611,7 @@ struct IoUringDriver(IoDriver):
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
-                raise "submission queue full after flush"
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
@@ -607,7 +641,7 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var buf_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(buf_base)
@@ -641,7 +675,7 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var null_buf = null_ptr[c_void, ImmStaticOrigin]()
         _ = Recv(sq.__next__(), fd, null_buf, UInt(0))
@@ -666,7 +700,7 @@ struct IoUringDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
         """
         if not self._ring.sq():
-            raise "submission queue full"
+            raise _queue_full()
         var sq = self._ring.unsynced_sq()
         _ = Accept(sq.__next__(), fd)
             .ioprio(IoUringAcceptFlags.MULTISHOT.value)
@@ -687,6 +721,16 @@ struct IoUringDriver(IoDriver):
         (completion without IORING_CQE_F_MORE flag). Caller must re-arm if
         desired.
 
+        The receive asks for MSG_TRUNC, so the delivery header's
+        `payloadlen` is the full datagram length even when the buffer's
+        payload room was smaller; the copied bytes are capped at the
+        room and the header's flags carry MSG_TRUNC. The epoll
+        emulation receives the same way.
+
+        A full submission queue is flushed to the kernel with a
+        non-waiting enter first, as every other operation does; only a
+        queue still full after that flush raises.
+
         Args:
             fd: The socket file descriptor.
             msg: Pointer to msghdr template. Must remain valid for the
@@ -699,16 +743,22 @@ struct IoUringDriver(IoDriver):
             `supports(DriverFeature.MULTISHOT_RECVMSG)` is False: below
             kernel 6.0 the kernel would answer -EINVAL in the CQE, and
             refusing at submission keeps the buffer ring untouched.
+            EAGAIN (as the socle negated-errno string) if the ring cannot
+            take the entry even after flushing; the caller may retry at
+            its next flush.
         """
         if not self._supports_multishot_recvmsg:
             raise _unsupported()
         if not self._ring.sq():
-            raise "submission queue full"
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise _queue_full()
         var sq = self._ring.unsynced_sq()
         var msg_ptr = Pointer[c_void, ImmStaticOrigin](
             unsafe_from_address=Int(msg)
         )
         _ = RecvMsg(sq.__next__(), fd, msg_ptr)
+            .recv_flags(UInt32(MSG_TRUNC))
             .ioprio(UInt16(IORING_RECV_MULTISHOT))
             .sqe_flags(IoUringSqeFlags.BUFFER_SELECT)
             .buf_group(buf_group)
@@ -889,27 +939,26 @@ struct IoUringDriver(IoDriver):
         populates `count` entries, so `base` needs exactly
         `count * size` bytes.
 
-        `count` must be in `1..65536`: buffer ids are `UInt16`, so 65536
-        is the largest count whose ids fit without wrapping, and the
-        rounded ring size then never exceeds 65536 either. The kernel
-        itself caps a ring at 32768 entries and answers EINVAL above
-        that, which `register_buf_ring` surfaces synchronously.
+        `count` rounded up to a power of two must not exceed 32768, the
+        largest ring the kernel registers (`IO_RING_MAX_ENTRIES`); the
+        check is made here so every kernel answers the same way, and
+        buffer ids then always fit a `UInt16`.
 
         Args:
             base: Address of buffer 0; must stay valid until unregistered.
             size: Bytes per buffer.
-            count: Number of buffers, in `1..65536`.
+            count: Number of buffers; rounded up, at most 32768.
             group_id: Caller-chosen group id.
 
         Raises:
-            IOError(EINVAL) if `size` is 0, or `count` is 0 or exceeds
-                65536; checked before the ring is touched.
+            IOError(EINVAL) if `size` is 0, or `count` is 0 or rounds
+                past 32768; checked before the ring is touched.
             IOError(EEXIST) if the id is already in the table.
             Whatever `register_buf_ring` raises otherwise.
         """
         if size <= 0:
             raise IOError(positive_errno=EINVAL)
-        if count <= 0 or count > 65536:
+        if count <= 0 or _next_pow2(count) > _MAX_RING_ENTRIES:
             raise IOError(positive_errno=EINVAL)
         if self._find_group(group_id) >= 0:
             raise IOError(positive_errno=EEXIST)

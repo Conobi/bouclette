@@ -10,7 +10,7 @@ list that was submitted.
 from std.testing import assert_equal, assert_true
 
 from boucle.net import Message, Socket, SocketAddrV4, SocketAddrV6
-from boucle.net.options import AddrFamily
+from boucle.net.options import AddrFamily, Backlog
 from boucle.watch import Backend, RecvMsgFuture, SendMsgFuture, WatchLoop
 
 
@@ -127,7 +127,7 @@ def _roundtrip_v6(backend: Backend) raises:
 
 
 def _truncation_is_reported(backend: Backend) raises:
-    """A datagram larger than the window completes with MSG_TRUNC.
+    """A 300-byte datagram into a 100-byte window: count 300, 100 bytes copied, MSG_TRUNC.
 
     Args:
         backend: The loop backend to force.
@@ -138,19 +138,74 @@ def _truncation_is_reported(backend: Backend) raises:
     var sender = Socket.udp_v4()
 
     var loop = WatchLoop(capacity=8, backend=backend)
-    var recv_f = loop.recv_msg(receiver, Message(List[UInt8](length=4, fill=0)))
-    var out = Message(List[UInt8](length=10, fill=0x5A))
+    var recv_f = loop.recv_msg(receiver, Message(List[UInt8](length=100, fill=0)))
+    var big = List[UInt8](length=300, fill=0)
+    for i in range(300):
+        big[i] = UInt8(i & 0xFF)
+    var out = Message(big^)
     out.set_peer(SocketAddrV4(127, 0, 0, 1, port=rx_port))
     var send_f = loop.send_msg(sender, out^)
     loop.run()
 
-    assert_equal(send_f^.result().count, 10)
+    assert_equal(send_f^.result().count, 300)
     var got = recv_f^.result()
-    assert_equal(got.count, 4, "the window is filled")
+    assert_equal(got.count, 300, "the full datagram length is reported")
     assert_true(got.truncated(), "MSG_TRUNC is set")
+    var copied = got.transferred()
+    assert_equal(len(copied), 100, "transferred() clamps to the window")
+    for i in range(100):
+        assert_equal(Int(copied[i]), i & 0xFF)
 
     receiver.close()
     sender.close()
+
+
+def _stream_never_discards(backend: Backend) raises:
+    """A 300-byte TCP send read through two 100-byte windows: nothing is discarded.
+
+    A stream socket has no datagram boundary to report, so the count is
+    the bytes copied and the next receive continues where the first one
+    stopped. Asking the kernel for the full length there would make it
+    drop the bytes instead of copying them.
+
+    Args:
+        backend: The loop backend to force.
+    """
+    var server = Socket.tcp_v4()
+    server.set_reuse_addr()
+    server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    server.listen(Backlog.DEFAULT)
+    var port = server.local_addr_v4().port
+    var client = Socket.tcp_connect(SocketAddrV4(127, 0, 0, 1, port=port))
+    var peer = server.accept()
+
+    var big = List[UInt8](length=300, fill=0)
+    for i in range(300):
+        big[i] = UInt8(i & 0xFF)
+    assert_equal(client.send(Span(big)), 300, "the whole payload is sent")
+
+    var loop = WatchLoop(capacity=8, backend=backend)
+    var first = loop.recv_msg(peer, Message(List[UInt8](length=100, fill=0)))
+    loop.run()
+    var got = first^.result()
+    assert_equal(got.count, 100, "a stream counts the bytes copied")
+    assert_true(not got.truncated(), "a stream never reports MSG_TRUNC")
+    var copied = got.transferred()
+    assert_equal(len(copied), 100)
+    for i in range(100):
+        assert_equal(Int(copied[i]), i & 0xFF, "first window intact")
+
+    var second = loop.recv_msg(peer, Message(List[UInt8](length=100, fill=0)))
+    loop.run()
+    var next = second^.result()
+    assert_equal(next.count, 100, "the next window follows on")
+    var more = next.transferred()
+    for i in range(100):
+        assert_equal(Int(more[i]), (100 + i) & 0xFF, "nothing was discarded")
+
+    peer.close()
+    client.close()
+    server.close()
 
 
 def main() raises:
@@ -163,4 +218,7 @@ def main() raises:
     _truncation_is_reported(Backend.AUTO)
     _truncation_is_reported(Backend.EPOLL)
     print("ok: truncation reported on both backends")
+    _stream_never_discards(Backend.AUTO)
+    _stream_never_discards(Backend.EPOLL)
+    print("ok: stream sockets never discard on both backends")
     print("PASS: test_recv_msg_send_msg.mojo")

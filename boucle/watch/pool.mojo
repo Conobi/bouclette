@@ -42,6 +42,8 @@ struct _PoolState(_InFlightState):
         closing: True once the handle dropped; a multishot receive
                  refuses a closing pool.
         _shared: The loop's shared box (driver, liveness).
+        _abandoned: The loop died with a stream selecting from this
+                    pool; the memory is leaked, never freed.
         _queued: True once the slot key was pushed to the settle queue.
         _owner_dropped: The `BufferPool` handle is gone.
         _loop_gone: The loop was destroyed with this state in flight.
@@ -57,6 +59,7 @@ struct _PoolState(_InFlightState):
     var registered: Bool
     var closing: Bool
     var _shared: Pointer[_LoopShared, MutUntrackedOrigin]
+    var _abandoned: Bool
     var _queued: Bool
     var _owner_dropped: Bool
     var _loop_gone: Bool
@@ -88,6 +91,7 @@ struct _PoolState(_InFlightState):
         self.registered = False
         self.closing = False
         self._shared = shared
+        self._abandoned = False
         self._queued = False
         self._owner_dropped = False
         self._loop_gone = False
@@ -104,6 +108,7 @@ struct _PoolState(_InFlightState):
         self.registered = move.registered
         self.closing = move.closing
         self._shared = move._shared
+        self._abandoned = move._abandoned
         self._queued = move._queued
         self._owner_dropped = move._owner_dropped
         self._loop_gone = move._loop_gone
@@ -113,30 +118,66 @@ struct _PoolState(_InFlightState):
         """Unregister the driver group while the driver lives, then free the memory.
 
         Only runs for a pool nothing can reach any more (see
-        `owner_dropped`), so freeing is safe. The loop's destructor clears
-        `driver_alive` before it tears the driver down and detaches the
-        pool slab only afterwards, so a pool released there skips the
-        unregister call: the driver already dropped its groups on the way
-        out, and there is nothing left to talk to.
+        `owner_dropped`), so freeing is safe. The loop's sweep normally
+        calls `release_group` first, so this is a fallback; the loop's
+        destructor clears `driver_alive` before it tears the driver down
+        and detaches the pool slab only afterwards, so a pool released
+        there skips the unregister call: the driver already dropped its
+        groups on the way out, and there is nothing left to talk to.
+        Memory abandoned at loop destruction (`abandon_buffer`) is
+        leaked, never freed.
         """
-        if self.registered and self._shared[].driver_alive:
-            try:
-                self._shared[].driver[].unregister_buffer_group(self.group_id)
-            except:
-                pass
-        if Int(self.memory) != 0:
+        _ = self.release_group()
+        if not self._abandoned:
             self.memory.unsafe_free()
 
-    def buffer_ptr(self, buf_id: UInt16) -> Pointer[UInt8, MutUntrackedOrigin]:
-        """Return the start of buffer `buf_id`.
-
-        Args:
-            buf_id: A buffer id below `count`.
+    def release_group(mut self) -> Bool:
+        """Unregister the driver group, once, and say whether its id may be reused.
 
         Returns:
-            A pointer to the first byte of that buffer.
+            True when the driver holds no group under this id any more:
+            the group was never registered, or the unregister succeeded.
+            False when the driver is gone or the unregister raised, in
+            which case the loop must not hand the id to another pool.
         """
-        debug_assert(Int(buf_id) < self.count, "buffer id out of range")
+        if not self.registered:
+            return True
+        self.registered = False
+        if not self._shared[].driver_alive:
+            return False
+        try:
+            self._shared[].driver[].unregister_buffer_group(self.group_id)
+            return True
+        except:
+            return False
+
+    def holds(self, buf_id: UInt16) -> Bool:
+        """Return True if `buf_id` names a buffer of this pool.
+
+        Buffer ids come from completion flags the driver decoded; one at
+        or past `count` is never dereferenced.
+
+        Args:
+            buf_id: A buffer id from a delivery.
+
+        Returns:
+            True when `buf_id < count`.
+        """
+        return Int(buf_id) < self.count
+
+    def buffer_ptr(self, buf_id: UInt16) -> Pointer[UInt8, MutUntrackedOrigin]:
+        """Return the start of buffer `buf_id`, or null for an id past the pool.
+
+        Args:
+            buf_id: A buffer id from a delivery.
+
+        Returns:
+            A pointer to the first byte of that buffer, or a null
+            pointer when `buf_id` is not below `count`. Abandoned
+            memory is still addressed: it is leaked, not freed.
+        """
+        if not self.holds(buf_id):
+            return null_ptr[UInt8, MutUntrackedOrigin]()
         return self.memory.unsafe_offset(Int(buf_id) * self.buffer_size)
 
     def abandon_buffer(mut self):
@@ -150,9 +191,12 @@ struct _PoolState(_InFlightState):
         waiting for the write to stop. The destructor then releases the
         orphaned stream, which detaches the pool, which may make the
         pool itself reclaimable in the same pass — and `__deinit__` would
-        free memory the kernel still writes into. Nulling `memory` here
-        makes `__deinit__` skip the free, so the allocation is leaked on
-        purpose: the same bounded cost recv/send buffers pay.
+        free memory the kernel still writes into. Marking the pool
+        `_abandoned` makes `__deinit__` skip the free, so the allocation
+        is leaked on purpose: the same bounded cost recv/send buffers
+        pay. The pointer is kept: a leased buffer is out of the ring, so
+        the kernel can only write un-leased ones and a `Datagram` held
+        across the destruction keeps reading its bytes.
 
         A pool with no stream but leases out keeps its memory: no kernel
         request selects from it, and the leases keep the state alive
@@ -162,7 +206,7 @@ struct _PoolState(_InFlightState):
         either way.
         """
         if self.streams > 0:
-            self.memory = null_ptr[UInt8, MutUntrackedOrigin]()
+            self._abandoned = True
 
     def lease_taken(mut self):
         """Record that a delivery took one buffer out of the pool."""
@@ -172,12 +216,13 @@ struct _PoolState(_InFlightState):
         """Hand a leased buffer back to the driver group.
 
         A no-op once the loop is gone: the memory stays with the leaked
-        chunks and nothing is left to return it to.
+        chunks and nothing is left to return it to. Also a no-op for an
+        id past the pool, which no delivery ever leased.
 
         Args:
             buf_id: The buffer a `LeasedBuffer` held.
         """
-        if self._loop_gone:
+        if self._loop_gone or not self.holds(buf_id):
             return
         self.available += 1
         if self._shared[].driver_alive:
@@ -188,12 +233,15 @@ struct _PoolState(_InFlightState):
         """Return a buffer a dropped stream never leased (post-drop delivery).
 
         The buffer was taken by the driver but never counted out of
-        `available`, so only the driver side is undone.
+        `available`, so only the driver side is undone. An id past the
+        pool is ignored: the buffer it names is leaked, never touched.
 
         Args:
             buf_id: The buffer id from the completion flags.
         """
         if self._loop_gone or not self._shared[].driver_alive:
+            return
+        if not self.holds(buf_id):
             return
         self._shared[].driver[].return_buffer(self.group_id, buf_id)
 
@@ -304,11 +352,14 @@ struct LeasedBuffer(Movable):
         """View the whole buffer, delivery header included.
 
         Returns:
-            A span of `buffer_size` bytes.
+            A span of `buffer_size` bytes, or an empty span when the id
+            names no buffer of the pool.
         """
+        var base = self._pool[].buffer_ptr(self._id)
+        if Int(base) == 0:
+            return Span[UInt8, MutUntrackedOrigin]()
         return Span[UInt8, MutUntrackedOrigin](
-            unsafe_ptr=self._pool[].buffer_ptr(self._id),
-            length=self._pool[].buffer_size,
+            unsafe_ptr=base, length=self._pool[].buffer_size
         )
 
     def id(self) -> UInt16:

@@ -101,6 +101,7 @@ def test_loop_gone_returns_no_message() raises:
     var fds = _make_socketpair()
     var reader = Socket(OwnedHandle(raw=fds[0]))
     var writer = Socket(OwnedHandle(raw=fds[1]))
+    assert_true(reader.is_datagram(), "an adopted SOCK_DGRAM reads its type")
     var loop = WatchLoop()
     var recv_f = loop.recv_msg(reader, Message(List[UInt8](length=8, fill=0)))
     _ = loop^

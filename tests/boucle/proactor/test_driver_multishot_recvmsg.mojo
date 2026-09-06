@@ -21,11 +21,16 @@ from boucle.socle.linux.raw import (
     IORING_CQE_F_BUFFER,
     IORING_CQE_F_MORE,
     IORING_CQE_BUFFER_SHIFT,
+    MSG_TRUNC,
 )
+from boucle.net.message import DELIVERY_HEADER_LEN, DeliveryHeader
 from boucle.socle.linux.raw.ctypes import c_void
 from boucle.proactor.completion import Completion
 from boucle.drivers.bufring import BufRing
+from boucle.drivers.feature import DriverFeature
 from boucle.drivers.io_uring import IoUringDriver
+from boucle.net.addr import SocketAddrV4
+from boucle.net.socket import Socket
 
 comptime AF_INET = 2
 
@@ -314,6 +319,260 @@ def test_driver_multishot_recvmsg() raises:
     _ = bufring
 
 
+def _ptr[T: AnyType](ref value: T) -> Pointer[T, MutUntrackedOrigin]:
+    """Untracked pointer to a caller-owned value."""
+    return Pointer[T, MutUntrackedOrigin](
+        unsafe_from_address=Int(Pointer(to=value))
+    )
+
+
+def test_multishot_submits_after_full_sq() raises:
+    """A multishot recvmsg queued on a full submission queue flushes it first and still arms.
+
+    Every other operation flushes a full ring with a non-waiting enter
+    and retries; the multishot must do the same instead of raising.
+    """
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
+    var driver = IoUringDriver(capacity=8)
+    if not driver.supports(DriverFeature.MULTISHOT_RECVMSG):
+        print("SKIP: multishot recvmsg needs kernel 6.0")
+        return
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+
+    comptime GROUP = 3
+    comptime SIZE = 256
+    var mem = Pointer[UInt8, MutUntrackedOrigin](
+        unsafe_from_address=Int(_heap_alloc[UInt8](4 * SIZE))
+    )
+    for i in range(4 * SIZE):
+        mem[unsafe_offset=i] = UInt8(0)
+    driver.register_buffer_group(mem, UInt32(SIZE), 4, UInt16(GROUP))
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(28)
+
+    var nops = MultishotTracker()
+    var nop_cmp = Completion(
+        invoke=MultishotTracker.on_complete,
+        context=_ptr(nops).unsafe_bitcast[NoneType](),
+    )
+    var space = driver.sq_space()
+    assert_true(space > 0, "a fresh ring has room")
+    for _ in range(space):
+        driver.nop(_ptr(nop_cmp))
+    assert_true(driver.sq_space() == 0, "the ring is full")
+
+    var recv = MultishotTracker()
+    var recv_cmp = Completion(
+        invoke=MultishotTracker.on_complete,
+        context=_ptr(recv).unsafe_bitcast[NoneType](),
+    )
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(recv_cmp),
+    )
+    _ = driver.tick(wait=False)
+
+    var seen_nops = _ptr(nops)
+    var ticks = 0
+    while seen_nops[].count < space:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 20, "the flushed nops never completed")
+
+    # The op was really queued: a datagram is delivered through the group.
+    var payload = List[UInt8](length=4, fill=UInt8(ord("x")))
+    assert_true(sender.send_to(Span(payload), to) == 4, "sendto")
+    var seen_recv = _ptr(recv)
+    ticks = 0
+    while seen_recv[].count < 1:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 20, "the multishot delivery never arrived")
+    assert_true(
+        (seen_recv[].flags[0] & UInt32(IORING_CQE_F_BUFFER)) != 0,
+        "delivery selected a buffer",
+    )
+    assert_true(seen_recv[].results[0] > 0, "delivery carries bytes")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = nop_cmp
+    _ = recv_cmp
+    _ = tmpl
+
+
+def test_multishot_truncation_reports_full_length() raises:
+    """A 300-byte datagram into a 100-byte room reports payloadlen 300 and MSG_TRUNC.
+
+    The epoll emulation receives with MSG_TRUNC and writes the full
+    datagram length into the delivery header; the io_uring op must
+    request the same so `DeliveryHeader.payloadlen()` agrees on both
+    backends. The copied bytes are the first 100.
+    """
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
+    var driver = IoUringDriver(capacity=8)
+    if not driver.supports(DriverFeature.MULTISHOT_RECVMSG):
+        print("SKIP: multishot recvmsg needs kernel 6.0")
+        return
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+
+    comptime GROUP = 4
+    comptime NAME_CAP = 28
+    comptime ROOM = 100
+    comptime SIZE = DELIVERY_HEADER_LEN + NAME_CAP + ROOM
+    comptime BIG = 300
+    var mem = Pointer[UInt8, MutUntrackedOrigin](
+        unsafe_from_address=Int(_heap_alloc[UInt8](2 * SIZE))
+    )
+    for i in range(2 * SIZE):
+        mem[unsafe_offset=i] = UInt8(0)
+    driver.register_buffer_group(mem, UInt32(SIZE), 2, UInt16(GROUP))
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    var recv = MultishotTracker()
+    var recv_cmp = Completion(
+        invoke=MultishotTracker.on_complete,
+        context=_ptr(recv).unsafe_bitcast[NoneType](),
+    )
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(recv_cmp),
+    )
+    _ = driver.tick(wait=False)
+
+    var payload = List[UInt8](length=BIG, fill=0)
+    for i in range(BIG):
+        payload[i] = UInt8(i & 0xFF)
+    assert_true(sender.send_to(Span(payload), to) == BIG, "sendto")
+    var seen = _ptr(recv)
+    var ticks = 0
+    while seen[].count < 1:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 20, "the truncated delivery never arrived")
+    assert_true(seen[].results[0] == SIZE, "result is the filled buffer")
+    var bid = Int(seen[].buf_ids[0])
+    var buf = Span[UInt8, MutUntrackedOrigin](
+        unsafe_ptr=mem.unsafe_offset(bid * SIZE), length=SIZE
+    )
+    var hdr = DeliveryHeader.parse(buf, name_capacity=NAME_CAP, control_capacity=0)
+    assert_true(Int(hdr.payloadlen()) == BIG, "full datagram length reported")
+    assert_true((Int(hdr.flags()) & MSG_TRUNC) != 0, "MSG_TRUNC set")
+    var got = hdr.payload()
+    assert_true(len(got) == ROOM, "payload clipped to the room")
+    for i in range(ROOM):
+        assert_true(Int(got[i]) == (i & 0xFF), "copied bytes intact")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = recv_cmp
+    _ = tmpl
+
+
+def test_multishot_control_messages_are_delivered() raises:
+    """With a 64-byte control capacity the kernel writes the sender's TOS record after the name."""
+    if not _has_io_uring():
+        print("SKIP: io_uring not available")
+        return
+    var driver = IoUringDriver(capacity=8)
+    if not driver.supports(DriverFeature.MULTISHOT_RECVMSG):
+        print("SKIP: multishot recvmsg needs kernel 6.0")
+        return
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    receiver.set_recv_tos()
+    var to = receiver.local_addr_v4()
+    var sender = Socket.udp_v4()
+    sender.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    sender.set_tos(UInt8(2))
+    var sender_port = Int(sender.local_addr_v4().port)
+
+    comptime GROUP = 5
+    comptime NAME_CAP = 28
+    comptime CTRL_CAP = 64
+    comptime SIZE = 256
+    var mem = Pointer[UInt8, MutUntrackedOrigin](
+        unsafe_from_address=Int(_heap_alloc[UInt8](2 * SIZE))
+    )
+    for i in range(2 * SIZE):
+        mem[unsafe_offset=i] = UInt8(0)
+    driver.register_buffer_group(mem, UInt32(SIZE), 2, UInt16(GROUP))
+    var tmpl = msghdr()
+    tmpl.msg_namelen = UInt32(NAME_CAP)
+    tmpl.msg_controllen = UInt64(CTRL_CAP)
+    var recv = MultishotTracker()
+    var recv_cmp = Completion(
+        invoke=MultishotTracker.on_complete,
+        context=_ptr(recv).unsafe_bitcast[NoneType](),
+    )
+    driver.multishot_recvmsg(
+        receiver.raw(),
+        _ptr(tmpl).unsafe_bitcast[NoneType](),
+        UInt16(GROUP),
+        _ptr(recv_cmp),
+    )
+    _ = driver.tick(wait=False)
+
+    var payload = List[UInt8](length=4, fill=UInt8(ord("e")))
+    assert_true(sender.send_to(Span(payload), to) == 4, "sendto")
+    var seen = _ptr(recv)
+    var ticks = 0
+    while seen[].count < 1:
+        _ = driver.tick(wait=True, timeout_ms=1000)
+        ticks += 1
+        assert_true(ticks < 20, "the delivery with control never arrived")
+    var bid = Int(seen[].buf_ids[0])
+    var buf = Span[UInt8, MutUntrackedOrigin](
+        unsafe_ptr=mem.unsafe_offset(bid * SIZE), length=SIZE
+    )
+    var hdr = DeliveryHeader.parse(
+        buf, name_capacity=NAME_CAP, control_capacity=CTRL_CAP
+    )
+    assert_true(Int(hdr.controllen()) > 0, "a control record was written")
+    assert_true(Int(hdr.controllen()) <= CTRL_CAP, "it fits the capacity")
+    assert_true(Int(hdr.namelen()) == 16, "sockaddr_in written")
+    var name = hdr.name()
+    assert_true(Int(name[0]) == 2, "AF_INET")
+    assert_true(((Int(name[2]) << 8) | Int(name[3])) == sender_port, "peer port")
+    assert_true(Int(hdr.payloadlen()) == 4, "payload length")
+    assert_true(
+        seen[].results[0] == DELIVERY_HEADER_LEN + NAME_CAP + CTRL_CAP + 4,
+        "result spans header, name, control and payload",
+    )
+    var mark = hdr.control().ecn()
+    assert_true(Bool(mark), "an IP_TOS record is in the control area")
+    assert_true(Int(mark.value()) == 2, "the sent codepoint")
+    assert_true(Int(hdr.payload()[0]) == ord("e"), "payload intact")
+
+    driver.unregister_buffer_group(UInt16(GROUP))
+    mem.unsafe_free()
+    receiver.close()
+    sender.close()
+    _ = recv_cmp
+    _ = tmpl
+
+
 def main() raises:
     test_driver_multishot_recvmsg()
+    test_multishot_truncation_reports_full_length()
+    test_multishot_control_messages_are_delivered()
+    test_multishot_submits_after_full_sq()
     print("PASS: test_driver_multishot_recvmsg.mojo")

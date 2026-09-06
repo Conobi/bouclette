@@ -110,8 +110,11 @@ from boucle.socle.linux.raw.general import (
     sigset_t,
     O_NONBLOCK,
     O_CLOEXEC,
+    F_GETFD,
     F_GETFL,
     F_SETFL,
+    F_DUPFD_CLOEXEC,
+    FD_CLOEXEC,
 )
 
 from boucle.socle.linux.raw.epoll import (
@@ -544,6 +547,7 @@ from boucle.socle.linux.raw.net import (
     SOL_IPV6,
     SOL_UDP,
     SO_REUSEADDR,
+    SO_TYPE,
     SO_ERROR,
     SO_SNDBUF,
     SO_RCVBUF,

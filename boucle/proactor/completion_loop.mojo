@@ -182,6 +182,7 @@ struct CompletionLoop(Movable):
         fd: RawHandle,
         msg: Pointer[NoneType, MutUntrackedOrigin],
         c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
     ) raises:
         """Queue a recvmsg on socket `fd`.
 
@@ -189,8 +190,10 @@ struct CompletionLoop(Movable):
             fd: The socket file descriptor.
             msg: Opaque pointer to a platform-specific message header.
             c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through (MSG_TRUNC is
+                   only safe on a datagram socket); 0 for none.
         """
-        self._inner.driver.recvmsg(fd, msg, c)
+        self._inner.driver.recvmsg(fd, msg, c, flags)
 
     def sendmsg(
         mut self,
@@ -220,9 +223,15 @@ struct CompletionLoop(Movable):
         parse the buffer with `boucle.net.message.DeliveryHeader`. The
         terminal cases are those of `IoDriver.multishot_recvmsg`; note
         that a zero-length datagram may also be terminal: io_uring ends
-        the operation with result 0 and no more flag, while the epoll
-        emulation delivers it and stays armed. Treat any completion
-        without `has_more` as the end, whatever its result.
+        the operation on it with no more flag and a positive result
+        (the header, name and control capacities with an empty
+        payload), while the epoll emulation delivers it and stays
+        armed. A read-shut or errored socket diverges the other way:
+        the epoll emulation ends the operation with the pending
+        `SO_ERROR`, else ECONNRESET, else EIO, while io_uring fires
+        nothing and the operation stays armed until it is cancelled.
+        Treat any completion without `has_more` as the end, whatever
+        its result.
 
         Args:
             fd: The datagram socket.

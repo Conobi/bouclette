@@ -72,6 +72,13 @@ def test_socket_factories() raises:
     var udp_port = _getsockname_port(udp)
     assert_true(udp_port != 0)
 
+    assert_true(not tcp.is_datagram(), "a TCP listener is a stream")
+    assert_true(udp.is_datagram(), "a UDP listener is a datagram socket")
+    assert_true(Socket.udp_v4().is_datagram())
+    assert_true(Socket.udp_v6().is_datagram())
+    assert_true(not Socket.tcp_v4().is_datagram())
+    assert_true(not Socket.tcp_v6().is_datagram())
+
 
 def main() raises:
     test_socket_factories()

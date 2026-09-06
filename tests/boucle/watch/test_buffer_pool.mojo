@@ -1,9 +1,10 @@
 """`BufferPool`: a loop-owned set of fixed-size buffers with lease handles.
 
-`count` rounds up to a power of two; a size below 64 or a count outside
-1..65536 is EINVAL; dropping the handle releases the slot at the next
-sweep once no lease is out; a lease returns itself on drop; handles are
-inert once the loop is gone.
+`count` rounds up to a power of two; a size outside 64..2^24 or a count
+outside 1..32768 is EINVAL, and 32768 (the largest ring the kernel
+accepts) works on both backends; dropping the handle releases the slot
+at the next sweep once no lease is out and recycles the group id; a
+lease returns itself on drop; handles are inert once the loop is gone.
 """
 
 from std.testing import assert_equal, assert_false, assert_true
@@ -40,13 +41,28 @@ def _run(backend: Backend) raises:
 
     raised = False
     try:
-        _ = loop.buffer_pool(65537, 64)
+        _ = loop.buffer_pool(32769, 64)
     except e:
         raised = "EINVAL" in String(e)
-    assert_true(raised, "count above 65536 must raise EINVAL")
+    assert_true(raised, "count above 32768 must raise EINVAL")
+
+    raised = False
+    try:
+        _ = loop.buffer_pool(1, (1 << 24) + 1)
+    except e:
+        raised = "EINVAL" in String(e)
+    assert_true(raised, "size above 2^24 must raise EINVAL")
     assert_equal(
         loop.in_flight_count(), 1, "a rejected pool leaves no slot behind"
     )
+
+    # The largest ring the kernel accepts registers on both backends.
+    var largest = loop.buffer_pool(32768, 64)
+    assert_equal(largest.capacity(), 32768)
+    assert_equal(largest.available(), 32768)
+    _ = largest^
+    _ = loop.step(0)
+    assert_equal(loop.in_flight_count(), 1)
 
     # A lease taken by hand (what a delivery does) comes back on drop and
     # its bytes view the whole buffer, header included.
@@ -79,6 +95,18 @@ def _run(backend: Backend) raises:
     _ = loop.step(0)
     assert_equal(loop._pools.active(), 0)
 
+    # A released pool's group id is handed to the next pool.
+    var first = -1
+    for _ in range(3):
+        var again = loop.buffer_pool(2, 64)
+        var gid = Int(again._state[].group_id)
+        if first < 0:
+            first = gid
+        assert_equal(gid, first, "a released group id is reused")
+        _ = again^
+        _ = loop.step(0)
+        assert_equal(loop._pools.active(), 0)
+
 
 def test_handles_are_inert_after_loop_destruction() raises:
     """A pool and a lease outliving the loop read their state but touch nothing."""
@@ -95,6 +123,10 @@ def test_handles_are_inert_after_loop_destruction() raises:
         "driver_alive is cleared before the driver is destroyed",
     )
     assert_true(pool._state[].loop_gone())
+    assert_true(
+        Int(pool._state[].memory) != 0,
+        "with leases only and no stream the memory is kept",
+    )
     assert_equal(pool.capacity(), 2)
     assert_equal(pool.available(), 1)
     _ = lease^

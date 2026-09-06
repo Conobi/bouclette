@@ -27,6 +27,13 @@ per-operation state, so the loop owns the bytes the kernel touches for
 exactly as long as the operation lives. The caller gets the buffer back
 from result(); until then it cannot read it, write it or free it, and
 dropping the future simply gives it up.
+
+A submission the driver refuses leaves nothing behind: every verb
+allocates its slot first and discards it again before raising, and the
+buffer-carrying verbs raise the same typed failure their futures do
+(`TransferFailed` / `MessageFailed`, reason `IO`) with the buffer or
+message inside, so a refused operation hands the bytes back exactly as
+a failed one does.
 """
 
 from std.memory import Pointer, unsafe_memset
@@ -41,7 +48,7 @@ from boucle.net.addr import SocketAddrStor, SocketAddrStorAny
 from boucle.net.message import DELIVERY_HEADER_LEN, Message
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
-from boucle.socle.platform import EINVAL, ENOSPC
+from boucle.socle.platform import EINVAL, ENOSPC, MSG_TRUNC
 from boucle.timeout import Timeout
 from boucle.watch._callback import _KIND_BITS, _FutureCallback, _dispatch
 from boucle.watch._message import _MessageState
@@ -60,6 +67,7 @@ from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.send_msg import SendMsgFuture
 from boucle.watch.stream import _NAME_CAPACITY, _StreamState, DatagramStream
 from boucle.watch.timer import _TimerFutureState, TimerFuture
+from boucle.watch.transfer import FailureReason, MessageFailed, TransferFailed
 
 
 # Slab kinds, stored in the low `_KIND_BITS` of every settle-queue key.
@@ -74,11 +82,30 @@ comptime _KIND_SEND_MSG = 7
 comptime _KIND_STREAM = 8
 comptime _KIND_POOL = 9
 
+
+def _slot_index(key: Int) -> Int:
+    """Return the slab index encoded in a slot key.
+
+    Args:
+        key: A key issued by a slab, kind in the low `_KIND_BITS`.
+
+    Returns:
+        The global slot index within that slab.
+    """
+    return key >> _KIND_BITS
+
+
 # Smallest buffer a pool accepts: a delivery header plus a v6 address and
 # a few payload bytes.
 comptime _MIN_BUFFER_SIZE = 64
-# Largest buffer count a pool accepts: buffer ids are UInt16.
-comptime _MAX_BUFFER_COUNT = 65536
+# Largest buffer count a pool accepts: the largest provided-buffer ring
+# the kernel registers. Also a power of two, so rounding never exceeds it.
+comptime _MAX_BUFFER_COUNT = 32768
+# Largest buffer a pool accepts; the ring stores lengths as UInt32 and
+# nothing needs a datagram buffer beyond 16 MiB.
+comptime _MAX_BUFFER_SIZE = 1 << 24
+# Number of provided-buffer group ids: they are UInt16.
+comptime _GROUP_ID_COUNT = 1 << 16
 
 
 struct WatchLoop(Movable):
@@ -96,10 +123,14 @@ struct WatchLoop(Movable):
     let the loop release orphaned states and inform surviving handles
     when the loop is destroyed. A stream is not counted in _pending: it
     re-arms itself and reports through the shared tally instead.
-    _next_group_id is the next provided-buffer group id `buffer_pool`
-    hands to the driver; ids are never reused. _settle is the queue of slot
-    keys pushed by completions and handle drops since the last sweep;
-    it lives on the heap so its address survives moving the loop.
+    _next_group_id is the next never-used provided-buffer group id, and
+    _free_group_ids the ids of released pools: `buffer_pool` takes a
+    recycled id first and only then a fresh one, so the number of pools
+    over a loop's life is unbounded and ENOSPC means 65536 are live at
+    once. An id returns to the list at the sweep that releases its pool,
+    once the driver group is gone. _settle is the queue of slot keys
+    pushed by completions and handle drops since the last sweep; it
+    lives on the heap so its address survives moving the loop.
 
     _deferred lists the slot keys of states that may still need the loop
     to submit an operation on their behalf outside a callback: the
@@ -135,7 +166,8 @@ struct WatchLoop(Movable):
     var _send_msgs: _Slab[_MessageState]
     var _streams: _Slab[_StreamState]
     var _pools: _Slab[_PoolState]
-    var _next_group_id: UInt16
+    var _next_group_id: Int
+    var _free_group_ids: List[UInt16]
     var _deferred: Pointer[List[Int], MutUntrackedOrigin]
     var _deferring: List[Int]
     var _shared: Pointer[_LoopShared, MutUntrackedOrigin]
@@ -179,7 +211,8 @@ struct WatchLoop(Movable):
         self._send_msgs = _Slab[_MessageState](capacity, _KIND_SEND_MSG, q)
         self._streams = _Slab[_StreamState](capacity, _KIND_STREAM, q)
         self._pools = _Slab[_PoolState](capacity, _KIND_POOL, q)
-        self._next_group_id = UInt16(0)
+        self._next_group_id = 0
+        self._free_group_ids = List[UInt16]()
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
@@ -198,6 +231,7 @@ struct WatchLoop(Movable):
         self._streams = move._streams^
         self._pools = move._pools^
         self._next_group_id = move._next_group_id
+        self._free_group_ids = move._free_group_ids^
         self._deferred = move._deferred
         self._deferring = move._deferring^
         self._shared = move._shared
@@ -257,13 +291,13 @@ struct WatchLoop(Movable):
         usual.
 
         The `in_flight() > 0` check above is deliberately conservative.
-        It also leaks the slab when a message op was allocated but never
-        reached the kernel (submission failed after `alloc`), and on the
-        epoll completion backend, whose recvmsg runs synchronously inside
-        `tick()` rather than asynchronously in the kernel — neither case
-        actually needs the safeguard. That is acceptable — a few extra
-        chunks kept alive at process exit are cheaper than teaching this
-        destructor which in-flight state came from which path.
+        It also leaks the slab on the epoll completion backend, whose
+        recvmsg runs synchronously inside `tick()` rather than
+        asynchronously in the kernel, where the safeguard is not needed.
+        That is acceptable — a few extra chunks kept alive at process
+        exit are cheaper than teaching this destructor which backend it
+        runs on. A message op whose submission the driver refused never
+        counts here: the verb discards its slot before raising.
 
         The pool slab gets the same treatment, for two reasons. A pool
         still counted in flight has a handle, a lease or a stream that
@@ -352,10 +386,10 @@ struct WatchLoop(Movable):
 
         Diagnostic accessor for tests: composites awaiting their loser's
         cancel, and streams with a re-arm or cancel queued. 0 once the
-        loop is drained and no stream has a deferred submission; `run()`
-        returns as soon as `_pending` is 0 and does not flush a stream's
-        deferred request, so a drained loop with such a stream still
-        counts it here until the next `step()`.
+        loop is drained and no stream has a deferred submission; both
+        `run()` and `step()` flush the queue before they wait, so a
+        stream's deferred request counts here only until the next call
+        of either.
 
         Returns:
             The number of slot keys on the deferred list.
@@ -374,7 +408,12 @@ struct WatchLoop(Movable):
 
         Returns:
             An AcceptFuture representing the in-flight accept.
+
+        Raises:
+            If the socket handle is invalid or the driver cannot accept
+            the operation; nothing stays in flight in that case.
         """
+        var fd = socket.raw()
         var state_ptr = self._accepts.alloc(_AcceptFutureState())
 
         state_ptr[].completion.invoke = _dispatch[_AcceptFutureState]
@@ -384,8 +423,11 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
-        self._driver.accept(fd, cmp_ptr)
+        try:
+            self._driver.accept(fd, cmp_ptr)
+        except e:
+            self._accepts.discard(_slot_index(state_ptr[]._link.key))
+            raise e
         self._pending += 1
 
         return AcceptFuture(state_ptr)
@@ -408,7 +450,12 @@ struct WatchLoop(Movable):
 
         Returns:
             A ConnectFuture representing the in-flight connect.
+
+        Raises:
+            If the socket handle is invalid or the driver cannot accept
+            the operation; nothing stays in flight in that case.
         """
+        var fd = socket.raw()
         var stor = addr.addr_stor()
         var state_ptr = self._connects.alloc(
             _ConnectFutureState(SocketAddrStorAny(stor))
@@ -421,10 +468,13 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(state_ptr[]._addr_stor.addr_len())
-        self._driver.connect(fd, addr_ptr, addr_len, cmp_ptr)
+        try:
+            self._driver.connect(fd, addr_ptr, addr_len, cmp_ptr)
+        except e:
+            self._connects.discard(_slot_index(state_ptr[]._link.key))
+            raise e
         self._pending += 1
 
         return ConnectFuture(state_ptr)
@@ -457,7 +507,16 @@ struct WatchLoop(Movable):
         Returns:
             A ConnectWithTimeoutFuture representing the in-flight
             composite operation.
+
+        Raises:
+            If the socket handle is invalid or the driver cannot accept
+            the connect: nothing stays in flight. If the driver accepts
+            the connect but refuses the timer, the connect cannot be
+            taken back: the state stays registered with no handle, a
+            cancel of the connect is queued, and the slot is released
+            once the connect and the cancel have completed.
         """
+        var fd = socket.raw()
         var stor = addr.addr_stor()
         var ts = Timeout.from_ms(Int64(timeout_ms))
         var state_ptr = self._connects_with_timeout.alloc(
@@ -477,13 +536,18 @@ struct WatchLoop(Movable):
         state_ptr[]._cancel_cmp.invoke = _ConnectWithTimeoutState._on_cancel_cb
         state_ptr[]._cancel_cmp.context = state_ptr.unsafe_bitcast[NoneType]()
 
-        var fd = socket.raw()
         var connect_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._connect_cmp))
         )
         var addr_ptr = state_ptr[]._addr_stor.addr_unsafe_ptr()
         var addr_len = UInt64(state_ptr[]._addr_stor.addr_len())
-        self._driver.connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
+        try:
+            self._driver.connect(fd, addr_ptr, addr_len, connect_cmp_ptr)
+        except e:
+            self._connects_with_timeout.discard(
+                _slot_index(state_ptr[]._link.key)
+            )
+            raise e
 
         var timeout_cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._timeout_cmp))
@@ -491,7 +555,16 @@ struct WatchLoop(Movable):
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
-        self._driver.timeout(ts_ptr, timeout_cmp_ptr)
+        try:
+            self._driver.timeout(ts_ptr, timeout_cmp_ptr)
+        except e:
+            # The connect is out and cannot be taken back: keep the state
+            # as an orphan, cancel the connect at the next flush, and let
+            # the sweep release the slot once both have completed.
+            state_ptr[].orphan_without_timer()
+            self._pending += 1
+            self._deferred[].append(state_ptr[]._link.key)
+            raise e
 
         # 2 operations submitted → 2 completions expected.
         self._pending += 2
@@ -501,7 +574,7 @@ struct WatchLoop(Movable):
 
     def recv(
         mut self, ref socket: Socket, var buf: List[UInt8]
-    ) raises -> RecvFuture:
+    ) raises TransferFailed -> RecvFuture:
         """Submit an async recv on a socket into the given buffer.
 
         The buffer moves into the loop for the duration of the
@@ -524,9 +597,16 @@ struct WatchLoop(Movable):
             A RecvFuture owning both the operation and the buffer.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `TransferFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the errno is in
+            `error` and the buffer comes back through `take_buffer()`.
+            Nothing stays in flight in that case.
         """
+        var fd: RawHandle
+        try:
+            fd = socket.raw()
+        except e:
+            raise TransferFailed(e, FailureReason.IO, Optional(buf^))
         var state_ptr = self._recvs.alloc(_RecvFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_RecvFutureState]
@@ -536,19 +616,25 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
         )
         var buf_len = UInt32(len(state_ptr[].buf))
-        self._driver.recv(fd, buf_ptr, buf_len, cmp_ptr)
+        try:
+            self._driver.recv(fd, buf_ptr, buf_len, cmp_ptr)
+        except e:
+            var back = state_ptr[].take_buffer()
+            self._recvs.discard(_slot_index(state_ptr[]._link.key))
+            raise TransferFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
         self._pending += 1
 
         return RecvFuture(state_ptr)
 
     def send(
         mut self, ref socket: Socket, var buf: List[UInt8]
-    ) raises -> SendFuture:
+    ) raises TransferFailed -> SendFuture:
         """Submit an async send on a socket from the given buffer.
 
         The buffer moves into the loop for the duration of the
@@ -570,9 +656,16 @@ struct WatchLoop(Movable):
             A SendFuture owning both the operation and the buffer.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `TransferFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the errno is in
+            `error` and the buffer comes back through `take_buffer()`.
+            Nothing stays in flight in that case.
         """
+        var fd: RawHandle
+        try:
+            fd = socket.raw()
+        except e:
+            raise TransferFailed(e, FailureReason.IO, Optional(buf^))
         var state_ptr = self._sends.alloc(_SendFutureState(buf^))
 
         state_ptr[].completion.invoke = _dispatch[_SendFutureState]
@@ -582,19 +675,25 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
         var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
             unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
         )
         var buf_len = UInt32(len(state_ptr[].buf))
-        self._driver.send(fd, buf_ptr, buf_len, cmp_ptr)
+        try:
+            self._driver.send(fd, buf_ptr, buf_len, cmp_ptr)
+        except e:
+            var back = state_ptr[].take_buffer()
+            self._sends.discard(_slot_index(state_ptr[]._link.key))
+            raise TransferFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
         self._pending += 1
 
         return SendFuture(state_ptr)
 
     def recv_msg(
         mut self, ref socket: Socket, var msg: Message
-    ) raises -> RecvMsgFuture:
+    ) raises MessageFailed -> RecvMsgFuture:
         """Submit an async recvmsg on a socket into the given message.
 
         The message moves into the loop for the duration of the
@@ -606,8 +705,11 @@ struct WatchLoop(Movable):
         with the byte count, the peer and the flags; dropping the future
         gives it up.
 
-        On a datagram socket one call receives one datagram; bytes past
-        the window are dropped and `truncated()` reports it.
+        On a datagram socket one call receives one datagram: the count
+        is the full datagram length, bytes past the window are dropped
+        and `truncated()` reports it. On a stream socket the count is
+        the bytes copied, nothing is discarded and the next call
+        continues where this one stopped; `truncated()` is never set.
 
         Dropping the future does not remove the operation from `run()`'s
         pending total: the completion still counts, so `run()` blocks
@@ -622,9 +724,16 @@ struct WatchLoop(Movable):
             A RecvMsgFuture owning both the operation and the message.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `MessageFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the errno is in
+            `error` and the message comes back through `take_message()`.
+            Nothing stays in flight in that case.
         """
+        var fd: RawHandle
+        try:
+            fd = socket.raw()
+        except e:
+            raise MessageFailed(e, FailureReason.IO, Optional(msg^))
         var state_ptr = self._recv_msgs.alloc(
             _MessageState(msg^, receiving=True)
         )
@@ -637,24 +746,35 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
-        self._driver.recvmsg(fd, state_ptr[].msghdr_ptr(), cmp_ptr)
+        # MSG_TRUNC reports the full datagram length; on a stream it
+        # would make the kernel discard the bytes instead of copying.
+        var flags = UInt32(MSG_TRUNC) if socket.is_datagram() else UInt32(0)
+        try:
+            self._driver.recvmsg(
+                fd, state_ptr[].msghdr_ptr(), cmp_ptr, flags
+            )
+        except e:
+            var back = state_ptr[].take_message()
+            self._recv_msgs.discard(_slot_index(state_ptr[]._link.key))
+            raise MessageFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
         self._pending += 1
 
         return RecvMsgFuture(state_ptr)
 
     def send_msg(
         mut self, ref socket: Socket, var msg: Message
-    ) raises -> SendMsgFuture:
+    ) raises MessageFailed -> SendMsgFuture:
         """Submit an async sendmsg on a socket from the given message.
 
         The message moves into the loop for the duration of the
         operation. Its whole payload is offered; a peer set with
         `Message.set_peer` is the destination (required on an
-        unconnected datagram socket); control records appended with
-        `Message.set_ecn` go out with it. `SendMsgFuture.result()` hands
-        the message back unchanged with the byte count; dropping the
-        future gives it up.
+        unconnected datagram socket); the control record `Message.set_ecn`
+        wrote (it replaces whatever the area held) goes out with it.
+        `SendMsgFuture.result()` hands the message back unchanged with
+        the byte count; dropping the future gives it up.
 
         Args:
             socket: The socket to send on.
@@ -664,9 +784,16 @@ struct WatchLoop(Movable):
             A SendMsgFuture owning both the operation and the message.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `MessageFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the errno is in
+            `error` and the message comes back through `take_message()`.
+            Nothing stays in flight in that case.
         """
+        var fd: RawHandle
+        try:
+            fd = socket.raw()
+        except e:
+            raise MessageFailed(e, FailureReason.IO, Optional(msg^))
         var state_ptr = self._send_msgs.alloc(
             _MessageState(msg^, receiving=False)
         )
@@ -679,8 +806,14 @@ struct WatchLoop(Movable):
             unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
         )
 
-        var fd = socket.raw()
-        self._driver.sendmsg(fd, state_ptr[].msghdr_ptr(), cmp_ptr)
+        try:
+            self._driver.sendmsg(fd, state_ptr[].msghdr_ptr(), cmp_ptr)
+        except e:
+            var back = state_ptr[].take_message()
+            self._send_msgs.discard(_slot_index(state_ptr[]._link.key))
+            raise MessageFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
         self._pending += 1
 
         return SendMsgFuture(state_ptr)
@@ -689,7 +822,7 @@ struct WatchLoop(Movable):
         Addr: SocketAddrStor
     ](
         mut self, ref socket: Socket, var buf: List[UInt8], ref addr: Addr
-    ) raises -> SendMsgFuture:
+    ) raises MessageFailed -> SendMsgFuture:
         """Submit an async send of `buf` to `addr` on an unconnected datagram socket.
 
         A wrapper over `send_msg`: the buffer becomes a `Message` with
@@ -709,8 +842,10 @@ struct WatchLoop(Movable):
             A SendMsgFuture owning both the operation and the buffer.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `MessageFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the buffer comes
+            back inside the message `take_message()` returns. Nothing
+            stays in flight in that case.
         """
         var msg = Message(buf^)
         msg.set_peer(addr)
@@ -718,12 +853,14 @@ struct WatchLoop(Movable):
 
     def recv_from(
         mut self, ref socket: Socket, var buf: List[UInt8]
-    ) raises -> RecvMsgFuture:
+    ) raises MessageFailed -> RecvMsgFuture:
         """Submit an async receive of one datagram and its sender into `buf`.
 
         A wrapper over `recv_msg` with no control area: the buffer's
         length is the window, and the result's `peer_v4()`/`peer_v6()`
-        decode the sender.
+        decode the sender. On a datagram socket the count is the full
+        datagram length even past the window; on a stream socket it is
+        the bytes copied and nothing is discarded.
 
         Dropping the future does not remove the operation from `run()`'s
         pending total: the completion still counts, so `run()` blocks
@@ -738,8 +875,10 @@ struct WatchLoop(Movable):
             A RecvMsgFuture owning both the operation and the buffer.
 
         Raises:
-            If the socket handle is invalid or the driver cannot accept
-            the operation.
+            `MessageFailed` with `reason == IO` if the socket handle is
+            invalid or the driver refuses the operation; the buffer comes
+            back inside the message `take_message()` returns. Nothing
+            stays in flight in that case.
         """
         return self.recv_msg(socket, Message(buf^))
 
@@ -754,6 +893,10 @@ struct WatchLoop(Movable):
 
         Returns:
             A TimerFuture representing the in-flight timeout.
+
+        Raises:
+            If the driver cannot accept the operation; nothing stays in
+            flight in that case.
         """
         var ts = Timeout.from_ms(Int64(timeout_ms))
         var state_ptr = self._timers.alloc(_TimerFutureState(ts))
@@ -768,7 +911,11 @@ struct WatchLoop(Movable):
         var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
             unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
         )
-        self._driver.timeout(ts_ptr, cmp_ptr)
+        try:
+            self._driver.timeout(ts_ptr, cmp_ptr)
+        except e:
+            self._timers.discard(_slot_index(state_ptr[]._link.key))
+            raise e
         self._pending += 1
 
         return TimerFuture(state_ptr)
@@ -780,27 +927,40 @@ struct WatchLoop(Movable):
         requires; `capacity()` reports the rounded value. The memory is
         zeroed and registered with the driver as one provided-buffer
         group, and lives until the pool is released: handle dropped,
-        every lease returned, every stream using it ended.
+        every lease returned, every stream using it ended. The group id
+        is recycled once the pool is released, so the number of pools
+        over the loop's life is unbounded.
 
         Args:
-            count: Number of buffers wanted, in 1..65536.
-            size: Bytes per buffer (at least 64).
+            count: Number of buffers wanted, in 1..32768 (the largest
+                   ring the kernel registers).
+            size: Bytes per buffer, in 64..2^24.
 
         Returns:
             The pool handle.
 
+        The two range checks make `capacity * size` at most 2^39, so
+        the allocation size cannot overflow.
+
         Raises:
-            IOError(EINVAL) if `size` is below 64 or `count` is outside
-            1..65536; IOError(ENOSPC) once every group id has been used;
-            whatever the driver raises if the group cannot be registered.
+            IOError(EINVAL) if `size` is outside 64..2^24 or `count` is
+            outside 1..32768; IOError(ENOSPC) while 65536 pools are
+            live; whatever the driver raises if the group cannot be
+            registered.
         """
-        if size < _MIN_BUFFER_SIZE or count < 1 or count > _MAX_BUFFER_COUNT:
+        if size < _MIN_BUFFER_SIZE or size > _MAX_BUFFER_SIZE:
             raise IOError(positive_errno=EINVAL)
-        if self._next_group_id == UInt16.MAX:
-            raise IOError(positive_errno=ENOSPC)
+        if count < 1 or count > _MAX_BUFFER_COUNT:
+            raise IOError(positive_errno=EINVAL)
         var capacity = _next_pow2(count)
-        var group_id = self._next_group_id
-        self._next_group_id += 1
+        var group_id: UInt16
+        if len(self._free_group_ids) > 0:
+            group_id = self._free_group_ids.pop()
+        elif self._next_group_id < _GROUP_ID_COUNT:
+            group_id = UInt16(self._next_group_id)
+            self._next_group_id += 1
+        else:
+            raise IOError(positive_errno=ENOSPC)
 
         var total = capacity * size
         var memory = unsafe_alloc[UInt8](total)
@@ -814,7 +974,8 @@ struct WatchLoop(Movable):
                 memory, UInt32(size), capacity, group_id
             )
         except e:
-            # Nothing holds the state: settle it at the next sweep.
+            # Nothing holds the state: settle it at the next sweep, which
+            # also hands the never-registered id back.
             state_ptr[].mark_owner_dropped()
             raise e
         state_ptr[].registered = True
@@ -826,7 +987,7 @@ struct WatchLoop(Movable):
         ref pool: BufferPool,
         *,
         control_capacity: Int = 0,
-    ) raises -> DatagramStream:
+    ) raises IOError -> DatagramStream:
         """Arm a multishot recvmsg on `socket` delivering into `pool`.
 
         Each datagram lands in one pool buffer behind a 16-byte delivery
@@ -843,6 +1004,17 @@ struct WatchLoop(Movable):
         Mixing a one-shot `recv_msg` with an armed stream on the same
         socket is undefined: the two race for datagrams on both backends.
 
+        The backends diverge on a socket that will never yield a
+        datagram again. On epoll a wake that yields no datagram but
+        reports an error or hang-up ends the stream with the socket's
+        pending error, else ECONNRESET for a read-shut socket, else
+        EIO; an `IP_RECVERR` socket keeps reporting an error for as
+        long as its error queue holds a record, so drain that queue
+        (`MSG_ERRQUEUE`) before arming the stream again, or the next
+        wake ends it the same way. On io_uring a read-shut or errored
+        socket never terminates the stream: it stays armed with no
+        completion; drop the stream to release it.
+
         Args:
             socket: A bound datagram socket.
             pool: The pool to deliver into; referenced until the stream ends.
@@ -852,15 +1024,19 @@ struct WatchLoop(Movable):
             The stream handle.
 
         Raises:
-            IOError(EINVAL) if the pool belongs to another loop or to a
-            loop that is gone, if it is closing, if `control_capacity`
-            is negative, or if the pool's buffers are smaller than
-            16 + 28 + control_capacity (every delivery would truncate); a
-            driver error if the operation cannot be queued.
+            IOError(EINVAL) if `socket` is not a datagram socket (the
+            multishot asks for MSG_TRUNC, which on a stream socket
+            discards the bytes it reports), if the pool belongs to
+            another loop or to a loop that is gone, if it is closing,
+            if `control_capacity` is negative, or if the pool's buffers
+            are smaller than 16 + 28 + control_capacity (every delivery
+            would truncate); the driver's errno as an IOError if the
+            operation cannot be queued.
         """
         var pool_state = pool._state
         if (
-            pool_state[]._loop_gone
+            not socket.is_datagram()
+            or pool_state[]._loop_gone
             or Int(pool_state[]._shared) != Int(self._shared)
             or pool_state[].closing
             or control_capacity < 0
@@ -893,9 +1069,10 @@ struct WatchLoop(Movable):
             )
         except e:
             # Nothing holds the state: disarm it and settle at the next sweep.
-            state_ptr[]._disarm(IOError.from_error(e))
+            var err = IOError.from_error(e)
+            state_ptr[]._disarm(err)
             state_ptr[].mark_owner_dropped()
-            raise e
+            raise err
         return DatagramStream(state_ptr)
 
     def step(mut self, timeout_ms: Int = -1) raises -> Int:
@@ -915,7 +1092,10 @@ struct WatchLoop(Movable):
         3. Dispatch every completion available at that moment.
         4. Flush deferred submissions again, then sweep settled slots.
         5. Return the number of completions dispatched in 3 that belong
-           to a handle the caller can observe.
+           to a handle the caller can observe: one-shot results,
+           deliveries queued for a held stream and the terminal of a
+           held stream. Nothing of a stream whose handle has dropped is
+           counted, its terminal included.
 
         A re-arm queued in step 4 is submitted in step 1 of the next
         call. The loop's own bookkeeping completions are dispatched but
@@ -937,6 +1117,11 @@ struct WatchLoop(Movable):
         Returns:
             The number of observable completions dispatched, 0 when the
             bound expired first.
+
+        Raises:
+            If the driver's tick or a deferred flush fails. As with
+            `run()`, a `step()` that raises leaves the WatchLoop in an
+            undefined state and it must not be reused.
         """
         var internal_pre = self._flush_deferred()
         debug_assert(
@@ -958,9 +1143,9 @@ struct WatchLoop(Movable):
         This is the "drain" verb: submit futures, call run(), read
         results. It counts one-shot operations only; an operation that
         re-arms itself is not pending, so with nothing but such work
-        armed run() returns immediately — drive those with `step()`.
-        `CompletionLoop` is where `run_forever()`, `run_once()` and
-        `poll()` live.
+        armed run() returns without blocking — drive those with
+        `step()`. `CompletionLoop` is where `run_forever()`,
+        `run_once()` and `poll()` live.
 
         _pending tracks one-shot completions in flight. tick() returns
         the number of dispatched completions; run() subtracts only the
@@ -969,9 +1154,12 @@ struct WatchLoop(Movable):
         recorded during the tick. Callbacks never touch the counter —
         they only set result state and the tally.
 
-        Each iteration first flushes the deferred queue, so a re-arm or
-        cancel queued at the end of a previous `step()` is submitted
-        before run() blocks, then ticks, then flushes again (a
+        The deferred queue is flushed once before anything else, even
+        when nothing is pending: a re-arm or cancel queued at the end of
+        a previous `step()` (or by `rearm()` since) is submitted, so a
+        stream never waits for the next `step()` because run() had
+        nothing to drain. With nothing pending run() returns right after
+        that flush. Each iteration then ticks and flushes again (a
         composite's cancel adds 1 to _pending for its own completion;
         composites whose three completions have all arrived are
         forgotten) and settles the slots whose key was queued during the
@@ -982,8 +1170,8 @@ struct WatchLoop(Movable):
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
         """
+        _ = self._flush_deferred()
         while self._pending > 0:
-            _ = self._flush_deferred()
             self._shared[].reset_tally()
             var dispatched = self._driver.tick(wait=True)
             self._pending -= (
@@ -1007,8 +1195,18 @@ struct WatchLoop(Movable):
         re-queued while not yet done so the next flush sees it again. A
         stream submits its pending re-arm and is not re-queued here: it
         pushes its own key again whenever it has something new to defer.
-        The `is_active` check on a stream key is defensive: a stale key
+        The `is_active` check on every key is defensive: a stale key
         must never dereference a settled or reused slot.
+
+        The walk is exception-safe. A composite's cancel submission can
+        raise (a submission queue still full after a flush); the cancel
+        stays requested in that state, so the key that raised is put
+        back on the queue unless its state is done, every key not yet
+        walked follows it, the spare list is cleared and the error is
+        re-raised. The next flush then sees exactly the keys it would
+        have seen had the walk never been interrupted, and the sweep
+        that follows a tick cannot settle a slot whose key is still
+        parked because a parked key belongs to a state that is not done.
 
         Returns:
             The number of completions dispatched since the previous
@@ -1017,24 +1215,60 @@ struct WatchLoop(Movable):
         """
         var internal = 0
         swap(self._deferring, self._deferred[])
-        for key in self._deferring:
-            var kind = key & ((1 << _KIND_BITS) - 1)
-            var index = key >> _KIND_BITS
-            debug_assert(
-                kind == _KIND_CONNECT_WITH_TIMEOUT or kind == _KIND_STREAM,
-                "only composites and streams defer submissions",
-            )
-            if kind == _KIND_STREAM:
-                if self._streams.is_active(index):
-                    self._streams._slot(index)[].flush_deferred(self._driver)
-                continue
-            var state_ptr = self._connects_with_timeout._slot(index)
-            internal += state_ptr[].take_internal_completions()
-            self._pending += state_ptr[].flush_cancel(self._driver)
-            if not state_ptr[].done:
-                self._deferred[].append(key)
+        var walked = 0
+        try:
+            while walked < len(self._deferring):
+                var key = self._deferring[walked]
+                walked += 1
+                var kind = key & ((1 << _KIND_BITS) - 1)
+                var index = _slot_index(key)
+                debug_assert(
+                    kind == _KIND_CONNECT_WITH_TIMEOUT or kind == _KIND_STREAM,
+                    "only composites and streams defer submissions",
+                )
+                if kind == _KIND_STREAM:
+                    if self._streams.is_active(index):
+                        self._streams._slot(index)[].flush_deferred(
+                            self._driver
+                        )
+                    continue
+                if not self._connects_with_timeout.is_active(index):
+                    continue
+                var state_ptr = self._connects_with_timeout._slot(index)
+                internal += state_ptr[].take_internal_completions()
+                self._pending += state_ptr[].flush_cancel(self._driver)
+                if not state_ptr[].done:
+                    self._deferred[].append(key)
+        except e:
+            self._requeue_after_failed_flush(walked)
+            raise e
         self._deferring.clear()
         return internal
+
+    def _requeue_after_failed_flush(mut self, walked: Int):
+        """Put the interrupted flush's remaining keys back on the deferred list.
+
+        Only a composite's cancel submission can raise: a stream's
+        `flush_deferred` swallows its driver errors and re-queues itself.
+
+        Args:
+            walked: How many keys of the spare list the walk consumed,
+                    the last of them being the composite whose cancel
+                    submission raised. That key goes back unless its
+                    state is done; the keys after it go back untouched.
+        """
+        var failed = self._deferring[walked - 1]
+        var index = _slot_index(failed)
+        debug_assert(
+            (failed & ((1 << _KIND_BITS) - 1)) == _KIND_CONNECT_WITH_TIMEOUT,
+            "only a composite's flush can raise",
+        )
+        if self._connects_with_timeout.is_active(index):
+            if not self._connects_with_timeout._slot(index)[].done:
+                self._deferred[].append(failed)
+        for i in range(walked, len(self._deferring)):
+            self._deferred[].append(self._deferring[i])
+        self._deferring.clear()
 
     def _sweep_in_flight(mut self):
         """Settle every slot queued since the last sweep.
@@ -1042,9 +1276,12 @@ struct WatchLoop(Movable):
         Called after each tick. The queue holds the key of every slot
         whose completion has arrived and whose handle has let go since
         the last sweep; each key is routed to its slab, which releases
-        the slot. The queue is swapped with a spare list before it is
-        walked, so nothing can push to the list being iterated and no
-        list is allocated per tick.
+        the slot. A pool's driver group is unregistered here, before its
+        slot is released, and its group id goes back on the free list
+        only when the driver confirmed the group is gone; an id whose
+        unregister failed is simply never reused. The queue is swapped
+        with a spare list before it is walked, so nothing can push to
+        the list being iterated and no list is allocated per tick.
         """
         swap(self._settling, self._settle[])
         for key in self._settling:
@@ -1067,7 +1304,13 @@ struct WatchLoop(Movable):
             elif kind == _KIND_STREAM:
                 self._streams.settle(index)
             elif kind == _KIND_POOL:
-                self._pools.settle(index)
+                if self._pools.is_active(index):
+                    var pool = self._pools._slot(index)
+                    var group_id = pool[].group_id
+                    var reusable = pool[].release_group()
+                    self._pools.settle(index)
+                    if reusable:
+                        self._free_group_ids.append(group_id)
             else:
                 self._connects_with_timeout.settle(index)
         self._settling.clear()

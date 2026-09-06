@@ -66,6 +66,7 @@ from boucle.socle.platform import (
     SO_RCVTIMEO,
     SO_SNDTIMEO,
     SO_ERROR,
+    SO_TYPE,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
     IP_RECVTOS,
@@ -477,13 +478,51 @@ def _getpeername(fd: RawHandle) raises IOError -> String:
 
 
 struct Socket(Movable):
-    """A platform-agnostic, non-blocking socket."""
+    """A platform-agnostic, non-blocking socket.
+
+    Fields:
+        _handle: The owned descriptor.
+        _type: The `SOCK_*` type, recorded at construction so the
+               completion loop can tell a datagram socket from a
+               stream without a syscall per operation.
+    """
 
     var _handle: OwnedHandle
+    var _type: SocketType
+
+    def __init__(out self, var handle: OwnedHandle):
+        """Adopt an existing descriptor, reading its type from `SO_TYPE`.
+
+        A descriptor whose type cannot be read (not a socket, or a
+        socket the kernel refuses to describe) is treated as a stream:
+        that is the side where a wrong guess loses nothing, since the
+        datagram-only behaviours (asking for the full datagram length)
+        are simply not requested.
+
+        Args:
+            handle: The descriptor to own.
+        """
+        self._handle = handle^
+        self._type = SocketType.STREAM
+        try:
+            self._type = SocketType(
+                unsafe_id=_getsockopt_int(
+                    self._handle._raw, Int32(SOL_SOCKET), Int32(SO_TYPE)
+                )
+            )
+        except:
+            pass
 
     @always_inline
-    def __init__(out self, var handle: OwnedHandle):
+    def __init__(out self, var handle: OwnedHandle, *, type: SocketType):
+        """Adopt a descriptor whose `SOCK_*` type the caller already knows.
+
+        Args:
+            handle: The descriptor to own.
+            type: Its socket type, as passed to `socket(2)`.
+        """
         self._handle = handle^
+        self._type = type
 
     @always_inline
     def __init__(out self, *, deinit move: Self):
@@ -493,6 +532,17 @@ struct Socket(Movable):
             move: The source Socket to move from.
         """
         self._handle = move._handle^
+        self._type = move._type
+
+    @always_inline
+    def is_datagram(self) -> Bool:
+        """Return True if this is a `SOCK_DGRAM` socket.
+
+        Returns:
+            True for a datagram socket, False for a stream or any other
+            type (including a descriptor whose type could not be read).
+        """
+        return self._type == SocketType.DGRAM
 
     @staticmethod
     def tcp_v4() raises IOError -> Self:
@@ -503,7 +553,8 @@ struct Socket(Movable):
                 SocketType.STREAM,
                 SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
                 Protocol.TCP,
-            )
+            ),
+            type=SocketType.STREAM,
         )
 
     @staticmethod
@@ -515,7 +566,8 @@ struct Socket(Movable):
                 SocketType.STREAM,
                 SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
                 Protocol.TCP,
-            )
+            ),
+            type=SocketType.STREAM,
         )
 
     @staticmethod
@@ -527,7 +579,8 @@ struct Socket(Movable):
                 SocketType.DGRAM,
                 SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
                 Protocol.UDP,
-            )
+            ),
+            type=SocketType.DGRAM,
         )
 
     @staticmethod
@@ -539,7 +592,8 @@ struct Socket(Movable):
                 SocketType.DGRAM,
                 SocketFlags.NONBLOCK | SocketFlags.CLOEXEC,
                 Protocol.UDP,
-            )
+            ),
+            type=SocketType.DGRAM,
         )
 
     @staticmethod
@@ -579,7 +633,7 @@ struct Socket(Movable):
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
         _sys_listen(handle, Backlog(backlog))
-        return Self(handle^)
+        return Self(handle^, type=SocketType.STREAM)
 
     @staticmethod
     def udp_listener_v6(port: UInt16) raises IOError -> Self:
@@ -614,7 +668,7 @@ struct Socket(Movable):
         )
         var addr = SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 0, port=port)
         _sys_bind(handle, addr)
-        return Self(handle^)
+        return Self(handle^, type=SocketType.DGRAM)
 
     def bind[Addr: SocketAddrStor](self, ref addr: Addr) raises IOError:
         """Binds the socket to the given address.
@@ -653,7 +707,9 @@ struct Socket(Movable):
             pending connection the errno is EAGAIN.
         """
         var flags = Int32(O_NONBLOCK) | Int32(O_CLOEXEC)
-        return Self(_own(_sys_accept4(self._handle, flags)))
+        return Self(
+            _own(_sys_accept4(self._handle, flags)), type=SocketType.STREAM
+        )
 
     def set_reuse_addr(self, value: Bool = True) raises IOError:
         """Sets `SO_REUSEADDR` on the socket.
@@ -879,7 +935,7 @@ struct Socket(Movable):
         var handle = _sys_socket(family, type, SocketFlags.CLOEXEC, protocol)
         var stor = addr.addr_stor()
         _sys_connect(handle, stor)
-        return Self(handle^)
+        return Self(handle^, type=type)
 
     @staticmethod
     def tcp_connect(ref addr: SocketAddrV4) raises IOError -> Self:

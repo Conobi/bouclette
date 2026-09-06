@@ -30,6 +30,7 @@ from boucle.net.options import AddrFamily
 from boucle.socle.platform import (
     cmsghdr,
     sockaddr_in,
+    sockaddr_in6,
     EAFNOSUPPORT,
     EINVAL,
     IP_TOS,
@@ -107,6 +108,8 @@ struct ControlMessages[origin: ImmOrigin](ImplicitlyCopyable, Movable):
     Records are 8-byte aligned (CMSG_ALIGN on 64-bit Linux). A record
     whose `cmsg_len` is smaller than the header, or that runs past the
     end of the area, ends iteration: nothing after it can be trusted.
+    A `__next__` past the end returns an empty record and leaves the
+    walker exhausted; it never reads beyond the span.
 
     Parameters:
         origin: The origin of the control area being walked.
@@ -125,7 +128,10 @@ struct ControlMessages[origin: ImmOrigin](ImplicitlyCopyable, Movable):
         self._offset = 0
 
     def __iter__(self) -> Self:
-        """Return a fresh cursor over the same records so a walk can restart.
+        """Return a copy of this cursor, positioned where this one is.
+
+        A walk resumes from the current record, not from the first: to
+        restart, build a new `ControlMessages` over the same bytes.
 
         Returns:
             A copy positioned wherever this one is.
@@ -156,9 +162,16 @@ struct ControlMessages[origin: ImmOrigin](ImplicitlyCopyable, Movable):
     def __next__(mut self) -> ControlMessage[Self.origin]:
         """Return the record at the cursor and advance past its padding.
 
+        Past the end, or on a malformed record, nothing is read: the
+        cursor moves to the end of the span and an empty record (level
+        0, type 0, no data) comes back, on this call and every later one.
+
         Returns:
-            The current record.
+            The current record, or an empty one once exhausted.
         """
+        if not self.__has_next__():
+            self._offset = len(self._bytes)
+            return ControlMessage[Self.origin](0, 0, self._bytes[0:0])
         var hdr = size_of[cmsghdr]()
         var cmsg_len = self._read_len(self._offset)
         var level = self._read_i32(self._offset + 8)
@@ -241,24 +254,34 @@ struct Message(Movable):
     shares the bytes with the kernel.
 
     For a send: the payload's whole length is offered, the peer (if set)
-    is the destination, and the control records appended by `set_ecn`
-    go out with the datagram. For a receive: the payload's length is the
-    window, the peer slot receives the sender's address, and up to
+    is the destination, and the control record written by `set_ecn`
+    goes out with the datagram. For a receive: the payload's length is
+    the window, the peer slot receives the sender's address, and up to
     `control_capacity` bytes of control records are collected.
+
+    The control area keeps two lengths. The bytes the kernel wrote on
+    the last receive are only ever read back (`MessageResult.control`);
+    a send never offers them, so a peer cannot pick the TOS, the
+    pktinfo or anything else of a reply by what it sent. The bytes
+    `set_ecn` wrote are the only ones a send offers. Both start at the
+    front of the area, so at most one of the two is non-zero at a time.
 
     Fields:
         _payload: The data buffer, moved in.
         _peer: The peer address slot; `addr_len() == 0` when unset.
         _control: The control area, allocated at full `control_capacity`
-                  bytes up front; writers (`set_ecn`) fill bytes in
-                  place at `_control_len` rather than appending.
-        _control_len: How many of `_control`'s bytes are in use.
+                  bytes up front; writers fill bytes in place.
+        _control_received: How many bytes of `_control` the kernel wrote
+                           on the last receive. Never offered to a send.
+        _control_appended: How many bytes of `_control` hold the record
+                           `set_ecn` wrote. The only bytes a send offers.
     """
 
     var _payload: List[UInt8]
     var _peer: SocketAddrStorAny
     var _control: List[UInt8]
-    var _control_len: Int
+    var _control_received: Int
+    var _control_appended: Int
 
     def __init__(
         out self, var payload: List[UInt8], *, control_capacity: Int = 0
@@ -269,16 +292,14 @@ struct Message(Movable):
             payload: The bytes to send, or the window to receive into.
             control_capacity: Bytes reserved for control records. Each
                               TOS/TCLASS record takes 24; a receiver that
-                              wants ECN needs at least that much. Must not
-                              be negative.
+                              wants ECN needs at least that much. A
+                              negative value reserves nothing.
         """
-        debug_assert(
-            control_capacity >= 0, "control_capacity must not be negative"
-        )
         self._payload = payload^
         self._peer = SocketAddrStorAny()
-        self._control = List[UInt8](length=control_capacity, fill=0)
-        self._control_len = 0
+        self._control = List[UInt8](length=max(control_capacity, 0), fill=0)
+        self._control_received = 0
+        self._control_appended = 0
 
     def set_peer[Addr: SocketAddrStor](mut self, ref addr: Addr):
         """Set the destination for a send.
@@ -303,11 +324,14 @@ struct Message(Movable):
     def set_ecn(
         mut self, mark: UInt8, family: Optional[AddrFamily] = None
     ) raises IOError:
-        """Append a control record carrying an ECN codepoint.
+        """Write the control record carrying an ECN codepoint.
 
-        Appends an `IP_TOS` record (one byte) or an `IPV6_TCLASS` record
-        (a four-byte int). The family is derived from the peer when one
-        is set and `family` is None; otherwise `family` is required.
+        Writes an `IP_TOS` record (one byte) or an `IPV6_TCLASS` record
+        (a four-byte int) at the start of the control area, replacing
+        any record an earlier call wrote and discarding whatever the
+        kernel wrote on the last receive: received records never go out
+        with a send. The family is derived from the peer when one is set
+        and `family` is None; otherwise `family` is required.
 
         A peer that is an IPv4-mapped IPv6 address (::ffff:a.b.c.d)
         derives AF_INET, not AF_INET6: the kernel's IPv6 UDP send path
@@ -355,9 +379,9 @@ struct Message(Movable):
             raise IOError(positive_errno=EINVAL)
         var hdr = size_of[cmsghdr]()
         var record = _cmsg_align(hdr + data_len)
-        if self._control_len + record > len(self._control):
+        if record > len(self._control):
             raise IOError(positive_errno=EINVAL)
-        var p = self._control.unsafe_ptr().unsafe_offset(self._control_len)
+        var p = self._control.unsafe_ptr()
         for i in range(record):
             p[unsafe_offset=i] = UInt8(0)
         p.unsafe_bitcast[UInt64]().unsafe_store[alignment=1](
@@ -375,7 +399,17 @@ struct Message(Movable):
             p.unsafe_offset(hdr).unsafe_bitcast[Int32]().unsafe_store[
                 alignment=1
             ](Int32(mark & 0x03))
-        self._control_len += record
+        self._control_appended = record
+        self._control_received = 0
+
+    def clear_control(mut self):
+        """Drop every control record: received and written alike.
+
+        The area keeps its capacity; a send offers no control bytes and
+        `control()` walks nothing until `set_ecn` writes again.
+        """
+        self._control_received = 0
+        self._control_appended = 0
 
     def payload(ref self) -> ref[self._payload] List[UInt8]:
         """Borrow the payload buffer.
@@ -404,26 +438,34 @@ struct Message(Movable):
     def control(ref self) -> ControlMessages[origin_of(self._control)]:
         """Walk the control records currently held.
 
-        For a message about to be sent these are the records appended
-        by `set_ecn`; for a received one they are what the kernel wrote.
+        Whatever occupies the area: the records the kernel wrote on the
+        last receive, or the record `set_ecn` wrote since (received or
+        appended, never both). The two share the front of the area, so
+        only one of them is present at a time.
 
         Returns:
             An iterator over the records.
         """
-        return ControlMessages(Span(self._control)[: self._control_len])
+        return ControlMessages(
+            Span(self._control)[
+                : max(self._control_received, self._control_appended)
+            ]
+        )
 
-    def _set_control_len(mut self, len: Int):
-        """Record how many control bytes the kernel wrote.
+    def _set_control_received(mut self, len: Int):
+        """Record how many control bytes the kernel wrote on a receive.
 
         Clamped to the capacity: the kernel truncates and flags
         MSG_CTRUNC rather than overrunning, but the length it reports
-        is not trusted past the area.
+        is not trusted past the area. The kernel overwrote the front of
+        the area, so any record `set_ecn` wrote before is gone too.
 
         Args:
             len: The `msg_controllen` written back by the kernel.
         """
         var cap = self.control_capacity()
-        self._control_len = len if len < cap else cap
+        self._control_received = len if len < cap else cap
+        self._control_appended = 0
 
 
 # ===----------------------------------------------------------------------=== #
@@ -479,21 +521,30 @@ struct MessageResult(Movable):
         """Return the family of the peer address.
 
         Returns:
-            UNSPEC when no name was written (a send, or a connected
-            stream socket), otherwise INET or INET6.
+            UNSPEC when the slot holds no address (a receive on a
+            connected stream socket writes none; a send keeps the
+            destination it was given), otherwise INET or INET6.
         """
         return self._msg.peer_family()
 
     def peer_v4(self) raises IOError -> SocketAddrV4:
         """Decode the peer as an IPv4 address.
 
+        The name the kernel wrote must cover a whole `sockaddr_in`: a
+        matching family byte alone is not enough, since the rest of the
+        slot would be whatever a previous peer left there.
+
         Returns:
             The peer address and port.
 
         Raises:
-            IOError(EAFNOSUPPORT) when the peer is not AF_INET.
+            IOError(EAFNOSUPPORT) when the peer is not AF_INET or the
+            written name is shorter than a `sockaddr_in`.
         """
-        if self.peer_family() != AddrFamily.INET:
+        if (
+            Int(self._msg._peer.addr_len()) < size_of[sockaddr_in]()
+            or self.peer_family() != AddrFamily.INET
+        ):
             raise IOError(positive_errno=EAFNOSUPPORT)
         var stor = SocketAddrStorV4()
         stor.addr = Pointer(to=self._msg._peer.addr).unsafe_bitcast[
@@ -505,15 +556,20 @@ struct MessageResult(Movable):
         """Decode the peer as an IPv6 address.
 
         A dual-stack socket reports IPv4 peers as mapped addresses; see
-        `SocketAddrV6.is_ipv4_mapped`.
+        `SocketAddrV6.is_ipv4_mapped`. The name the kernel wrote must
+        cover a whole `sockaddr_in6`, as for `peer_v4`.
 
         Returns:
             The peer address, port and scope id.
 
         Raises:
-            IOError(EAFNOSUPPORT) when the peer is not AF_INET6.
+            IOError(EAFNOSUPPORT) when the peer is not AF_INET6 or the
+            written name is shorter than a `sockaddr_in6`.
         """
-        if self.peer_family() != AddrFamily.INET6:
+        if (
+            Int(self._msg._peer.addr_len()) < size_of[sockaddr_in6]()
+            or self.peer_family() != AddrFamily.INET6
+        ):
             raise IOError(positive_errno=EAFNOSUPPORT)
         var stor = SocketAddrStorV6()
         stor.addr = self._msg._peer.addr
@@ -522,10 +578,15 @@ struct MessageResult(Movable):
     def control(ref self) -> ControlMessages[origin_of(self._msg._control)]:
         """Walk the control records the kernel wrote.
 
+        Only the bytes written by the receive are walked; for a send
+        result there are none.
+
         Returns:
             An iterator over `msg_controllen` bytes of records.
         """
-        return self._msg.control()
+        return ControlMessages(
+            Span(self._msg._control)[: self._msg._control_received]
+        )
 
     def truncated(self) -> Bool:
         """Return True when the datagram did not fit the payload window.
@@ -559,10 +620,16 @@ struct MessageResult(Movable):
     def take_message(deinit self) -> Message:
         """Take the message back, consuming this result.
 
+        The records the kernel wrote on the receive are dropped on the
+        way out: a message reused for a reply starts with no control
+        bytes to offer, so nothing the peer sent is replayed to it.
+
         Returns:
             The message the operation used, payload storage unchanged.
         """
-        return self._msg^
+        var msg = self._msg^
+        msg._control_received = 0
+        return msg^
 
 
 # ===----------------------------------------------------------------------=== #
@@ -677,7 +744,9 @@ struct DeliveryHeader[origin: Origin](Copyable, Movable):
 
         Prefer `parse`, which checks the length. This constructor is for
         callers that guarantee `len(buf) >= DELIVERY_HEADER_LEN`, such as
-        a `Datagram` over a pool buffer of at least 64 bytes.
+        a `Datagram` over a pool buffer of at least 64 bytes. A shorter
+        buffer is not undefined behaviour either: every field reads as
+        zero and every region is empty.
 
         Args:
             buf: The provided buffer, header first.
@@ -713,14 +782,21 @@ struct DeliveryHeader[origin: Origin](Copyable, Movable):
         return Self(buf, name_capacity, control_capacity)
 
     def _read_u32(self, offset: Int) -> UInt32:
-        """Read the little-endian UInt32 at `offset`.
+        """Read the little-endian UInt32 at `offset`, 0 past the buffer.
+
+        A buffer too short to hold the field (an empty span from a
+        lease whose pool no longer addresses a buffer) reads as zero, so
+        every accessor degrades to an empty region, UNSPEC and no flags
+        instead of indexing past the end.
 
         Args:
             offset: One of the four field offsets.
 
         Returns:
-            The field value.
+            The field value, or 0 when the field lies past the buffer.
         """
+        if offset + 4 > len(self._buf):
+            return 0
         return (
             UInt32(self._buf[offset])
             | (UInt32(self._buf[offset + 1]) << 8)

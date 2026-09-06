@@ -1,16 +1,17 @@
 """Verify the runtime probe selects the correct backend.
 
-Probes io_uring availability independently, then asserts AUTO
-selected the matching backend. Also verifies forced-backend
-construction and rejection.
+Pins the selection rule as a truth table, probes io_uring availability
+independently, then asserts AUTO selected the matching backend. Also
+verifies forced-backend construction and rejection.
 """
 
 from boucle.proactor.completion_loop import CompletionLoop
 from boucle.watch.loop import WatchLoop
 from boucle.drivers import DriverFeature
+from boucle.drivers.auto import _native_datagram_path_rule
 from boucle.drivers.backend import Backend
 from boucle.drivers.io_uring import IoUringDriver
-from std.testing import assert_true
+from std.testing import assert_false, assert_true
 
 
 def _has_io_uring() -> Bool:
@@ -101,7 +102,16 @@ def test_forced_io_uring_skips_the_rule() raises:
     assert_true(wl.backend() is Backend.IO_URING)
 
 
+def test_native_datagram_path_rule_truth_table() raises:
+    """AUTO keeps io_uring only when both datagram features are native."""
+    assert_true(_native_datagram_path_rule(True, True))
+    assert_false(_native_datagram_path_rule(True, False))
+    assert_false(_native_datagram_path_rule(False, True))
+    assert_false(_native_datagram_path_rule(False, False))
+
+
 def main() raises:
+    test_native_datagram_path_rule_truth_table()
     test_auto_selects_correct_backend()
     test_forced_epoll_always_works()
     test_forced_io_uring_behavior()
