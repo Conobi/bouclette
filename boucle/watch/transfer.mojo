@@ -71,14 +71,16 @@ struct TransferResult(Movable):
 
         The first `count` bytes of the buffer: what was received, or
         what was sent. Borrows the buffer, so the result must outlive
-        the span. Clamped to the buffer's length: under MSG_TRUNC
-        `count` can be larger than the buffer the caller offered.
+        the span. Clamped at both ends: under MSG_TRUNC `count` can be
+        larger than the buffer the caller offered, and a count below 0
+        yields an empty span.
 
         Returns:
-            A span over the transferred bytes, or the whole buffer when
-            `count` exceeds its length.
+            A span over the transferred bytes, the whole buffer when
+            `count` exceeds its length, or nothing when `count` is
+            negative.
         """
-        return Span(self._buf)[: min(self.count, len(self._buf))]
+        return Span(self._buf)[: min(max(self.count, 0), len(self._buf))]
 
     def take_buffer(deinit self) -> List[UInt8]:
         """Take the buffer back, consuming this result.

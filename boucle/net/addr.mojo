@@ -405,15 +405,21 @@ struct SocketAddrStorV6(ImplicitlyCopyable, Movable, SocketAddr):
         """Convert kernel sockaddr_in6 to user-facing SocketAddrV6.
 
         Byte-swaps port and segments from network order to host order.
+        The four address words are read as the fields the constructor
+        wrote them to; only a pointer to a whole object may be indexed,
+        so `sin6_addr_b/c/d` are never reached by offsetting a pointer
+        taken to `sin6_addr_a`.
+
+        Returns:
+            The address with host-order segments, port and scope id.
         """
         var port = _to_be[DType.uint16, 1](self.addr.sin6_port)
-        var src = Pointer(to=self.addr.sin6_addr_a).unsafe_bitcast[UInt32]()
         var be_segs = SIMD[DType.uint16, 8]()
         var seg_ptr = Pointer(to=be_segs).unsafe_bitcast[UInt32]()
-        seg_ptr[unsafe_offset=0] = src[unsafe_offset=0]
-        seg_ptr[unsafe_offset=1] = src[unsafe_offset=1]
-        seg_ptr[unsafe_offset=2] = src[unsafe_offset=2]
-        seg_ptr[unsafe_offset=3] = src[unsafe_offset=3]
+        seg_ptr[unsafe_offset=0] = self.addr.sin6_addr_a
+        seg_ptr[unsafe_offset=1] = self.addr.sin6_addr_b
+        seg_ptr[unsafe_offset=2] = self.addr.sin6_addr_c
+        seg_ptr[unsafe_offset=3] = self.addr.sin6_addr_d
         var segs = _to_be[DType.uint16, 8](be_segs)
         return SocketAddrV6(
             segs[0], segs[1], segs[2], segs[3],

@@ -1004,6 +1004,13 @@ struct EpollCompletionDriver(IoDriver):
         the first op dispatched for that wake; a second op on the same
         socket sees a clean 0 and decides from the event bits alone.
 
+        Linux receive and send syscalls consume `sk_err` themselves
+        before they return EAGAIN, so a recv or send op that would
+        block on a socket with a pending error has already reported
+        that error through the syscall. This query is defensive on
+        those paths and reachable only for `accept`, which returns
+        EAGAIN without touching `sk_err`.
+
         Args:
             dup_fd: The op's dup, the descriptor to query.
 

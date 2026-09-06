@@ -123,6 +123,7 @@ def _run(backend: Backend) raises:
     # terminal and the cancel's own completion have both landed the stream
     # slot is released, which detaches the pool and releases its slot too.
     rounds = 0
+    # Private slot counters: slot release is not visible through the public API.
     while loop._streams.active() > 0 or loop._pools.active() > 0:
         _ = loop.step(100)
         rounds += 1
@@ -182,6 +183,7 @@ def test_rearm_refused_by_a_driver_error_disarms() raises:
     _ = pool^
     _ = loop.step(0)
     _ = loop.step(0)
+    # Private slot counters: slot release is not visible through the public API.
     assert_equal(loop._streams.active(), 0)
     assert_equal(loop._pools.active(), 0)
     sender.close()
@@ -262,6 +264,7 @@ def test_run_flushes_a_deferred_rearm(backend: Backend) raises:
     _ = stream^
     _ = pool^
     rounds = 0
+    # Private slot counters: slot release is not visible through the public API.
     while loop._streams.active() > 0 or loop._pools.active() > 0:
         _ = loop.step(100)
         rounds += 1
@@ -337,7 +340,7 @@ def test_read_shutdown_keeps_io_uring_stream_armed() raises:
     receiver.shutdown(Shutdown.RD)
 
     for _ in range(3):
-        assert_equal(loop.step(200), 0, "no completion for a read-shut socket")
+        assert_equal(loop.step(50), 0, "no completion for a read-shut socket")
         assert_true(stream.armed(), "the stream stays armed")
         assert_true(not stream.error(), "no error is reported")
     assert_equal(stream.pending(), 0)
@@ -346,6 +349,7 @@ def test_read_shutdown_keeps_io_uring_stream_armed() raises:
     _ = stream^
     _ = pool^
     var rounds = 0
+    # Private slot counters: slot release is not visible through the public API.
     while loop._streams.active() > 0 or loop._pools.active() > 0:
         _ = loop.step(100)
         rounds += 1

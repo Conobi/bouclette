@@ -9,7 +9,7 @@ owns it, in the second the loop's destructor abandoned it.
 from std.testing import assert_equal, assert_true
 
 from boucle.error import IOError
-from boucle.net import Message
+from boucle.net import Message, MessageResult
 from boucle.socle.platform import ECANCELED, EINVAL, ENOTCONN, EPIPE
 from boucle.watch import FailureReason, MessageFailed, TransferFailed, TransferResult
 
@@ -83,6 +83,22 @@ def test_transfer_result_transferred_clamps_count_above_buffer_length() raises:
     assert_equal(len(r.transferred()), 2, "transferred() clamps to the buffer")
 
 
+def test_transferred_treats_a_negative_count_as_empty() raises:
+    """A count below 0 yields an empty span from both result types.
+
+    No loop verb builds a result with a negative count, but a direct
+    constructor call can, and the clamp must floor at 0 rather than
+    slice to a negative end (an abort under ASSERT=all).
+    """
+    var empty = TransferResult(-1, List[UInt8]())
+    assert_equal(len(empty.transferred()), 0, "negative count, empty buffer")
+    var some = TransferResult(-7, List[UInt8](length=4, fill=0x41))
+    assert_equal(some.count, -7, "the raw count is preserved")
+    assert_equal(len(some.transferred()), 0, "negative count, 4-byte buffer")
+    var msg = MessageResult(-1, Message(List[UInt8](length=4, fill=0)), 0)
+    assert_equal(len(msg.transferred()), 0, "negative count on a message")
+
+
 def main() raises:
     test_failure_reason_compares_and_prints_by_name()
     test_ecanceled_has_a_name()
@@ -90,4 +106,5 @@ def main() raises:
     test_transfer_failed_not_done_and_loop_gone_have_no_buffer()
     test_message_failed_mirrors_transfer_failed()
     test_transfer_result_transferred_clamps_count_above_buffer_length()
+    test_transferred_treats_a_negative_count_as_empty()
     print("PASS: test_transfer_failed.mojo")

@@ -860,7 +860,10 @@ def _closed_loopback_port() raises -> SocketAddrV4:
     """Return a loopback UDP address nothing listens on.
 
     A socket is bound to an ephemeral port and closed again; a datagram
-    sent there draws an ICMP port-unreachable.
+    sent there draws an ICMP port-unreachable. Between the close and
+    the send another process (the test runner is parallel) may bind
+    that port, in which case no refusal comes back and the test that
+    waits for it times out: a rare flake, not a library fault.
     """
     var probe = Socket.udp_v4()
     probe.bind(SocketAddrV4(127, 0, 0, 1, port=0))
@@ -874,8 +877,7 @@ def test_socket_error_ends_multishot_with_econnrefused() raises:
 
     Without `IP_RECVERR` the error reaches the socket as its pending
     error alone: the socket reports EPOLLERR, the drain wakes, and the
-    errno comes out of the first receive on it (or, had that receive
-    reported EAGAIN, out of `SO_ERROR`). Either way the terminal carries
+    errno comes out of the first receive on it. The terminal carries
     -ECONNREFUSED with flags 0, the slot is freed and no buffer is kept.
     """
     var driver = EpollCompletionDriver(capacity=8)

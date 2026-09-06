@@ -232,7 +232,7 @@ def test_delivery_benign_end_and_error() raises:
     assert_equal(Int(dg.buffer.id()), 2)
     var payload = dg.payload()
     assert_equal(len(payload), 5)
-    assert_equal(dg.count(), 5, "count() is the full datagram length")
+    assert_equal(dg.count(), 5)
     assert_equal(Int(payload[0]), ord("h"))
     assert_equal(dg.peer_family().id, UInt16(2))
     var peer = dg.peer_v4()

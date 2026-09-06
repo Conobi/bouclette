@@ -726,9 +726,10 @@ struct DatagramStream(Movable):
 
     A socket that will never yield a datagram again ends the stream on
     epoll only: a read-shut socket reports ECONNRESET, a pending socket
-    error is reported as is. On io_uring a read-shut or errored socket
-    never terminates the stream; it stays armed with no completion, so
-    drop the stream to release it.
+    error is reported as is, and a bare error wake (EPOLLERR with no
+    pending error and no hang-up bit) ends the stream with EIO. On
+    io_uring a read-shut or errored socket never terminates the stream;
+    it stays armed with no completion, so drop the stream to release it.
 
     Fields:
         _state: The slab-owned stream state.

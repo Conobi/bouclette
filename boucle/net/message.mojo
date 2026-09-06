@@ -607,15 +607,19 @@ struct MessageResult(Movable):
     def transferred(ref self) -> Span[UInt8, origin_of(self._msg._payload)]:
         """View the payload bytes that actually moved.
 
-        Clamped to the payload's length: under MSG_TRUNC `count` is the
-        full datagram size, which can be larger than the payload the
-        caller offered as a receive window.
+        Clamped at both ends: under MSG_TRUNC `count` is the full
+        datagram size, which can be larger than the payload the caller
+        offered as a receive window, and a count below 0 yields an
+        empty span.
 
         Returns:
-            The first `count` bytes of the payload, or all of it when
-            `count` exceeds the payload's length.
+            The first `count` bytes of the payload, all of it when
+            `count` exceeds the payload's length, or nothing when
+            `count` is negative.
         """
-        return Span(self._msg._payload)[: min(self.count, len(self._msg._payload))]
+        return Span(self._msg._payload)[
+            : min(max(self.count, 0), len(self._msg._payload))
+        ]
 
     def take_message(deinit self) -> Message:
         """Take the message back, consuming this result.
@@ -807,7 +811,9 @@ struct DeliveryHeader[origin: Origin](Copyable, Movable):
     def _region(self, start: Int, length: Int) -> Span[UInt8, Self.origin]:
         """Return `length` bytes from `start`, clamped to the buffer at
         both ends: a negative or out-of-range `start` clamps to the
-        buffer's bounds before `length` is applied.
+        buffer's bounds before `length` is applied, and `length` is
+        clamped to the bytes left after `start` before it is added, so
+        the end never wraps for a length near `Int.MAX`.
 
         Args:
             start: First byte of the region.
@@ -816,8 +822,9 @@ struct DeliveryHeader[origin: Origin](Copyable, Movable):
         Returns:
             The clamped sub-span (possibly empty).
         """
-        var lo = max(min(start, len(self._buf)), 0)
-        var hi = min(lo + max(length, 0), len(self._buf))
+        var total = len(self._buf)
+        var lo = max(min(start, total), 0)
+        var hi = lo + min(max(length, 0), total - lo)
         return self._buf[lo:hi]
 
     def namelen(self) -> UInt32:

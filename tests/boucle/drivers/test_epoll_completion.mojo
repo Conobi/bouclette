@@ -170,7 +170,10 @@ def _closed_loopback_port() raises -> SocketAddrV4:
     """Return a loopback UDP address nothing listens on.
 
     A socket is bound to an ephemeral port and closed again; a datagram
-    sent there draws an ICMP port-unreachable.
+    sent there draws an ICMP port-unreachable. Between the close and
+    the send another process (the test runner is parallel) may bind
+    that port, in which case no refusal comes back and the test that
+    waits for it times out: a rare flake, not a library fault.
     """
     var probe = Socket.udp_v4()
     probe.bind(SocketAddrV4(127, 0, 0, 1, port=0))
@@ -234,10 +237,12 @@ def test_recv_stays_armed_on_consumed_error() raises:
     assert_equal(receiver.send(Span(ping)), 4)
     _consume_refusal(receiver)
 
-    # The port the refusal came from is free again: a sender bound there
-    # is the peer the connected receiver accepts datagrams from.
+    # The port the refusal came from is free again (the probe that held
+    # it is closed, and a UDP connect binds nothing), so a sender bound
+    # there is the peer the connected receiver accepts datagrams from.
+    # No SO_REUSEADDR: it only matters while another socket holds the
+    # port, which is exactly the race the helper documents.
     var sender = Socket.udp_v4()
-    sender.set_reuse_addr()
     sender.bind(dead)
 
     var slot = ResultSlot()

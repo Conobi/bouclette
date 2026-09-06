@@ -64,6 +64,47 @@ def test_addr() raises:
     assert_equal(Int(b_addr_d_ptr[unsafe_offset=3]), 0x01)
 
 
+def _assert_round_trip(addr: SocketAddrV6) raises:
+    """Check every word, the port and the scope of `addr` survive storage.
+
+    Args:
+        addr: The address to push through `addr_stor().to_v6()`.
+    """
+    var back = addr.addr_stor().to_v6()
+    for i in range(8):
+        assert_equal(
+            Int(back.segments()[i]),
+            Int(addr.segments()[i]),
+            "segment " + String(i) + " changed across the storage round trip",
+        )
+    assert_equal(Int(back.port), Int(addr.port))
+    assert_equal(Int(back.scope_id), Int(addr.scope_id))
+
+
+def test_v6_storage_round_trip() raises:
+    """`addr_stor().to_v6()` returns all eight words for mapped and plain.
+
+    `to_v6` must read `sin6_addr_a/b/c/d` as the fields the constructor
+    wrote, not through a pointer offset from the first word; a mapped
+    peer that lost its words after `sin6_addr_a` would stop answering
+    `is_ipv4_mapped`, and `Message.set_ecn` picks IP_TOS on that answer.
+    """
+    var mapped = SocketAddrV6(
+        0, 0, 0, 0, 0, 0xFFFF, 0xC0A8, 0x0101, port=4433, scope_id=7
+    )
+    _assert_round_trip(mapped)
+    assert_true(
+        mapped.addr_stor().to_v6().is_ipv4_mapped(),
+        "a mapped address must stay mapped across the storage round trip",
+    )
+    var plain = SocketAddrV6(
+        0x2001, 0x0DB8, 0x1234, 0x5678, 0x9ABC, 0xDEF0, 0x0F0F, 0xF0F0, port=53
+    )
+    _assert_round_trip(plain)
+    assert_true(not plain.addr_stor().to_v6().is_ipv4_mapped())
+
+
 def main() raises:
     test_addr()
+    test_v6_storage_round_trip()
     print("PASS: test_addr.mojo")
