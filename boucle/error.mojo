@@ -31,6 +31,7 @@ from boucle.socle.platform import (
     ENETUNREACH,
     ENOENT,
     ENOMEM,
+    ENOSPC,
     ENOSYS,
     ENOTCONN,
     EOPNOTSUPP,
@@ -73,6 +74,8 @@ def _errno_name(errno: Int) -> StaticString:
         return "EEXIST"
     if errno == EINVAL:
         return "EINVAL"
+    if errno == ENOSPC:
+        return "ENOSPC"
     if errno == ENOSYS:
         return "ENOSYS"
     if errno == EOPNOTSUPP:

@@ -954,12 +954,13 @@ struct EpollCompletionDriver(IoDriver):
         the delivery header and fire with result = header + name capacity
         + control capacity + bytes copied and flags IORING_CQE_F_BUFFER |
         IORING_CQE_F_MORE | (buf_id << IORING_CQE_BUFFER_SHIFT). EAGAIN
-        returns the buffer and leaves the op armed. An empty free list is
-        the terminal -ENOBUFS (flags 0); a recvmsg error is terminal with
-        that errno; both detach the op before firing. A template whose
-        regions do not fit the buffer, or whose name or control capacity
-        is so large that the conversion to Int turns negative, ends the
-        op with -EINVAL.
+        returns the buffer and leaves the op armed. An empty free list,
+        or a group id no longer registered (the group was unregistered
+        under a live op), is the terminal -ENOBUFS (flags 0); a recvmsg
+        error is terminal with that errno; a template whose regions do
+        not fit the buffer, or whose name or control capacity is so
+        large that the conversion to Int turns negative, is the terminal
+        -EINVAL. Every terminal detaches the op before firing.
 
         The caller's template is only read: the driver builds its own
         msghdr and iovec per datagram, so the template's pointers and
@@ -1509,7 +1510,10 @@ struct EpollCompletionDriver(IoDriver):
         the terminal completion fires. One completion fires per datagram
         with IORING_CQE_F_BUFFER | IORING_CQE_F_MORE and the buffer id in
         the high 16 bits of the flags; the operation ends with -ENOBUFS
-        when the group has no free buffer, with -ECANCELED on cancel, or
+        when the group has no free buffer or is not registered (so
+        unregistering a group a live stream selects from ends that
+        stream with ENOBUFS), with -EINVAL when the template's regions
+        do not fit a buffer of the group, with -ECANCELED on cancel, or
         with the recvmsg errno, all with flags 0. A zero-length receive
         fires a delivery with IORING_CQE_F_MORE and keeps the op armed,
         unlike io_uring, which ends the multishot on a zero-byte receive;

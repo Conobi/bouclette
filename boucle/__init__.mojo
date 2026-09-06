@@ -2,8 +2,9 @@
 
 The root package exports what an application needs and nothing more:
 
-- `WatchLoop` and its Futures: completion-based I/O, the default model,
-  with `Message`/`MessageResult` for datagram operations and the typed
+- `WatchLoop` and its Futures, plus `BufferPool` and `DatagramStream`
+  for multishot receives: completion-based I/O, the default model, with
+  `Message`/`MessageResult` for datagram operations and the typed
   `TransferFailed`/`MessageFailed` failures that hand buffers back.
 - `ReadinessLoop`, `Interest`, `Readiness`, `Token`: readiness-based I/O.
 - `Socket` and the address types: the portable networking surface.
@@ -25,10 +26,14 @@ from .readiness import ReadinessLoop, ReadinessHandler, ReadinessRegistry
 from .drivers.backend import Backend
 from .watch import (
     AcceptFuture,
+    BufferPool,
     ConnectFuture,
     ConnectOutcome,
     ConnectWithTimeoutFuture,
+    Datagram,
+    DatagramStream,
     FailureReason,
+    LeasedBuffer,
     MessageFailed,
     RecvFuture,
     RecvMsgFuture,
@@ -43,6 +48,7 @@ from .net import (
     AddrFamily,
     ControlMessage,
     ControlMessages,
+    DeliveryHeader,
     IpAddrV4,
     IpAddrV6,
     Message,

@@ -29,19 +29,23 @@ from result(); until then it cannot read it, write it or free it, and
 dropping the future simply gives it up.
 """
 
-from std.memory import Pointer
+from std.memory import Pointer, unsafe_memset
 from std.memory.alloc import unsafe_alloc
 
 from boucle.drivers import _WatchDriver
 from boucle.drivers.backend import Backend
+from boucle.drivers.bufring import _next_pow2
+from boucle.error import IOError
 from boucle.handle import RawHandle
 from boucle.net.addr import SocketAddrStor, SocketAddrStorAny
-from boucle.net.message import Message
+from boucle.net.message import DELIVERY_HEADER_LEN, Message
 from boucle.net.socket import Socket
 from boucle.proactor.completion import Completion
+from boucle.socle.platform import EINVAL, ENOSPC
 from boucle.timeout import Timeout
 from boucle.watch._callback import _KIND_BITS, _FutureCallback, _dispatch
 from boucle.watch._message import _MessageState
+from boucle.watch._shared import _LoopShared
 from boucle.watch._slab import _Slab
 from boucle.watch.accept import _AcceptFutureState, AcceptFuture
 from boucle.watch.connect import _ConnectFutureState, ConnectFuture
@@ -49,10 +53,12 @@ from boucle.watch.connect_timeout import (
     _ConnectWithTimeoutState,
     ConnectWithTimeoutFuture,
 )
+from boucle.watch.pool import _PoolState, BufferPool
 from boucle.watch.recv import _RecvFutureState, RecvFuture
 from boucle.watch.recv_msg import RecvMsgFuture
 from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.send_msg import SendMsgFuture
+from boucle.watch.stream import _NAME_CAPACITY, _StreamState, DatagramStream
 from boucle.watch.timer import _TimerFutureState, TimerFuture
 
 
@@ -65,6 +71,14 @@ comptime _KIND_SEND = 4
 comptime _KIND_TIMER = 5
 comptime _KIND_RECV_MSG = 6
 comptime _KIND_SEND_MSG = 7
+comptime _KIND_STREAM = 8
+comptime _KIND_POOL = 9
+
+# Smallest buffer a pool accepts: a delivery header plus a v6 address and
+# a few payload bytes.
+comptime _MIN_BUFFER_SIZE = 64
+# Largest buffer count a pool accepts: buffer ids are UInt16.
+comptime _MAX_BUFFER_COUNT = 65536
 
 
 struct WatchLoop(Movable):
@@ -72,23 +86,39 @@ struct WatchLoop(Movable):
 
     The driver is hidden behind a comptime alias. Users never see IoUringDriver.
     _pending tracks completions in flight — each operation adds 1, each
-    dispatched completion subtracts 1; both run() and step() drive that
-    bookkeeping.
+    dispatched one-shot completion subtracts 1; the shared tally keeps
+    stream and internal completions out of it. Both run() and step()
+    drive that bookkeeping.
 
-    The eight slabs hold every operation state, simple and composite
-    alike, and double as the registry of what is not yet settled; they
-    are what let the loop release orphaned states and inform surviving
-    handles when the loop is destroyed. _settle is the queue of slot
+    The ten slabs hold every operation state, simple and composite
+    alike, plus the datagram streams (`_streams`) and the buffer pools,
+    and double as the registry of what is not yet settled; they are what
+    let the loop release orphaned states and inform surviving handles
+    when the loop is destroyed. A stream is not counted in _pending: it
+    re-arms itself and reports through the shared tally instead.
+    _next_group_id is the next provided-buffer group id `buffer_pool`
+    hands to the driver; ids are never reused. _settle is the queue of slot
     keys pushed by completions and handle drops since the last sweep;
     it lives on the heap so its address survives moving the loop.
 
     _deferred lists the slot keys of states that may still need the loop
-    to submit an operation on their behalf outside a callback: today the
+    to submit an operation on their behalf outside a callback: the
     composites, from submission until their three completions have
     arrived, because the loser's cancel is submitted after the tick that
-    resolved them. It never owns anything: a key is dropped from it as
-    soon as the state is done, and the registry alone decides who frees
-    the state.
+    resolved them; and the streams, which push their own key whenever a
+    re-arm is requested. It never owns anything: a key is dropped from
+    it as soon as the state is done, and the registry alone decides who
+    frees the state. Like _settle it is heap-boxed so states can push to it
+    through a stable address; _deferring is the spare list a flush swaps
+    it with before walking it, as _settling is the spare list
+    `_sweep_in_flight` swaps _settle with before walking it.
+
+    _shared is the heap-boxed `_LoopShared` every pool and stream state
+    holds a pointer to: the driver's address, whether the driver is still
+    alive, the deferred queue, and the per-tick tally of completions that
+    were never counted in _pending. The move constructor re-points its
+    driver pointer; the destructor flags the driver dead before tearing
+    it down.
     """
 
     var _driver: _WatchDriver
@@ -103,7 +133,12 @@ struct WatchLoop(Movable):
     var _timers: _Slab[_TimerFutureState]
     var _recv_msgs: _Slab[_MessageState]
     var _send_msgs: _Slab[_MessageState]
-    var _deferred: List[Int]
+    var _streams: _Slab[_StreamState]
+    var _pools: _Slab[_PoolState]
+    var _next_group_id: UInt16
+    var _deferred: Pointer[List[Int], MutUntrackedOrigin]
+    var _deferring: List[Int]
+    var _shared: Pointer[_LoopShared, MutUntrackedOrigin]
 
     def __init__(
         out self, *, capacity: Int = 64, backend: Backend = Backend.AUTO
@@ -123,6 +158,14 @@ struct WatchLoop(Movable):
         self._settle = unsafe_alloc[List[Int]](1)
         self._settle.unsafe_write(List[Int](capacity=capacity))
         self._settling = List[Int](capacity=capacity)
+        self._deferred = unsafe_alloc[List[Int]](1)
+        self._deferred.unsafe_write(List[Int]())
+        self._deferring = List[Int]()
+        self._shared = unsafe_alloc[_LoopShared](1)
+        self._shared.unsafe_write(_LoopShared(self._deferred))
+        self._shared[].driver = Pointer[_WatchDriver, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._driver))
+        )
         var q = self._settle
         self._accepts = _Slab[_AcceptFutureState](capacity, _KIND_ACCEPT, q)
         self._connects = _Slab[_ConnectFutureState](capacity, _KIND_CONNECT, q)
@@ -134,7 +177,9 @@ struct WatchLoop(Movable):
         self._timers = _Slab[_TimerFutureState](capacity, _KIND_TIMER, q)
         self._recv_msgs = _Slab[_MessageState](capacity, _KIND_RECV_MSG, q)
         self._send_msgs = _Slab[_MessageState](capacity, _KIND_SEND_MSG, q)
-        self._deferred = List[Int]()
+        self._streams = _Slab[_StreamState](capacity, _KIND_STREAM, q)
+        self._pools = _Slab[_PoolState](capacity, _KIND_POOL, q)
+        self._next_group_id = UInt16(0)
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
@@ -150,7 +195,15 @@ struct WatchLoop(Movable):
         self._timers = move._timers^
         self._recv_msgs = move._recv_msgs^
         self._send_msgs = move._send_msgs^
-        self._deferred = move._deferred^
+        self._streams = move._streams^
+        self._pools = move._pools^
+        self._next_group_id = move._next_group_id
+        self._deferred = move._deferred
+        self._deferring = move._deferring^
+        self._shared = move._shared
+        self._shared[].driver = Pointer[_WatchDriver, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=self._driver))
+        )
 
     def __deinit__(deinit self):
         """Abandon in-flight buffers, tear the driver down, settle the registry.
@@ -166,8 +219,12 @@ struct WatchLoop(Movable):
         seconds.
 
         The driver goes second so that no completion callback can run
-        while the registry is being settled. Once it is gone nothing
-        references the Completion inside any state anymore:
+        while the registry is being settled. `driver_alive` in the shared
+        box is cleared just before the driver is torn down, and every
+        pool and stream state checks it before touching the driver, so a
+        state released later in this destructor never reaches a dead
+        driver. Once the driver is gone nothing references the
+        Completion inside any state anymore:
 
         - Completion backend: operations are only pushed to the kernel
           from tick(), so operations never run through run() were never
@@ -207,11 +264,31 @@ struct WatchLoop(Movable):
         actually needs the safeguard. That is acceptable — a few extra
         chunks kept alive at process exit are cheaper than teaching this
         destructor which in-flight state came from which path.
+
+        The pool slab gets the same treatment, for two reasons. A pool
+        still counted in flight has a handle, a lease or a stream that
+        can reach its state and memory, so its chunks stay allocated for
+        them. And a pool a stream still selects from is the target of an
+        armed multishot receive: closing the ring cancels it, but not
+        instantaneously, and nothing here waits for it, so `abandon_all`
+        asks such a pool to give up its buffer memory — leaked on purpose
+        rather than returned to the allocator, the same bargain the
+        recv/send buffers make — before the orphaned stream is released
+        and detaches it. Its `detach_all` runs last, once every stream
+        that could reference a pool has been detached, because a stream
+        state returns its queued leases to its pool as it dies.
+
+        The stream slab needs no such mark: a multishot recvmsg copies
+        the msghdr template at prep and writes into provided buffers,
+        never back into the slab-resident template, and `detach_all`
+        already leaks the slab when a stream is held or still armed.
         """
         if self._recv_msgs.in_flight() > 0:
             self._recv_msgs._leaked = True
         if self._send_msgs.in_flight() > 0:
             self._send_msgs._leaked = True
+        if self._pools.in_flight() > 0:
+            self._pools._leaked = True
         self._accepts.abandon_all()
         self._connects.abandon_all()
         self._connects_with_timeout.abandon_all()
@@ -220,6 +297,9 @@ struct WatchLoop(Movable):
         self._timers.abandon_all()
         self._recv_msgs.abandon_all()
         self._send_msgs.abandon_all()
+        self._streams.abandon_all()
+        self._pools.abandon_all()
+        self._shared[].driver_alive = False
         self._driver^.__deinit__()
         self._accepts.detach_all()
         self._connects.detach_all()
@@ -229,7 +309,12 @@ struct WatchLoop(Movable):
         self._timers.detach_all()
         self._recv_msgs.detach_all()
         self._send_msgs.detach_all()
-        self._deferred.clear()
+        self._streams.detach_all()
+        self._pools.detach_all()
+        self._deferred.unsafe_deinit_pointee()
+        self._deferred.unsafe_free()
+        self._shared.unsafe_deinit_pointee()
+        self._shared.unsafe_free()
         self._settle.unsafe_deinit_pointee()
         self._settle.unsafe_free()
 
@@ -242,7 +327,9 @@ struct WatchLoop(Movable):
 
         Diagnostic accessor for tests: every submitted operation is
         registered until run() has seen it complete, so this must be 0
-        after run() returns. A composite counts as one entry.
+        after run() returns once no pool or stream is alive. A composite
+        counts as one entry; so does an armed stream, though `run()`
+        never waits for it.
 
         Returns:
             The number of slab slots whose operation is not yet done.
@@ -256,19 +343,24 @@ struct WatchLoop(Movable):
             + self._timers.in_flight()
             + self._recv_msgs.in_flight()
             + self._send_msgs.in_flight()
+            + self._streams.in_flight()
+            + self._pools.in_flight()
         )
 
     def pending_composites(self) -> Int:
-        """Return how many states still hold a deferred submission slot.
+        """Return how many slot keys sit on the deferred list.
 
-        Diagnostic accessor for tests: a composite stays listed from
-        submission until run() or step() has seen all three of its
-        completions, so this must be 0 once the loop is drained.
+        Diagnostic accessor for tests: composites awaiting their loser's
+        cancel, and streams with a re-arm or cancel queued. 0 once the
+        loop is drained and no stream has a deferred submission; `run()`
+        returns as soon as `_pending` is 0 and does not flush a stream's
+        deferred request, so a drained loop with such a stream still
+        counts it here until the next `step()`.
 
         Returns:
-            The number of states on the deferred list.
+            The number of slot keys on the deferred list.
         """
-        return len(self._deferred)
+        return len(self._deferred[])
 
     def accept(mut self, ref socket: Socket) raises -> AcceptFuture:
         """Submit an async accept on a listening socket.
@@ -403,7 +495,7 @@ struct WatchLoop(Movable):
 
         # 2 operations submitted → 2 completions expected.
         self._pending += 2
-        self._deferred.append(state_ptr[]._link.key)
+        self._deferred[].append(state_ptr[]._link.key)
 
         return ConnectWithTimeoutFuture(state_ptr)
 
@@ -681,6 +773,131 @@ struct WatchLoop(Movable):
 
         return TimerFuture(state_ptr)
 
+    def buffer_pool(mut self, count: Int, size: Int) raises -> BufferPool:
+        """Create a loop-owned pool of `count` buffers of `size` bytes.
+
+        `count` is rounded up to a power of two, as the buffer ring
+        requires; `capacity()` reports the rounded value. The memory is
+        zeroed and registered with the driver as one provided-buffer
+        group, and lives until the pool is released: handle dropped,
+        every lease returned, every stream using it ended.
+
+        Args:
+            count: Number of buffers wanted, in 1..65536.
+            size: Bytes per buffer (at least 64).
+
+        Returns:
+            The pool handle.
+
+        Raises:
+            IOError(EINVAL) if `size` is below 64 or `count` is outside
+            1..65536; IOError(ENOSPC) once every group id has been used;
+            whatever the driver raises if the group cannot be registered.
+        """
+        if size < _MIN_BUFFER_SIZE or count < 1 or count > _MAX_BUFFER_COUNT:
+            raise IOError(positive_errno=EINVAL)
+        if self._next_group_id == UInt16.MAX:
+            raise IOError(positive_errno=ENOSPC)
+        var capacity = _next_pow2(count)
+        var group_id = self._next_group_id
+        self._next_group_id += 1
+
+        var total = capacity * size
+        var memory = unsafe_alloc[UInt8](total)
+        unsafe_memset(memory, 0, total)
+
+        var state_ptr = self._pools.alloc(
+            _PoolState(memory, size, capacity, group_id, self._shared)
+        )
+        try:
+            self._driver.register_buffer_group(
+                memory, UInt32(size), capacity, group_id
+            )
+        except e:
+            # Nothing holds the state: settle it at the next sweep.
+            state_ptr[].mark_owner_dropped()
+            raise e
+        state_ptr[].registered = True
+        return BufferPool(state_ptr)
+
+    def recv_msg_multishot(
+        mut self,
+        ref socket: Socket,
+        ref pool: BufferPool,
+        *,
+        control_capacity: Int = 0,
+    ) raises -> DatagramStream:
+        """Arm a multishot recvmsg on `socket` delivering into `pool`.
+
+        Each datagram lands in one pool buffer behind a 16-byte delivery
+        header, a 28-byte peer address slot and `control_capacity` bytes
+        of control data. Take deliveries with `DatagramStream.next()`
+        while driving the loop with `step()`; `run()` returns at once
+        when only streams are armed. The stream keeps re-arming itself
+        after benign ends; an error (ENOBUFS when every buffer is leased)
+        disarms it until it is re-armed.
+
+        The stream is not counted in `_pending`: it lives in its own slab
+        and re-arms through the deferred queue.
+
+        Mixing a one-shot `recv_msg` with an armed stream on the same
+        socket is undefined: the two race for datagrams on both backends.
+
+        Args:
+            socket: A bound datagram socket.
+            pool: The pool to deliver into; referenced until the stream ends.
+            control_capacity: Bytes reserved for control messages per delivery.
+
+        Returns:
+            The stream handle.
+
+        Raises:
+            IOError(EINVAL) if the pool belongs to another loop or to a
+            loop that is gone, if it is closing, if `control_capacity`
+            is negative, or if the pool's buffers are smaller than
+            16 + 28 + control_capacity (every delivery would truncate); a
+            driver error if the operation cannot be queued.
+        """
+        var pool_state = pool._state
+        if (
+            pool_state[]._loop_gone
+            or Int(pool_state[]._shared) != Int(self._shared)
+            or pool_state[].closing
+            or control_capacity < 0
+        ):
+            raise IOError(positive_errno=EINVAL)
+        if pool_state[].buffer_size < (
+            DELIVERY_HEADER_LEN + _NAME_CAPACITY + control_capacity
+        ):
+            raise IOError(positive_errno=EINVAL)
+
+        var fd = socket.raw()
+        var state_ptr = self._streams.alloc(
+            _StreamState(
+                fd,
+                pool_state[].group_id,
+                control_capacity,
+                pool_state,
+                self._shared,
+            )
+        )
+        state_ptr[].wire()
+        pool_state[].attach_stream()
+
+        try:
+            self._driver.multishot_recvmsg(
+                fd,
+                state_ptr[].msg_ptr(),
+                pool_state[].group_id,
+                state_ptr[].completion_ptr(),
+            )
+        except e:
+            # Nothing holds the state: disarm it and settle at the next sweep.
+            state_ptr[]._disarm(IOError.from_error(e))
+            state_ptr[].mark_owner_dropped()
+            raise e
+        return DatagramStream(state_ptr)
+
     def step(mut self, timeout_ms: Int = -1) raises -> Int:
         """Drive the loop for one tick, waiting at most `timeout_ms`.
 
@@ -701,13 +918,16 @@ struct WatchLoop(Movable):
            to a handle the caller can observe.
 
         A re-arm queued in step 4 is submitted in step 1 of the next
-        call. The loop's own bookkeeping completions — the cancel a
-        `connect_with_timeout` submits for its loser — are dispatched
-        but not counted; a driver's sentinel timeout is skipped by the
-        driver before dispatch, so it never reaches step() at all. A
-        composite's losing completion (the cancelled timer's ECANCELED)
-        counts as observable too, so `connect_with_timeout` contributes
-        two to the returned total while its handle resolves once.
+        call. The loop's own bookkeeping completions are dispatched but
+        not counted: a composite counts the cancel it submits for its
+        loser and reports it at the flush, while pool and stream states
+        record theirs in the shared per-tick tally together with the
+        stream deliveries and terminals that were never pending. A
+        driver's sentinel timeout is skipped by the driver before
+        dispatch, so it never reaches step() at all. A composite's
+        losing completion (the cancelled timer's ECANCELED) counts as
+        observable too, so `connect_with_timeout` contributes two to the
+        returned total while its handle resolves once.
 
         Args:
             timeout_ms: Upper bound on the wait, in milliseconds. -1
@@ -723,11 +943,14 @@ struct WatchLoop(Movable):
             internal_pre == 0,
             "pre-tick flush must not observe internal completions",
         )
+        self._shared[].reset_tally()
         var dispatched = self._driver.tick(wait=True, timeout_ms=timeout_ms)
-        self._pending -= dispatched
+        var streams = self._shared[].stream_completions
+        var shared_internal = self._shared[].internal_completions
+        self._pending -= dispatched - streams - shared_internal
         var internal = self._flush_deferred()
         self._sweep_in_flight()
-        return dispatched - internal
+        return dispatched - internal - shared_internal
 
     def run(mut self) raises:
         """Block until every one-shot operation has completed, then return.
@@ -739,37 +962,53 @@ struct WatchLoop(Movable):
         `CompletionLoop` is where `run_forever()`, `run_once()` and
         `poll()` live.
 
-        _pending tracks completions in flight. tick() returns the number
-        of dispatched completions; run() decrements directly. Callbacks
-        never touch the counter — they only set result state.
+        _pending tracks one-shot completions in flight. tick() returns
+        the number of dispatched completions; run() subtracts only the
+        ones that belong to one-shot futures, using the shared tally to
+        leave out stream deliveries, terminals and internal cancels
+        recorded during the tick. Callbacks never touch the counter —
+        they only set result state and the tally.
 
-        After each tick, first flushes the deferred list (a composite's
-        cancel adds 1 to _pending for its own completion; composites
-        whose three completions have all arrived are forgotten), then
-        settles the slots whose key was queued during the tick: the
-        ones whose handle was dropped early are released there. The
-        deferred list is trimmed before the sweep so it never names a
-        slot the sweep is about to free.
+        Each iteration first flushes the deferred queue, so a re-arm or
+        cancel queued at the end of a previous `step()` is submitted
+        before run() blocks, then ticks, then flushes again (a
+        composite's cancel adds 1 to _pending for its own completion;
+        composites whose three completions have all arrived are
+        forgotten) and settles the slots whose key was queued during the
+        tick: the ones whose handle was dropped early are released
+        there. The deferred queue is trimmed before the sweep so it
+        never names a slot the sweep is about to free.
 
         If run() raises (systemic driver error), the WatchLoop is in an
         undefined state and must not be reused.
         """
         while self._pending > 0:
+            _ = self._flush_deferred()
+            self._shared[].reset_tally()
             var dispatched = self._driver.tick(wait=True)
-            self._pending -= dispatched
+            self._pending -= (
+                dispatched
+                - self._shared[].stream_completions
+                - self._shared[].internal_completions
+            )
             _ = self._flush_deferred()
             self._sweep_in_flight()
 
     def _flush_deferred(mut self) raises -> Int:
         """Submit deferred operations, drop finished states, count internal completions.
 
-        Called before and after each `step()` tick, and after each
-        `run()` tick. Every listed key is decoded
-        to its slab and slot; the state submits whatever it deferred
-        (today: a composite's cancel), reports the internal completions
-        it has seen since the previous flush, and is dropped from the
-        list once done. The list is walked from the back so a pop does
-        not disturb the indices still to visit.
+        Called before and after each `step()` and `run()` tick. The
+        queue is swapped with a spare list before it is walked, so a
+        state that queues itself again during the walk lands in the
+        queue for the next flush and no list is allocated per tick.
+        Every key is decoded to its slab and slot and dispatched on its
+        kind. A composite submits its loser's cancel, reports the
+        internal completions it has seen since the previous flush, and is
+        re-queued while not yet done so the next flush sees it again. A
+        stream submits its pending re-arm and is not re-queued here: it
+        pushes its own key again whenever it has something new to defer.
+        The `is_active` check on a stream key is defensive: a stale key
+        must never dereference a settled or reused slot.
 
         Returns:
             The number of completions dispatched since the previous
@@ -777,21 +1016,24 @@ struct WatchLoop(Movable):
             be reported by `step()`.
         """
         var internal = 0
-        var i = len(self._deferred) - 1
-        while i >= 0:
-            var key = self._deferred[i]
+        swap(self._deferring, self._deferred[])
+        for key in self._deferring:
             var kind = key & ((1 << _KIND_BITS) - 1)
             var index = key >> _KIND_BITS
             debug_assert(
-                kind == _KIND_CONNECT_WITH_TIMEOUT,
-                "only composites defer submissions today",
+                kind == _KIND_CONNECT_WITH_TIMEOUT or kind == _KIND_STREAM,
+                "only composites and streams defer submissions",
             )
+            if kind == _KIND_STREAM:
+                if self._streams.is_active(index):
+                    self._streams._slot(index)[].flush_deferred(self._driver)
+                continue
             var state_ptr = self._connects_with_timeout._slot(index)
             internal += state_ptr[].take_internal_completions()
             self._pending += state_ptr[].flush_cancel(self._driver)
-            if state_ptr[].done:
-                _ = self._deferred.pop(i)
-            i -= 1
+            if not state_ptr[].done:
+                self._deferred[].append(key)
+        self._deferring.clear()
         return internal
 
     def _sweep_in_flight(mut self):
@@ -822,6 +1064,10 @@ struct WatchLoop(Movable):
                 self._accepts.settle(index)
             elif kind == _KIND_CONNECT:
                 self._connects.settle(index)
+            elif kind == _KIND_STREAM:
+                self._streams.settle(index)
+            elif kind == _KIND_POOL:
+                self._pools.settle(index)
             else:
                 self._connects_with_timeout.settle(index)
         self._settling.clear()

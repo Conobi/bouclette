@@ -31,12 +31,17 @@ from boucle import (
 )
 from boucle import (
     AcceptFuture,
+    BufferPool,
     ConnectFuture,
     ConnectOutcome,
     ConnectWithTimeoutFuture,
     ControlMessage,
     ControlMessages,
+    Datagram,
+    DatagramStream,
+    DeliveryHeader,
     FailureReason,
+    LeasedBuffer,
     Message,
     MessageFailed,
     MessageResult,
@@ -86,6 +91,16 @@ def test_root_exports_are_usable() raises:
     assert_equal(Int(msg.control().ecn().value()), 1)
     assert_equal(String(FailureReason.LOOP_GONE), "LOOP_GONE")
     assert_true(AddrFamily.INET != AddrFamily.INET6)
+    var loop = WatchLoop(capacity=4, backend=Backend.EPOLL)
+    var pool = loop.buffer_pool(2, 64)
+    assert_equal(pool.capacity(), 2)
+    var hdr_buf = List[UInt8](length=16, fill=0)
+    var hdr = DeliveryHeader.parse(
+        Span(hdr_buf), name_capacity=0, control_capacity=0
+    )
+    assert_equal(Int(hdr.payloadlen()), 0)
+    _ = pool^
+    _ = loop^
 
 
 def main() raises:

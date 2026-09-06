@@ -142,6 +142,8 @@ typed failure: ECONNREFUSED (111)
 
 **Datagrams.** `send_msg`/`recv_msg` take a `Message`: a payload list, an optional peer (`set_peer`) and a control area (`control_capacity`). `send_to(socket, buf, addr)` and `recv_from(socket, buf)` are the two-line wrappers. The `MessageResult` carries `count`, `peer_v4()`/`peer_v6()`, `control()` (a walker over cmsg records, with `ecn()` for the codepoint), `truncated()`/`control_truncated()`, and `take_message()`. To receive ECN, call `socket.set_recv_tos()` and give the receiving message at least 24 bytes of control capacity; to send it, `msg.set_ecn(mark)` after `set_peer` (a v4-mapped v6 peer gets an `IP_TOS` record, as the kernel requires).
 
+**Multishot datagrams.** `loop.buffer_pool(count, size)` returns a `BufferPool` the loop owns; `loop.recv_msg_multishot(socket, pool)` returns a `DatagramStream` that keeps receiving into that pool until dropped or ended. `stream.next()` yields a `Datagram` — payload span, `peer_v4()`/`peer_v6()`, `control()` — whose `LeasedBuffer` goes back to the pool when it is dropped. Drive the stream with `loop.step()`, not `run()`: `run()` returns as soon as no one-shot operation is pending. When every buffer is leased the stream ends with `ENOBUFS` — `armed()` turns False and `error()` is set — and `rearm()` resumes it once leases have been dropped.
+
 **Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned).
 
 **Lifetimes.** Sockets are *not* moved into the loop: they must stay alive across `run()`, and you close them yourself.
@@ -254,7 +256,7 @@ boucle/                              Public API — what developers import
 ├── watch/                           Completion model: WatchLoop + asyncio-style Futures
 │   ├── loop.mojo                    WatchLoop (accept, connect, connect_with_timeout,
 │   │                                recv, send, recv_msg, send_msg, recv_from, send_to,
-│   │                                timeout, run)
+│   │                                timeout, buffer_pool, recv_msg_multishot, run, step)
 │   ├── accept.mojo                  AcceptFuture
 │   ├── connect.mojo                 ConnectFuture
 │   ├── connect_timeout.mojo         ConnectWithTimeoutFuture (composite connect+timer)
@@ -265,6 +267,9 @@ boucle/                              Public API — what developers import
 │   ├── timer.mojo                   TimerFuture
 │   ├── transfer.mojo                TransferResult, TransferFailed, MessageFailed, FailureReason
 │   ├── outcome.mojo                 ConnectOutcome
+│   ├── pool.mojo                    BufferPool, LeasedBuffer (loop-owned receive buffers)
+│   ├── stream.mojo                  Datagram, DatagramStream (multishot recvmsg)
+│   ├── _shared.mojo                 Driver pointer, liveness and tally shared with slab states
 │   ├── _callback.mojo               Internal future-state ownership hooks
 │   ├── _message.mojo                Slab-owned msghdr state behind the message futures
 │   └── _slab.mojo                   Per-kind chunked slab of operation states
@@ -294,7 +299,7 @@ boucle/                              Public API — what developers import
 │   │                                recv, send)
 │   ├── addr.mojo                    SocketAddrV4, SocketAddrV6
 │   ├── ip.mojo                      IpAddrV4, IpAddrV6
-│   ├── message.mojo                 Message, MessageResult, ControlMessages
+│   ├── message.mojo                 Message, MessageResult, ControlMessages, DeliveryHeader
 │   └── options.mojo                 Portable socket options (Backlog, Shutdown, flags)
 ├── error.mojo                       IOError — the one error type I/O raises
 ├── handle.mojo                      RawHandle, OwnedHandle
