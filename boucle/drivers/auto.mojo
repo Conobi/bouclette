@@ -268,6 +268,65 @@ struct AutoDriver(IoDriver):
             return self._uring.value().send(fd, buf, len, c)
         return self._epoll.value().send(fd, buf, len, c)
 
+    def read(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pread.
+
+        Args:
+            fd: File descriptor opened for reading.
+            buf: Destination buffer.
+            len: Maximum bytes to read.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().read(fd, buf, len, offset, c)
+        return self._epoll.value().read(fd, buf, len, offset, c)
+
+    def write(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pwrite.
+
+        Args:
+            fd: File descriptor opened for writing.
+            buf: Source buffer.
+            len: Number of bytes to write.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().write(fd, buf, len, offset, c)
+        return self._epoll.value().write(fd, buf, len, offset, c)
+
+    def fsync(
+        mut self,
+        fd: RawHandle,
+        datasync: Bool,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async fsync or fdatasync.
+
+        Args:
+            fd: File descriptor.
+            datasync: If True, fdatasync semantics.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().fsync(fd, datasync, c)
+        return self._epoll.value().fsync(fd, datasync, c)
+
     def recvmsg(
         mut self,
         fd: RawHandle,

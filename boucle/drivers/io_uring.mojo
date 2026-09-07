@@ -10,13 +10,16 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc as _heap_alloc
 
 from boucle.socle.linux.io_uring import IoUring
-from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers
+from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers, Fsync
+from boucle.socle.linux.io_uring.op import Read as ReadOp
+from boucle.socle.linux.io_uring.op import Write as WriteOp
 from boucle.socle.linux.io_uring.types import (
     IoUringSqeFlags,
     IoUringAcceptFlags,
     IoUringBufReg,
     IoUringEnterFlags,
     IoUringFeatureFlags,
+    IoUringFsyncFlags,
     IoUringGetEventsArg,
     IoUringOp,
     IoUringParams,
@@ -618,6 +621,89 @@ struct IoUringDriver(IoDriver):
         )
         _ = SendMsg(sq.__next__(), fd, msg_ptr).user_data(UInt64(Int(c)))
 
+    def read(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a pread via IORING_OP_READ.
+
+        Args:
+            fd: File descriptor opened for reading.
+            buf: Destination buffer.
+            len: Maximum bytes to read.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise _queue_full()
+        var sq = self._ring.unsynced_sq()
+        var buf_cv = Pointer[c_void, ImmStaticOrigin](
+            unsafe_from_address=Int(buf)
+        )
+        _ = ReadOp(sq.__next__(), fd, buf_cv, UInt(len)).offset(
+            offset
+        ).user_data(UInt64(Int(c)))
+
+    def write(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a pwrite via IORING_OP_WRITE.
+
+        Args:
+            fd: File descriptor opened for writing.
+            buf: Source buffer.
+            len: Number of bytes to write.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise _queue_full()
+        var sq = self._ring.unsynced_sq()
+        var buf_cv = Pointer[c_void, ImmStaticOrigin](
+            unsafe_from_address=Int(buf)
+        )
+        _ = WriteOp(sq.__next__(), fd, buf_cv, UInt(len)).offset(
+            offset
+        ).user_data(UInt64(Int(c)))
+
+    def fsync(
+        mut self,
+        fd: RawHandle,
+        datasync: Bool,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an fsync via IORING_OP_FSYNC.
+
+        Args:
+            fd: File descriptor.
+            datasync: If True, fdatasync semantics.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if not self._ring.sq():
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise _queue_full()
+        var sq = self._ring.unsynced_sq()
+        if datasync:
+            _ = Fsync(sq.__next__(), fd).user_data(
+                UInt64(Int(c))
+            ).fsync_flags(IoUringFsyncFlags.DATASYNC)
+        else:
+            _ = Fsync(sq.__next__(), fd).user_data(UInt64(Int(c)))
+
     def provide_buffers(
         mut self,
         buf_base: Pointer[UInt8, MutUntrackedOrigin],
@@ -810,6 +896,12 @@ struct IoUringDriver(IoDriver):
             return self._supports_buffer_ring
         if feature is DriverFeature.TIMEOUT_ARG:
             return self._supports_timeout_arg
+        if feature is DriverFeature.FILE_READ:
+            return True
+        if feature is DriverFeature.FILE_WRITE:
+            return True
+        if feature is DriverFeature.FILE_FSYNC:
+            return True
         return False
 
     def register_buf_ring(

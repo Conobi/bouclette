@@ -19,5 +19,15 @@ from .recv_msg import RecvMsgFuture
 from .send import SendFuture
 from .send_msg import SendMsgFuture
 from .stream import Datagram, DatagramStream
-from .transfer import FailureReason, MessageFailed, TransferFailed, TransferResult
+from .transfer import (
+    FailureReason,
+    FileTransferFailed,
+    FileTransferResult,
+    MessageFailed,
+    TransferFailed,
+    TransferResult,
+)
 from .timer import TimerFuture
+from .read_file import ReadFileFuture
+from .write_file import WriteFileFuture
+from .fsync import FsyncFuture

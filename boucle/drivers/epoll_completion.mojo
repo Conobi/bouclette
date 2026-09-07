@@ -35,6 +35,10 @@ from boucle.socle.linux.raw import (
     __NR_sendmsg,
     __NR_connect,
     __NR_getsockopt,
+    __NR_pread64,
+    __NR_pwrite64,
+    __NR_fsync as __NR_fsync_,
+    __NR_fdatasync,
     __kernel_timespec,
     EPOLLIN,
     EPOLLOUT,
@@ -48,6 +52,7 @@ from boucle.socle.linux.raw import (
     ECONNRESET,
     EEXIST,
     EINPROGRESS,
+    EINTR,
     EINVAL,
     EIO,
     ECANCELED,
@@ -627,6 +632,111 @@ struct _DriverState(Movable):
 
 
 # ── EpollCompletionDriver ────────────────────────────────────────────────────
+
+
+# ── File I/O blocking workers ───────────────────────────────────────────────
+#
+# Thin functions executed on the worker pool for file I/O. Each packs
+# its arguments into a heap-allocated context struct, runs the blocking
+# syscall (retrying EINTR), frees the context, and returns the result
+# as an Int32 (bytes transferred or negated errno).
+
+
+@fieldwise_init
+struct _PreadCtx:
+    """Context for a blocking pread64 on a worker thread."""
+
+    var fd: RawHandle
+    var buf: Pointer[UInt8, MutUntrackedOrigin]
+    var len: UInt32
+    var offset: UInt64
+
+
+@fieldwise_init
+struct _PwriteCtx:
+    """Context for a blocking pwrite64 on a worker thread."""
+
+    var fd: RawHandle
+    var buf: Pointer[UInt8, MutUntrackedOrigin]
+    var len: UInt32
+    var offset: UInt64
+
+
+@fieldwise_init
+struct _FsyncCtx:
+    """Context for a blocking fsync/fdatasync on a worker thread."""
+
+    var fd: RawHandle
+    var datasync: Bool
+
+
+def _blocking_pread(
+    ctx_raw: Pointer[NoneType, MutUntrackedOrigin],
+) -> Int32:
+    """Execute pread64 on a worker thread. Retries EINTR."""
+    var ctx = ctx_raw.unsafe_bitcast[_PreadCtx]()
+    while True:
+        var res = syscall[__NR_pread64, Scalar[DType.int64]](
+            ctx[].fd,
+            ctx[].buf,
+            Int(ctx[].len),
+            Int64(ctx[].offset),
+        )
+        if res >= 0:
+            ctx.unsafe_deinit_pointee()
+            ctx.unsafe_free()
+            return Int32(res)
+        if Int(-res) == EINTR:
+            continue
+        ctx.unsafe_deinit_pointee()
+        ctx.unsafe_free()
+        return Int32(res)
+
+
+def _blocking_pwrite(
+    ctx_raw: Pointer[NoneType, MutUntrackedOrigin],
+) -> Int32:
+    """Execute pwrite64 on a worker thread. Retries EINTR."""
+    var ctx = ctx_raw.unsafe_bitcast[_PwriteCtx]()
+    while True:
+        var res = syscall[__NR_pwrite64, Scalar[DType.int64]](
+            ctx[].fd,
+            ctx[].buf,
+            Int(ctx[].len),
+            Int64(ctx[].offset),
+        )
+        if res >= 0:
+            ctx.unsafe_deinit_pointee()
+            ctx.unsafe_free()
+            return Int32(res)
+        if Int(-res) == EINTR:
+            continue
+        ctx.unsafe_deinit_pointee()
+        ctx.unsafe_free()
+        return Int32(res)
+
+
+def _blocking_fsync(
+    ctx_raw: Pointer[NoneType, MutUntrackedOrigin],
+) -> Int32:
+    """Execute fsync or fdatasync on a worker thread. Retries EINTR."""
+    var ctx = ctx_raw.unsafe_bitcast[_FsyncCtx]()
+    var datasync = ctx[].datasync
+    while True:
+        var res: Scalar[DType.int64]
+        if datasync:
+            res = syscall[__NR_fdatasync, Scalar[DType.int64]](ctx[].fd)
+        else:
+            res = syscall[__NR_fsync_, Scalar[DType.int64]](ctx[].fd)
+        if res == 0:
+            ctx.unsafe_deinit_pointee()
+            ctx.unsafe_free()
+            return Int32(0)
+        if Int(-res) == EINTR:
+            continue
+        ctx.unsafe_deinit_pointee()
+        ctx.unsafe_free()
+        return Int32(res)
 
 
 struct EpollCompletionDriver(IoDriver):
@@ -1674,6 +1784,94 @@ struct EpollCompletionDriver(IoDriver):
         op[].msg = UInt64(Int(msg))
         op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
+
+    # ── File I/O via worker pool ────────────────────────────────────────
+
+    def read(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a pread via the worker pool.
+
+        Args:
+            fd: File descriptor opened for reading.
+            buf: Destination buffer.
+            len: Maximum bytes to read.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._ensure_pool()
+        var ctx = unsafe_alloc[_PreadCtx](1)
+        ctx.unsafe_write(_PreadCtx(fd=fd, buf=buf, len=len, offset=offset))
+        self._state[].worker_pool.value().submit(
+            WorkItem(
+                work_fn=_blocking_pread,
+                context=Pointer[NoneType, MutUntrackedOrigin](
+                    unsafe_from_address=Int(ctx)
+                ),
+                completion=c,
+            )
+        )
+
+    def write(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a pwrite via the worker pool.
+
+        Args:
+            fd: File descriptor opened for writing.
+            buf: Source buffer.
+            len: Number of bytes to write.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._ensure_pool()
+        var ctx = unsafe_alloc[_PwriteCtx](1)
+        ctx.unsafe_write(_PwriteCtx(fd=fd, buf=buf, len=len, offset=offset))
+        self._state[].worker_pool.value().submit(
+            WorkItem(
+                work_fn=_blocking_pwrite,
+                context=Pointer[NoneType, MutUntrackedOrigin](
+                    unsafe_from_address=Int(ctx)
+                ),
+                completion=c,
+            )
+        )
+
+    def fsync(
+        mut self,
+        fd: RawHandle,
+        datasync: Bool,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an fsync or fdatasync via the worker pool.
+
+        Args:
+            fd: File descriptor.
+            datasync: If True, fdatasync semantics.
+            c: Pointer to the caller-owned Completion token.
+        """
+        self._ensure_pool()
+        var ctx = unsafe_alloc[_FsyncCtx](1)
+        ctx.unsafe_write(_FsyncCtx(fd=fd, datasync=datasync))
+        self._state[].worker_pool.value().submit(
+            WorkItem(
+                work_fn=_blocking_fsync,
+                context=Pointer[NoneType, MutUntrackedOrigin](
+                    unsafe_from_address=Int(ctx)
+                ),
+                completion=c,
+            )
+        )
 
     # ── Provided-buffer groups ───────────────────────────────────────────
 

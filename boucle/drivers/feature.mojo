@@ -20,11 +20,17 @@ struct DriverFeature(TrivialRegisterPassable, Equatable, Writable):
     - `TIMEOUT_ARG`: a bounded wait is expressed in the enter call
       itself (`IORING_FEAT_EXT_ARG`, io_uring 5.11) rather than through
       a sentinel timeout submission. Never affects backend selection.
+    - `FILE_READ`: async pread via io_uring or worker pool.
+    - `FILE_WRITE`: async pwrite via io_uring or worker pool.
+    - `FILE_FSYNC`: async fsync/fdatasync via io_uring or worker pool.
     """
 
     comptime MULTISHOT_RECVMSG = Self(0)
     comptime BUFFER_RING = Self(1)
     comptime TIMEOUT_ARG = Self(2)
+    comptime FILE_READ = Self(3)
+    comptime FILE_WRITE = Self(4)
+    comptime FILE_FSYNC = Self(5)
 
     var id: UInt8
 
@@ -56,5 +62,11 @@ struct DriverFeature(TrivialRegisterPassable, Equatable, Writable):
             writer.write("buffer_ring")
         elif self.id == Self.TIMEOUT_ARG.id:
             writer.write("timeout_arg")
+        elif self.id == Self.FILE_READ.id:
+            writer.write("file_read")
+        elif self.id == Self.FILE_WRITE.id:
+            writer.write("file_write")
+        elif self.id == Self.FILE_FSYNC.id:
+            writer.write("file_fsync")
         else:
             writer.write("unknown(", self.id, ")")

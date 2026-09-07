@@ -67,7 +67,17 @@ from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.send_msg import SendMsgFuture
 from boucle.watch.stream import _NAME_CAPACITY, _StreamState, DatagramStream
 from boucle.watch.timer import _TimerFutureState, TimerFuture
-from boucle.watch.transfer import FailureReason, MessageFailed, TransferFailed
+from boucle.watch.transfer import (
+    FailureReason,
+    FileTransferFailed,
+    MessageFailed,
+    TransferFailed,
+)
+
+from boucle.buffer import AlignedBuffer
+from boucle.watch.read_file import _ReadFileState, ReadFileFuture
+from boucle.watch.write_file import _WriteFileState, WriteFileFuture
+from boucle.watch.fsync import _FsyncState, FsyncFuture
 
 
 # Slab kinds, stored in the low `_KIND_BITS` of every settle-queue key.
@@ -81,6 +91,9 @@ comptime _KIND_RECV_MSG = 6
 comptime _KIND_SEND_MSG = 7
 comptime _KIND_STREAM = 8
 comptime _KIND_POOL = 9
+comptime _KIND_READ_FILE = 10
+comptime _KIND_WRITE_FILE = 11
+comptime _KIND_FSYNC = 12
 
 
 def _slot_index(key: Int) -> Int:
@@ -117,7 +130,7 @@ struct WatchLoop(Movable):
     stream and internal completions out of it. Both run() and step()
     drive that bookkeeping.
 
-    The ten slabs hold every operation state, simple and composite
+    The thirteen slabs hold every operation state, simple and composite
     alike, plus the datagram streams (`_streams`) and the buffer pools,
     and double as the registry of what is not yet settled; they are what
     let the loop release orphaned states and inform surviving handles
@@ -166,6 +179,9 @@ struct WatchLoop(Movable):
     var _send_msgs: _Slab[_MessageState]
     var _streams: _Slab[_StreamState]
     var _pools: _Slab[_PoolState]
+    var _read_files: _Slab[_ReadFileState]
+    var _write_files: _Slab[_WriteFileState]
+    var _fsyncs: _Slab[_FsyncState]
     var _next_group_id: Int
     var _free_group_ids: List[UInt16]
     var _deferred: Pointer[List[Int], MutUntrackedOrigin]
@@ -211,6 +227,11 @@ struct WatchLoop(Movable):
         self._send_msgs = _Slab[_MessageState](capacity, _KIND_SEND_MSG, q)
         self._streams = _Slab[_StreamState](capacity, _KIND_STREAM, q)
         self._pools = _Slab[_PoolState](capacity, _KIND_POOL, q)
+        self._read_files = _Slab[_ReadFileState](capacity, _KIND_READ_FILE, q)
+        self._write_files = _Slab[_WriteFileState](
+            capacity, _KIND_WRITE_FILE, q
+        )
+        self._fsyncs = _Slab[_FsyncState](capacity, _KIND_FSYNC, q)
         self._next_group_id = 0
         self._free_group_ids = List[UInt16]()
 
@@ -230,6 +251,9 @@ struct WatchLoop(Movable):
         self._send_msgs = move._send_msgs^
         self._streams = move._streams^
         self._pools = move._pools^
+        self._read_files = move._read_files^
+        self._write_files = move._write_files^
+        self._fsyncs = move._fsyncs^
         self._next_group_id = move._next_group_id
         self._free_group_ids = move._free_group_ids^
         self._deferred = move._deferred
@@ -333,6 +357,9 @@ struct WatchLoop(Movable):
         self._send_msgs.abandon_all()
         self._streams.abandon_all()
         self._pools.abandon_all()
+        self._read_files.abandon_all()
+        self._write_files.abandon_all()
+        self._fsyncs.abandon_all()
         self._shared[].driver_alive = False
         self._driver^.__deinit__()
         self._accepts.detach_all()
@@ -345,6 +372,9 @@ struct WatchLoop(Movable):
         self._send_msgs.detach_all()
         self._streams.detach_all()
         self._pools.detach_all()
+        self._read_files.detach_all()
+        self._write_files.detach_all()
+        self._fsyncs.detach_all()
         self._deferred.unsafe_deinit_pointee()
         self._deferred.unsafe_free()
         self._shared.unsafe_deinit_pointee()
@@ -379,6 +409,9 @@ struct WatchLoop(Movable):
             + self._send_msgs.in_flight()
             + self._streams.in_flight()
             + self._pools.in_flight()
+            + self._read_files.in_flight()
+            + self._write_files.in_flight()
+            + self._fsyncs.in_flight()
         )
 
     def pending_composites(self) -> Int:
@@ -690,6 +723,197 @@ struct WatchLoop(Movable):
         self._pending += 1
 
         return SendFuture(state_ptr)
+
+    def read(
+        mut self, fd: RawHandle, var buf: AlignedBuffer, offset: UInt64
+    ) raises FileTransferFailed -> ReadFileFuture:
+        """Submit an async positioned read on a file descriptor.
+
+        The buffer moves into the loop for the duration of the
+        operation, so the caller cannot read it, write it or free it
+        while the kernel writes into it. `ReadFileFuture.result()` hands
+        it back together with the number of bytes read; dropping the
+        future instead gives the buffer up, and the loop frees it once
+        the completion has arrived.
+
+        The read fills up to `buf.capacity()` bytes starting at `offset`
+        in the file. Receiving does not change the buffer's length ---
+        the byte count from `result()` says how many bytes at the front
+        are valid.
+
+        When `buf.alignment() > 1` the caller promises that both the
+        buffer address and `offset` are aligned to `buf.alignment()`,
+        and that `buf.capacity()` is a multiple of it --- requirements
+        for O_DIRECT. The loop asserts this in debug builds.
+
+        Args:
+            fd: A file descriptor opened for reading.
+            buf: The aligned buffer to read into, moved into the
+                 operation.
+            offset: The file offset to read from.
+
+        Returns:
+            A ReadFileFuture owning both the operation and the buffer.
+
+        Raises:
+            `FileTransferFailed` with ``reason == IO`` if the file
+            descriptor is invalid or the driver refuses the operation;
+            the errno is in ``error`` and the buffer comes back through
+            `take_buffer()`. Nothing stays in flight in that case.
+        """
+        var align = buf.alignment()
+        if align > 1:
+            debug_assert(
+                Int(buf.unsafe_ptr()) & (align - 1) == 0,
+                "buffer address not aligned for O_DIRECT",
+            )
+            debug_assert(
+                Int(offset) & (align - 1) == 0,
+                "file offset not aligned for O_DIRECT",
+            )
+            debug_assert(
+                buf.capacity() & (align - 1) == 0,
+                "buffer capacity not aligned for O_DIRECT",
+            )
+        var state_ptr = self._read_files.alloc(_ReadFileState(buf^, offset))
+
+        state_ptr[].completion.invoke = _dispatch[_ReadFileState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
+
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
+        )
+
+        var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
+        )
+        var buf_len = UInt32(state_ptr[].buf.capacity())
+        try:
+            self._driver.read(fd, buf_ptr, buf_len, offset, cmp_ptr)
+        except e:
+            var back = state_ptr[].take_buffer()
+            self._read_files.discard(_slot_index(state_ptr[]._link.key))
+            raise FileTransferFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
+        self._pending += 1
+
+        return ReadFileFuture(state_ptr)
+
+    def write(
+        mut self, fd: RawHandle, var buf: AlignedBuffer, offset: UInt64
+    ) raises FileTransferFailed -> WriteFileFuture:
+        """Submit an async positioned write on a file descriptor.
+
+        The buffer moves into the loop for the duration of the
+        operation, so nobody can modify or free the bytes while the
+        kernel reads them. `WriteFileFuture.result()` hands the buffer
+        back unchanged together with the number of bytes written;
+        dropping the future instead gives the buffer up, and the loop
+        frees it once the completion has arrived.
+
+        The buffer's current length is offered to the kernel. A short
+        write is not an error: compare the byte count from `result()`
+        with the length submitted.
+
+        When `buf.alignment() > 1` the caller promises that both the
+        buffer address and `offset` are aligned to `buf.alignment()`,
+        and that `len(buf)` is a multiple of it --- requirements for
+        O_DIRECT. The loop asserts this in debug builds.
+
+        Args:
+            fd: A file descriptor opened for writing.
+            buf: The data to write, moved into the operation.
+            offset: The file offset to write at.
+
+        Returns:
+            A WriteFileFuture owning both the operation and the buffer.
+
+        Raises:
+            `FileTransferFailed` with ``reason == IO`` if the file
+            descriptor is invalid or the driver refuses the operation;
+            the errno is in ``error`` and the buffer comes back through
+            `take_buffer()`. Nothing stays in flight in that case.
+        """
+        var align = buf.alignment()
+        if align > 1:
+            debug_assert(
+                Int(buf.unsafe_ptr()) & (align - 1) == 0,
+                "buffer address not aligned for O_DIRECT",
+            )
+            debug_assert(
+                Int(offset) & (align - 1) == 0,
+                "file offset not aligned for O_DIRECT",
+            )
+            debug_assert(
+                len(buf) & (align - 1) == 0,
+                "write length not aligned for O_DIRECT",
+            )
+        var state_ptr = self._write_files.alloc(_WriteFileState(buf^, offset))
+
+        state_ptr[].completion.invoke = _dispatch[_WriteFileState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
+
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
+        )
+
+        var buf_ptr = Pointer[UInt8, MutUntrackedOrigin](
+            unsafe_from_address=Int(state_ptr[].buf.unsafe_ptr())
+        )
+        var buf_len = UInt32(len(state_ptr[].buf))
+        try:
+            self._driver.write(fd, buf_ptr, buf_len, offset, cmp_ptr)
+        except e:
+            var back = state_ptr[].take_buffer()
+            self._write_files.discard(_slot_index(state_ptr[]._link.key))
+            raise FileTransferFailed(
+                IOError.from_error(e), FailureReason.IO, Optional(back^)
+            )
+        self._pending += 1
+
+        return WriteFileFuture(state_ptr)
+
+    def fsync(
+        mut self, fd: RawHandle, *, datasync: Bool = False
+    ) raises IOError -> FsyncFuture:
+        """Submit an async fsync or fdatasync on a file descriptor.
+
+        Flushes already-written data to stable storage. No buffer is
+        involved; the operation completes when the kernel confirms the
+        flush. ``datasync=True`` requests fdatasync semantics: only the
+        data and the metadata needed to retrieve it are flushed, not
+        metadata such as modification time.
+
+        Args:
+            fd: A file descriptor opened for writing.
+            datasync: If True, fdatasync semantics (data + essential
+                      metadata only).
+
+        Returns:
+            An FsyncFuture representing the in-flight fsync.
+
+        Raises:
+            `IOError` if the file descriptor is invalid or the driver
+            refuses the operation; nothing stays in flight in that case.
+        """
+        var state_ptr = self._fsyncs.alloc(_FsyncState())
+
+        state_ptr[].completion.invoke = _dispatch[_FsyncState]
+        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
+
+        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
+            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
+        )
+
+        try:
+            self._driver.fsync(fd, datasync, cmp_ptr)
+        except e:
+            self._fsyncs.discard(_slot_index(state_ptr[]._link.key))
+            raise IOError.from_error(e)
+        self._pending += 1
+
+        return FsyncFuture(state_ptr)
 
     def recv_msg(
         mut self, ref socket: Socket, var msg: Message
@@ -1311,6 +1535,12 @@ struct WatchLoop(Movable):
                     self._pools.settle(index)
                     if reusable:
                         self._free_group_ids.append(group_id)
+            elif kind == _KIND_READ_FILE:
+                self._read_files.settle(index)
+            elif kind == _KIND_WRITE_FILE:
+                self._write_files.settle(index)
+            elif kind == _KIND_FSYNC:
+                self._fsyncs.settle(index)
             else:
                 self._connects_with_timeout.settle(index)
         self._settling.clear()

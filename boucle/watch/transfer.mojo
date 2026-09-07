@@ -25,6 +25,7 @@ buffer). Both are `Writable`, so a bare `raises` caller sees
 `"<reason>: <errno name> (<number>)"`.
 """
 
+from boucle.buffer import AlignedBuffer
 from boucle.error import IOError
 from boucle.net.message import Message
 from boucle.socle.platform import ECANCELED, EINVAL
@@ -377,6 +378,159 @@ struct MessageFailed(Movable, Writable):
             The message for IO; None for NOT_DONE and LOOP_GONE.
         """
         return self._msg^
+
+    def write_to[W: Writer](self, mut writer: W):
+        """Write `<reason>: <error>`.
+
+        Parameters:
+            W: The writer type.
+
+        Args:
+            writer: Where the text goes.
+        """
+        writer.write(self.reason, ": ", self.error)
+
+
+# ===----------------------------------------------------------------------=== #
+# FileTransferResult / FileTransferFailed
+# ===----------------------------------------------------------------------=== #
+
+
+struct FileTransferResult(Movable):
+    """The outcome of one completed file read or write: byte count + aligned buffer.
+
+    Fields:
+        _count: How many bytes the operation moved. For a read this is
+                how many bytes at the front of the buffer are valid. For
+                a write it is how many bytes were written to the file.
+    """
+
+    var _count: Int
+    var _buf: AlignedBuffer
+
+    def __init__(out self, count: Int, var buf: AlignedBuffer):
+        """Pair a byte count with the aligned buffer.
+
+        Args:
+            count: Bytes transferred.
+            buf: The buffer, handed back from the loop.
+        """
+        self._count = count
+        self._buf = buf^
+
+    def __init__(out self, *, deinit move: Self):
+        """Move constructor."""
+        self._count = move._count
+        self._buf = move._buf^
+
+    def count(self) -> Int:
+        """Return the number of bytes transferred."""
+        return self._count
+
+    def transferred(ref self) -> Span[UInt8, origin_of(self._buf)]:
+        """View the bytes that actually moved.
+
+        Returns:
+            A span over the first `count` bytes, clamped to capacity.
+        """
+        return self._buf.as_span()[: min(max(self._count, 0), len(self._buf))]
+
+    def take_buffer(deinit self) -> AlignedBuffer:
+        """Take the buffer back, consuming this result.
+
+        Returns:
+            The aligned buffer the operation used.
+        """
+        return self._buf^
+
+
+struct FileTransferFailed(Movable, Writable):
+    """Raised by file read/write futures and by WatchLoop.read/write.
+
+    Fields:
+        error: An IOError wrapping the errno.
+        reason: Why there is no result.
+    """
+
+    var error: IOError
+    var reason: FailureReason
+    var _buf: Optional[AlignedBuffer]
+
+    def __init__(
+        out self,
+        error: IOError,
+        reason: FailureReason,
+        var buf: Optional[AlignedBuffer],
+    ):
+        """Construct a file transfer failure.
+
+        Args:
+            error: The errno to report.
+            reason: Why there is no result.
+            buf: The buffer to hand back, if any.
+        """
+        debug_assert(
+            reason != FailureReason.IO or Bool(buf),
+            "IO reason requires a buffer",
+        )
+        self.error = error
+        self.reason = reason
+        self._buf = buf^
+
+    def __init__(out self, *, deinit move: Self):
+        """Move constructor."""
+        self.error = move.error
+        self.reason = move.reason
+        self._buf = move._buf^
+
+    @staticmethod
+    def io(result: Int, var buf: AlignedBuffer) -> Self:
+        """Build the IO failure from a negative completion result.
+
+        Args:
+            result: Negated errno.
+            buf: The buffer that was in flight.
+
+        Returns:
+            A failure carrying the errno and the buffer.
+        """
+        return Self(
+            IOError.from_errno(result), FailureReason.IO, Optional(buf^)
+        )
+
+    @staticmethod
+    def not_done() -> Self:
+        """Build the NOT_DONE failure.
+
+        Returns:
+            A failure with no buffer.
+        """
+        return Self(
+            IOError(positive_errno=EINVAL),
+            FailureReason.NOT_DONE,
+            Optional[AlignedBuffer](),
+        )
+
+    @staticmethod
+    def loop_gone() -> Self:
+        """Build the LOOP_GONE failure.
+
+        Returns:
+            A failure with no buffer.
+        """
+        return Self(
+            IOError(positive_errno=ECANCELED),
+            FailureReason.LOOP_GONE,
+            Optional[AlignedBuffer](),
+        )
+
+    def take_buffer(deinit self) -> Optional[AlignedBuffer]:
+        """Take the buffer back, consuming the failure.
+
+        Returns:
+            The buffer for IO; None for NOT_DONE and LOOP_GONE.
+        """
+        return self._buf^
 
     def write_to[W: Writer](self, mut writer: W):
         """Write `<reason>: <error>`.

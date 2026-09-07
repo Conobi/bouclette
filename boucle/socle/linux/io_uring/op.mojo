@@ -5,6 +5,7 @@ from boucle.socle.linux.io_uring.types import (
     addr3_struct,
     IoUringOp,
     IoUringSqeFlags,
+    IoUringFsyncFlags,
     IoUringFileDescriptor,
     IoUringFd,
 )
@@ -779,5 +780,58 @@ struct ProvideBuffers[type: SQE, origin: MutOrigin](RegisterPassable, Operation)
 
     @always_inline("nodebug")
     def sqe_flags(var self, flags: IoUringSqeFlags) -> Self:
+        self.sqe[].flags |= flags
+        return self^
+
+
+struct Fsync[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
+    """Fsync, equivalent to `fsync(2)` or `fdatasync(2)`."""
+
+    comptime SINCE = 5.1
+
+    var sqe: Pointer[Sqe[Self.type], Self.origin]
+
+    @always_inline
+    def __init__(
+        out self,
+        ref [Self.origin]sqe: Sqe[Self.type],
+        fd: UnsafeFd,
+    ):
+        """Prepare an fsync SQE.
+
+        Args:
+            sqe: The SQE to prepare.
+            fd: The file descriptor to sync.
+        """
+        _prep_rw(
+            sqe,
+            IoUringOp.FSYNC,
+            IoUringFd[False](unsafe_fd=fd),
+            UInt64(0),
+            UInt32(0),
+        )
+        self.sqe = Pointer(to=sqe)
+
+    @always_inline("nodebug")
+    def user_data(var self, value: UInt64) -> Self:
+        """Set the user_data field."""
+        self.sqe[].user_data = value
+        return self^
+
+    @always_inline("nodebug")
+    def personality(var self, value: UInt16) -> Self:
+        """Set the personality field."""
+        self.sqe[].personality = value
+        return self^
+
+    @always_inline("nodebug")
+    def fsync_flags(var self, flags: IoUringFsyncFlags) -> Self:
+        """Set fsync flags (DATASYNC for fdatasync semantics)."""
+        self.sqe[].op_flags = UInt32(flags.value)
+        return self^
+
+    @always_inline("nodebug")
+    def sqe_flags(var self, flags: IoUringSqeFlags) -> Self:
+        """Set SQE flags."""
         self.sqe[].flags |= flags
         return self^

@@ -166,6 +166,59 @@ trait IoDriver(Movable):
         """
         ...
 
+    def read(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pread.
+
+        Args:
+            fd: File descriptor opened for reading.
+            buf: Destination buffer (must remain valid until completion).
+            len: Maximum bytes to read.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def write(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pwrite.
+
+        Args:
+            fd: File descriptor opened for writing.
+            buf: Source buffer (must remain valid until completion).
+            len: Number of bytes to write.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
+    def fsync(
+        mut self,
+        fd: RawHandle,
+        datasync: Bool,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async fsync or fdatasync.
+
+        Args:
+            fd: File descriptor.
+            datasync: If True, fdatasync semantics.
+            c: Pointer to the caller-owned Completion token.
+        """
+        ...
+
     def recvmsg(
         mut self,
         fd: RawHandle,
