@@ -17,6 +17,7 @@ number is never handed to epoll_ctl. See `EpollCompletionDriver` for
 why.
 """
 
+from std.collections import Optional
 from std.ffi import external_call
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
@@ -80,6 +81,8 @@ from boucle.error import IOError
 from boucle.drivers.driver import IoDriver
 from boucle.drivers.backend import Backend
 from boucle.drivers.feature import DriverFeature
+from boucle.pool.pool import WorkerPool
+from boucle.pool._queue import WorkItem, _CompletedWork
 
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -597,9 +600,13 @@ struct _DriverState(Movable):
     var timers: _TimerHeap
     var ready: List[_ReadyEntry]
     var groups: List[_BufGroup]
+    var worker_pool: Optional[WorkerPool]
 
     def __init__(out self, *, capacity: Int):
         """Create the pool, an empty timer heap, an empty ready queue and no groups.
+
+        The worker pool for blocking-op offload starts absent; see
+        `EpollCompletionDriver._ensure_pool`.
 
         Args:
             capacity: Number of op slots in the pool.
@@ -608,6 +615,7 @@ struct _DriverState(Movable):
         self.timers = _TimerHeap()
         self.ready = List[_ReadyEntry]()
         self.groups = List[_BufGroup]()
+        self.worker_pool = None
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""
@@ -615,6 +623,7 @@ struct _DriverState(Movable):
         self.timers = move.timers^
         self.ready = move.ready^
         self.groups = move.groups^
+        self.worker_pool = move.worker_pool^
 
 
 # ── EpollCompletionDriver ────────────────────────────────────────────────────
@@ -748,6 +757,12 @@ struct EpollCompletionDriver(IoDriver):
         cancelled or completed by an earlier callback in the same
         batch are recognised by their stale generation and skipped.
 
+        An epoll event whose data is the UInt64.MAX sentinel is the
+        worker pool's wakeup fd, not an op slot; it is recognised
+        before the slot index is unpacked and dispatched by draining
+        the pool's finished results (see `_ensure_pool`,
+        `_dispatch_pool_completions`).
+
         Args:
             wait: If True, block until at least one event or timer.
                   If False, return immediately after dispatching any
@@ -800,6 +815,11 @@ struct EpollCompletionDriver(IoDriver):
         # 4. Dispatch epoll events, skipping stale ones.
         for i in range(Int(n)):
             var data = self._events[unsafe_offset=i].data()
+            if data == UInt64.MAX:
+                # The worker pool's wakeup fd, not an op slot -- checked
+                # first so the sentinel is never read as a slot index.
+                dispatched += self._dispatch_pool_completions()
+                continue
             var index = Int(data & 0xFFFF_FFFF)
             var generation = UInt32(data >> 32)
             var op = self._state[].pool.slot_ptr(index)
@@ -1328,6 +1348,56 @@ struct EpollCompletionDriver(IoDriver):
             op[].dup_fd = Int32(-1)
             self._state[].pool.free(op[].pool_index)
             _check_for_errors(res)
+
+    # ── Worker pool (blocking-op offload) ────────────────────────────────
+
+    def _ensure_pool(mut self) raises:
+        """Lazy-create the worker pool on first blocking-op submission.
+
+        A no-op once the pool already exists. Registers the pool's
+        wakeup eventfd with epoll under EPOLLIN | EPOLLET and the
+        UInt64.MAX sentinel data value; tick() checks for that sentinel
+        before ever treating an event's data as an op slot index. Unlike
+        every other fd this driver hands to epoll_ctl, the wakeup fd is
+        the pool's own descriptor rather than a private dup: the driver
+        never issues I/O on it, and the pool -- not this driver -- owns
+        its lifetime.
+
+        Raises:
+            If the pool's worker threads cannot be spawned, or epoll
+            registration of its wakeup fd fails.
+        """
+        if self._state[].worker_pool.__bool__():
+            return
+        var pool = WorkerPool(thread_count=4)
+        var ev = epoll_event(
+            events=UInt32(EPOLLIN | EPOLLET), data=UInt64.MAX
+        )
+        var res = syscall[__NR_epoll_ctl, Scalar[DType.int64]](
+            self._epfd,
+            Int32(EPOLL_CTL_ADD),
+            pool.wakeup_fd(),
+            Pointer(to=ev),
+        )
+        if res < 0:
+            _check_for_errors(res)
+        self._state[].worker_pool = pool^
+
+    def _dispatch_pool_completions(mut self) -> Int:
+        """Drain the worker pool's finished results and fire their Completions.
+
+        Called from tick() when epoll reports the pool's wakeup fd
+        readable (recognised by the UInt64.MAX sentinel event data).
+
+        Returns:
+            The number of completions fired.
+        """
+        var completed = self._state[].worker_pool.value().drain()
+        for i in range(len(completed)):
+            completed[i].completion[].fire(
+                Int(completed[i].result), UInt32(0)
+            )
+        return len(completed)
 
     # ── Operation methods ─────────────────────────────────────────────────
 

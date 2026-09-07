@@ -609,3 +609,13 @@ from boucle.socle.linux.raw.ucontext import (
     REG_RIP,
     REG_EFL,
 )
+
+from boucle.socle.linux.raw.thread import (
+    PTHREAD_MUTEX_SIZE,
+    PTHREAD_COND_SIZE,
+    PTHREAD_T_SIZE,
+    EFD_CLOEXEC,
+    EFD_NONBLOCK,
+    SIG_SETMASK,
+    SIGSET_SIZE,
+)

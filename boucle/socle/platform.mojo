@@ -243,3 +243,11 @@ from boucle.socle.linux.raw import (
 # `boucle.socle.windows`.
 
 from boucle.socle.linux.ucontext_stack import _UcontextStack
+
+# ── Thread primitives — portable by contract ────────────────────────────
+#
+# POSIX `pthread_mutex_*`, `pthread_cond_*`, `pthread_create` are
+# available on Linux, macOS, and Windows (via pthreads-win32 / MinGW).
+# A second backend supplies the same three types.
+
+from boucle.socle.linux.thread import _Mutex, _Condvar, _Thread
