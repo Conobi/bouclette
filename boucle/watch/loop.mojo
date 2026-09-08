@@ -66,7 +66,7 @@ from boucle.watch.recv_msg import RecvMsgFuture
 from boucle.watch.send import _SendFutureState, SendFuture
 from boucle.watch.send_msg import SendMsgFuture
 from boucle.watch.stream import _NAME_CAPACITY, _StreamState, DatagramStream
-from boucle.watch.timer import _TimerFutureState, TimerFuture
+from boucle.watch.timer import _MAX_TIMEOUT_MS, _TimerFutureState, TimerFuture
 from boucle.watch.transfer import (
     FailureReason,
     FileTransferFailed,
@@ -149,8 +149,9 @@ struct WatchLoop(Movable):
     to submit an operation on their behalf outside a callback: the
     composites, from submission until their three completions have
     arrived, because the loser's cancel is submitted after the tick that
-    resolved them; and the streams, which push their own key whenever a
-    re-arm is requested. It never owns anything: a key is dropped from
+    resolved them; the streams, which push their own key whenever a
+    re-arm is requested; and the timers, which push it when a cancel or
+    reset is requested. It never owns anything: a key is dropped from
     it as soon as the state is done, and the registry alone decides who
     frees the state. Like _settle it is heap-boxed so states can push to it
     through a stable address; _deferring is the spare list a flush swaps
@@ -417,7 +418,8 @@ struct WatchLoop(Movable):
         """Return how many slot keys sit on the deferred list.
 
         Diagnostic accessor for tests: composites awaiting their loser's
-        cancel, and streams with a re-arm or cancel queued. 0 once the
+        cancel, streams with a re-arm or cancel queued, and timers with
+        a cancel or reset queued. 0 once the
         loop is drained and no stream has a deferred submission; both
         `run()` and `step()` flush the queue before they wait, so a
         stream's deferred request counts here only until the next call
@@ -1112,34 +1114,33 @@ struct WatchLoop(Movable):
     def timeout(mut self, timeout_ms: UInt64) raises -> TimerFuture:
         """Submit an async timeout (kernel timer).
 
-        Returns a TimerFuture that resolves to True (expired) or False
-        (cancelled) after run() completes.
+        The returned `TimerFuture` resolves to True (expired) or False
+        (cancelled) once the loop has run it; `cancel()` and `reset(ms)`
+        on the handle are deferred to the next `step()` or `run()`.
 
         Args:
-            timeout_ms: How long to wait, in milliseconds.
+            timeout_ms: How long to wait, in milliseconds, at most
+                        `Int32.MAX`.
 
         Returns:
             A TimerFuture representing the in-flight timeout.
 
         Raises:
-            If the driver cannot accept the operation; nothing stays in
-            flight in that case.
+            IOError(EINVAL) above `Int32.MAX` ms; whatever the driver
+            raises when it cannot accept the operation. Nothing stays in
+            flight in either case.
         """
+        if timeout_ms > UInt64(_MAX_TIMEOUT_MS):
+            raise IOError(positive_errno=EINVAL)
         var ts = Timeout.from_ms(Int64(timeout_ms))
-        var state_ptr = self._timers.alloc(_TimerFutureState(ts))
-
-        state_ptr[].completion.invoke = _dispatch[_TimerFutureState]
-        state_ptr[].completion.context = state_ptr.unsafe_bitcast[NoneType]()
-
-        var cmp_ptr = Pointer[Completion, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=state_ptr[].completion))
+        var state_ptr = self._timers.alloc(
+            _TimerFutureState(ts, self._shared)
         )
-
-        var ts_ptr = Pointer[NoneType, MutUntrackedOrigin](
-            unsafe_from_address=Int(Pointer(to=state_ptr[]._ts))
-        )
+        state_ptr[].wire()
         try:
-            self._driver.timeout(ts_ptr, cmp_ptr)
+            self._driver.timeout(
+                state_ptr[].ts_ptr(), state_ptr[].completion_ptr()
+            )
         except e:
             self._timers.discard(_slot_index(state_ptr[]._link.key))
             raise e
@@ -1422,8 +1423,11 @@ struct WatchLoop(Movable):
         re-queued while not yet done so the next flush sees it again. A
         stream submits its pending re-arm and is not re-queued here: it
         pushes its own key again whenever it has something new to defer.
-        The `is_active` check on every key is defensive: a stale key
-        must never dereference a settled or reused slot.
+        A timer submits its pending cancel or re-arm the same way. The
+        `is_active` check on every key is defensive for composites and
+        streams and load-bearing for timers: a timer key can survive on
+        the list after its slot settled (re-queued on EAGAIN, then the
+        timer expired and the sweep released the slot).
 
         The walk is exception-safe. A composite's cancel submission can
         raise (a submission queue still full after a flush); the cancel
@@ -1450,12 +1454,20 @@ struct WatchLoop(Movable):
                 var kind = key & ((1 << _KIND_BITS) - 1)
                 var index = _slot_index(key)
                 debug_assert(
-                    kind == _KIND_CONNECT_WITH_TIMEOUT or kind == _KIND_STREAM,
-                    "only composites and streams defer submissions",
+                    kind == _KIND_CONNECT_WITH_TIMEOUT
+                    or kind == _KIND_STREAM
+                    or kind == _KIND_TIMER,
+                    "only composites, streams and timers defer submissions",
                 )
                 if kind == _KIND_STREAM:
                     if self._streams.is_active(index):
                         self._streams._slot(index)[].flush_deferred(
+                            self._driver
+                        )
+                    continue
+                if kind == _KIND_TIMER:
+                    if self._timers.is_active(index):
+                        self._timers._slot(index)[].flush_deferred(
                             self._driver
                         )
                     continue
@@ -1475,8 +1487,9 @@ struct WatchLoop(Movable):
     def _requeue_after_failed_flush(mut self, walked: Int):
         """Put the interrupted flush's remaining keys back on the deferred list.
 
-        Only a composite's cancel submission can raise: a stream's
-        `flush_deferred` swallows its driver errors and re-queues itself.
+        Only a composite's cancel submission can raise: a stream's or a
+        timer's `flush_deferred` swallows its driver errors and re-queues
+        itself.
 
         Args:
             walked: How many keys of the spare list the walk consumed,

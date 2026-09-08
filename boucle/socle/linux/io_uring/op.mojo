@@ -6,6 +6,7 @@ from boucle.socle.linux.io_uring.types import (
     IoUringOp,
     IoUringSqeFlags,
     IoUringFsyncFlags,
+    IoUringTimeoutFlags,
     IoUringFileDescriptor,
     IoUringFd,
 )
@@ -729,6 +730,65 @@ struct AsyncCancel[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
     def cancel_flags(var self, flags: UInt32) -> Self:
         """Set `IORING_ASYNC_CANCEL_*` bits (aliased to op_flags slot)."""
         self.sqe[].op_flags = flags
+        return self^
+
+
+struct TimeoutUpdate[type: SQE, origin: MutOrigin](
+    RegisterPassable, Operation
+):
+    """Re-arm a pending timeout matched by `user_data` (TIMEOUT_REMOVE with IORING_TIMEOUT_UPDATE).
+
+    Layout is liburing's `io_uring_prep_timeout_update`: `addr` carries
+    the target's user_data, `off` the new `kernel_timespec` pointer,
+    `len` 0. Relative to the moment the SQE is issued unless
+    `IoUringTimeoutFlags.ABS` is added through `timeout_flags`. The
+    kernel copies the timespec while it consumes the SQE, so it need
+    not outlive the submit.
+    """
+
+    comptime SINCE = 5.11
+
+    var sqe: Pointer[Sqe[Self.type], Self.origin]
+
+    @always_inline
+    def __init__(
+        out self,
+        ref [Self.origin]sqe: Sqe[Self.type],
+        target_user_data: UInt64,
+        ts_ptr: Pointer[c_void, MutUntrackedOrigin],
+    ):
+        _prep_rw(
+            sqe,
+            IoUringOp.TIMEOUT_REMOVE,
+            IoUringFd[False](unsafe_fd=NoFd),
+            target_user_data,
+            0,
+        )
+        sqe.off_or_addr2_or_cmd_op = UInt64(Int(ts_ptr))
+        sqe.op_flags = UInt32(IoUringTimeoutFlags.UPDATE.value)
+        self.sqe = Pointer(to=sqe)
+
+    @always_inline("nodebug")
+    def user_data(var self, value: UInt64) -> Self:
+        self.sqe[].user_data = value
+        return self^
+
+    @always_inline("nodebug")
+    def personality(var self, value: UInt16) -> Self:
+        self.sqe[].personality = value
+        return self^
+
+    @always_inline("nodebug")
+    def sqe_flags(var self, flags: IoUringSqeFlags) -> Self:
+        self.sqe[].flags |= flags
+        return self^
+
+    @always_inline("nodebug")
+    def timeout_flags(var self, flags: IoUringTimeoutFlags) -> Self:
+        """Add `IORING_TIMEOUT_*` bits; the UPDATE bit is always kept."""
+        self.sqe[].op_flags = UInt32(
+            (flags | IoUringTimeoutFlags.UPDATE).value
+        )
         return self^
 
 

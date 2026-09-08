@@ -17,7 +17,7 @@ number is never handed to epoll_ctl. See `EpollCompletionDriver` for
 why.
 """
 
-from std.collections import Optional
+from std.collections import Dict, Optional
 from std.ffi import external_call
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
@@ -319,20 +319,54 @@ struct _TimerEntry(ImplicitlyCopyable, Movable):
 
 
 struct _TimerHeap(Movable):
-    """Simple min-heap of _TimerEntry sorted by deadline_ns."""
+    """Min-heap of `_TimerEntry` by deadline with a pool-index position table.
+
+    `_pos[pool_index]` is the heap index of that timer's entry, -1 when
+    it is not armed. Every move goes through `_place`, so the table is
+    exact after each operation and `remove_by_pool_index` and `update`
+    are O(log n) instead of a scan. A pool index may be armed once at a
+    time; the pool frees a timer's slot before it can be reused.
+    """
 
     var _entries: List[_TimerEntry]
+    var _pos: List[Int]
 
     def __init__(out self):
         """Create an empty timer heap."""
         self._entries = List[_TimerEntry]()
+        self._pos = List[Int]()
 
     def __init__(out self, *, deinit move: Self):
         self._entries = move._entries^
+        self._pos = move._pos^
+
+    def position(self, pool_index: Int) -> Int:
+        """Heap index of the timer armed at `pool_index`, -1 when it is not armed."""
+        if pool_index < 0 or pool_index >= len(self._pos):
+            return -1
+        return self._pos[pool_index]
+
+    def _place(mut self, i: Int, entry: _TimerEntry):
+        """Store `entry` at heap index `i` and record its position."""
+        self._entries[i] = entry
+        self._pos[entry.pool_index] = i
+
+    def _swap(mut self, a: Int, b: Int):
+        """Exchange two heap slots, keeping both positions current."""
+        var ea = self._entries[a]
+        var eb = self._entries[b]
+        self._place(a, eb)
+        self._place(b, ea)
 
     def push(mut self, entry: _TimerEntry):
         """Append entry and sift up to restore heap order."""
+        while len(self._pos) <= entry.pool_index:
+            self._pos.append(-1)
+        debug_assert(
+            self._pos[entry.pool_index] < 0, "pool index already armed"
+        )
         self._entries.append(entry)
+        self._pos[entry.pool_index] = len(self._entries) - 1
         self._sift_up(len(self._entries) - 1)
 
     def peek_deadline(self) -> Int64:
@@ -344,31 +378,43 @@ struct _TimerHeap(Movable):
     def pop(mut self) -> _TimerEntry:
         """Remove and return the minimum entry, restoring heap order."""
         var result = self._entries[0]
+        self._pos[result.pool_index] = -1
         var last_idx = len(self._entries) - 1
         if last_idx > 0:
-            self._entries[0] = self._entries[last_idx]
+            var last = self._entries[last_idx]
+            self._place(0, last)
         _ = self._entries.pop()
         if len(self._entries) > 0:
             self._sift_down(0)
         return result
 
     def remove_by_pool_index(mut self, index: Int) -> Bool:
-        """Remove the entry with the given pool_index (linear scan).
+        """Remove the entry armed at pool index `index`; False when none is."""
+        var i = self.position(index)
+        if i < 0:
+            return False
+        self._pos[index] = -1
+        var last_idx = len(self._entries) - 1
+        if i != last_idx:
+            var last = self._entries[last_idx]
+            self._place(i, last)
+        _ = self._entries.pop()
+        if i < len(self._entries):
+            self._sift_down(i)
+            self._sift_up(i)
+        return True
 
-        Args:
-            index: The pool index to search for.
-        """
-        for i in range(len(self._entries)):
-            if self._entries[i].pool_index == index:
-                var last_idx = len(self._entries) - 1
-                if i != last_idx:
-                    self._entries[i] = self._entries[last_idx]
-                _ = self._entries.pop()
-                if i < len(self._entries):
-                    self._sift_down(i)
-                    self._sift_up(i)
-                return True
-        return False
+    def update(mut self, index: Int, deadline_ns: Int64) -> Bool:
+        """Move the timer at pool index `index` to `deadline_ns`; False when it is not armed."""
+        var i = self.position(index)
+        if i < 0:
+            return False
+        var entry = self._entries[i]
+        entry.deadline_ns = deadline_ns
+        self._entries[i] = entry
+        self._sift_down(i)
+        self._sift_up(i)
+        return True
 
     def _sift_up(mut self, idx: Int):
         """Restore heap order by moving element at idx upward."""
@@ -376,9 +422,7 @@ struct _TimerHeap(Movable):
         while i > 0:
             var parent = (i - 1) // 2
             if self._entries[i].deadline_ns < self._entries[parent].deadline_ns:
-                var tmp = self._entries[i]
-                self._entries[i] = self._entries[parent]
-                self._entries[parent] = tmp
+                self._swap(i, parent)
                 i = parent
             else:
                 break
@@ -405,9 +449,7 @@ struct _TimerHeap(Movable):
                 smallest = right
             if smallest == i:
                 break
-            var tmp = self._entries[i]
-            self._entries[i] = self._entries[smallest]
-            self._entries[smallest] = tmp
+            self._swap(i, smallest)
             i = smallest
 
 
@@ -428,8 +470,9 @@ struct _OpPool(Movable):
     in the driver retains a slot pointer across a call that can
     allocate: tick() re-derives the pointer from the event's index for
     every event, _dispatch_op and the timer path copy what they need
-    and free the slot BEFORE firing the callback, cancel scans without
-    allocating, and each operation method fills its freshly allocated
+    and free the slot BEFORE firing the callback, cancel and timeout_update
+    look the target up in the address index without allocating, and each
+    operation method fills its freshly allocated
     slot and registers it without allocating again. The one op that
     stays registered while its callback runs, the multishot recvmsg
     emulation, re-derives its slot pointer by index and re-checks the
@@ -440,6 +483,7 @@ struct _OpPool(Movable):
     var _slots: Pointer[_EpollOp, MutUntrackedOrigin]
     var _free: List[Int]
     var _capacity: Int
+    var _by_completion: Dict[Int, Int]
 
     def __init__(out self, capacity: Int):
         """Create a pool with the given number of initial slots.
@@ -456,23 +500,30 @@ struct _OpPool(Movable):
                 _EpollOp(pool_index=i)
             )
             self._free.append(i)
+        self._by_completion = Dict[Int, Int]()
 
     def __init__(out self, *, deinit move: Self):
         self._slots = move._slots
         self._free = move._free^
         self._capacity = move._capacity
+        self._by_completion = move._by_completion^
 
     def __deinit__(deinit self):
         """Free the slot array."""
         self._slots.unsafe_free()
 
-    def alloc(mut self) raises -> Pointer[_EpollOp, MutUntrackedOrigin]:
-        """Allocate a slot, growing the pool if none is free.
+    def alloc(
+        mut self, c: Pointer[Completion, MutUntrackedOrigin]
+    ) raises -> Pointer[_EpollOp, MutUntrackedOrigin]:
+        """Allocate a slot for the op completing on `c`, growing the pool if none is free.
 
-        Returns a pointer to the allocated _EpollOp. The caller must set
-        all relevant fields before registering with epoll and must not
+        The slot's completion is set here and indexed by address, so
+        `lookup(Int(c))` finds the slot until `free`. The caller sets
+        the remaining fields before registering with epoll and must not
         keep the pointer across another alloc(), which may move the
-        slot array (see the struct docstring).
+        slot array (see the struct docstring). Registering one
+        completion address twice while both ops are live is not
+        supported: the index keeps the latest.
 
         Raises:
             If the pool already holds 2^32 slots, the most the 32-bit
@@ -482,6 +533,8 @@ struct _OpPool(Movable):
             self._grow()
         var idx = self._free.pop()
         self._slots[unsafe_offset=idx].active = True
+        self._slots[unsafe_offset=idx].completion = c
+        self._by_completion[Int(c)] = idx
         return self._slots.unsafe_offset(idx)
 
     def _grow(mut self) raises:
@@ -525,6 +578,9 @@ struct _OpPool(Movable):
             self._slots[unsafe_offset=index].active,
             "double free of op pool slot",
         )
+        _ = self._by_completion.pop(
+            Int(self._slots[unsafe_offset=index].completion), -1
+        )
         self._slots[unsafe_offset=index].active = False
         self._slots[unsafe_offset=index].generation += 1
         self._free.append(index)
@@ -532,6 +588,10 @@ struct _OpPool(Movable):
     def free_count(self) -> Int:
         """Return the number of free slots in the current array."""
         return len(self._free)
+
+    def lookup(self, completion_addr: Int) -> Optional[Int]:
+        """Pool index of the live op whose completion sits at `completion_addr`."""
+        return self._by_completion.get(completion_addr)
 
     def capacity(self) -> Int:
         """Return the number of slots in the current array, free or not."""
@@ -1508,11 +1568,10 @@ struct EpollCompletionDriver(IoDriver):
         Raises:
             If epoll registration fails.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.CONNECT
         op[].fd = fd
         op[].dup_fd = Int32(-1)
-        op[].completion = c
 
         var flags = syscall[__NR_fcntl, Scalar[DType.int64]](
             fd, Int32(F_GETFL), Int32(0)
@@ -1562,11 +1621,10 @@ struct EpollCompletionDriver(IoDriver):
         var deadline_ns = _monotonic_ns() + (
             ts_ptr[].tv_sec * 1_000_000_000 + ts_ptr[].tv_nsec
         )
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.TIMEOUT
         op[].fd = Int32(-1)
         op[].dup_fd = Int32(-1)
-        op[].completion = c
         op[].deadline_ns = deadline_ns
         self._state[].timers.push(
             _TimerEntry(
@@ -1581,8 +1639,8 @@ struct EpollCompletionDriver(IoDriver):
     ) raises:
         """Cancel a previously submitted operation.
 
-        Finds the target by Completion pointer comparison among the
-        pending ops. If found, the target receives -ECANCELED and the
+        Looks the target up in the pool's completion index (O(1)).
+        If found, the target receives -ECANCELED and the
         cancel op succeeds with result 0. If the target is not pending
         (already completed, already cancelled, or never submitted) the
         cancel op receives -ENOENT, matching io_uring. Both fire
@@ -1596,26 +1654,63 @@ struct EpollCompletionDriver(IoDriver):
             target: Pointer to the Completion of the op to cancel.
             c: Pointer to the Completion for the cancel itself.
         """
-        for i in range(self._state[].pool.capacity()):
-            var op = self._state[].pool.slot_ptr(i)
-            if not op[].active:
-                continue
-            if Int(op[].completion) != Int(target):
-                continue
-
-            # Found the pending target op.
-            if op[].kind is _OpKind.TIMEOUT:
-                _ = self._state[].timers.remove_by_pool_index(i)
-                self._state[].pool.free(i)
-            else:
-                self._detach_op(op)
-            self._state[].ready.append(
-                _ReadyEntry(target, -Int(ECANCELED), UInt32(0))
-            )
-            self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
-            return
+        var found = self._state[].pool.lookup(Int(target))
+        if found:
+            var index = found.value()
+            var op = self._state[].pool.slot_ptr(index)
+            if op[].active:
+                if op[].kind is _OpKind.TIMEOUT:
+                    _ = self._state[].timers.remove_by_pool_index(index)
+                    self._state[].pool.free(index)
+                else:
+                    self._detach_op(op)
+                self._state[].ready.append(
+                    _ReadyEntry(target, -Int(ECANCELED), UInt32(0))
+                )
+                self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
+                return
 
         # Target not pending: nothing to cancel.
+        self._state[].ready.append(
+            _ReadyEntry(c, -Int(ENOENT), UInt32(0))
+        )
+
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Move a pending timer's deadline; the result fires from the ready queue.
+
+        `c` gets 0 and the heap entry moves to now + `ts` when `target`
+        is an active TIMEOUT op, -ENOENT otherwise (never submitted,
+        already fired, cancelled, or not a timer). Timers fire only in
+        `tick()`, which never runs concurrently with this call, so
+        -EALREADY cannot happen here.
+
+        Args:
+            ts: Opaque pointer to a 16-byte __kernel_timespec (relative
+                duration), read here and not kept.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the Completion token for the update itself.
+        """
+        var found = self._state[].pool.lookup(Int(target))
+        if found:
+            var index = found.value()
+            var op = self._state[].pool.slot_ptr(index)
+            if op[].active and op[].kind is _OpKind.TIMEOUT:
+                var ts_ptr = Pointer[__kernel_timespec, MutUntrackedOrigin](
+                    unsafe_from_address=Int(ts)
+                )
+                var deadline_ns = _monotonic_ns() + (
+                    ts_ptr[].tv_sec * 1_000_000_000 + ts_ptr[].tv_nsec
+                )
+                op[].deadline_ns = deadline_ns
+                var moved = self._state[].timers.update(index, deadline_ns)
+                debug_assert(moved, "active TIMEOUT op missing from the timer heap")
+                self._state[].ready.append(_ReadyEntry(c, 0, UInt32(0)))
+                return
         self._state[].ready.append(
             _ReadyEntry(c, -Int(ENOENT), UInt32(0))
         )
@@ -1631,11 +1726,10 @@ struct EpollCompletionDriver(IoDriver):
             fd: The listening socket file descriptor.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.ACCEPT
         op[].fd = fd
         op[].dup_fd = Int32(-1)
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
     def recv(
@@ -1654,13 +1748,12 @@ struct EpollCompletionDriver(IoDriver):
             len: Maximum bytes to receive.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.RECV
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].buf = UInt64(Int(buf))
         op[].len = len
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
     def send(
@@ -1678,13 +1771,12 @@ struct EpollCompletionDriver(IoDriver):
             len: Number of bytes to send.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.SEND
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].buf = UInt64(Int(buf))
         op[].len = len
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
 
     def recvmsg(
@@ -1713,13 +1805,12 @@ struct EpollCompletionDriver(IoDriver):
             c: Pointer to the caller-owned Completion token.
             flags: `recvmsg(2)` flags to pass through; 0 for none.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.RECVMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].msg = UInt64(Int(msg))
         op[].flags = flags
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLIN))
 
     def sendmsg(
@@ -1736,12 +1827,11 @@ struct EpollCompletionDriver(IoDriver):
                  completion fires.
             c: Pointer to the caller-owned Completion token.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.SENDMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].msg = UInt64(Int(msg))
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLOUT))
 
     # ── File I/O via worker pool ────────────────────────────────────────
@@ -1990,12 +2080,11 @@ struct EpollCompletionDriver(IoDriver):
         Raises:
             If epoll registration fails.
         """
-        var op = self._state[].pool.alloc()
+        var op = self._state[].pool.alloc(c)
         op[].kind = _OpKind.MULTISHOT_RECVMSG
         op[].fd = fd
         op[].dup_fd = Int32(-1)
         op[].msg = UInt64(Int(msg))
         op[].group_id = group_id
-        op[].completion = c
         self._register_op(op, UInt32(EPOLLIN), edge_triggered=False)
 

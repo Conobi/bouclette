@@ -113,6 +113,32 @@ trait IoDriver(Movable):
         """
         ...
 
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Re-arm the timeout submitted with `target` to expire `ts` after this call is processed.
+
+        `c` completes with 0 on success, -ENOENT when the target is not
+        pending (never existed, already fired, cancelled), -EALREADY
+        when it is firing right now. The target keeps its own
+        completion: -ETIME at the new deadline on success, unaffected
+        on failure. The timespec must stay valid until the next `tick()`
+        or submission flush, exactly as for `timeout`: on io_uring this
+        call only writes the SQE and the kernel reads the timespec at
+        the following `io_uring_enter`.
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec (16-byte
+                kernel_timespec on Linux), a relative duration.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the caller-owned Completion token for the
+               update itself.
+        """
+        ...
+
     def accept(
         mut self,
         fd: RawHandle,

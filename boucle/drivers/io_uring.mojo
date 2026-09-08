@@ -10,7 +10,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc as _heap_alloc
 
 from boucle.socle.linux.io_uring import IoUring
-from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, AsyncCancel, ProvideBuffers, Fsync
+from boucle.socle.linux.io_uring.op import Nop, Connect, Accept, Recv, Send, RecvMsg, SendMsg, Timeout, TimeoutUpdate, AsyncCancel, ProvideBuffers, Fsync
 from boucle.socle.linux.io_uring.op import Read as ReadOp
 from boucle.socle.linux.io_uring.op import Write as WriteOp
 from boucle.socle.linux.io_uring.types import (
@@ -482,6 +482,36 @@ struct IoUringDriver(IoDriver):
         _ = AsyncCancel(sq.__next__(), UInt64(Int(target))).user_data(
             UInt64(Int(c))
         )
+
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Re-arm a pending timeout with TIMEOUT_REMOVE + IORING_TIMEOUT_UPDATE.
+
+        The kernel copies the timespec while it consumes the SQE and
+        runs the update inline under its timeout lock, so `c`'s CQE is
+        posted by the time the submit returns.
+
+        Args:
+            ts: Opaque pointer to a 16-byte kernel_timespec, valid until
+                the next submit.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the Completion token for the update itself.
+        """
+        if not self._ring.sq():
+            _ = self._ring.submit_and_wait(wait_nr=0)
+            if not self._ring.sq():
+                raise _queue_full()
+        var sq = self._ring.unsynced_sq()
+        var ts_cv = Pointer[c_void, MutUntrackedOrigin](
+            unsafe_from_address=Int(ts)
+        )
+        _ = TimeoutUpdate(
+            sq.__next__(), UInt64(Int(target)), ts_cv
+        ).user_data(UInt64(Int(c)))
 
     def accept(
         mut self,

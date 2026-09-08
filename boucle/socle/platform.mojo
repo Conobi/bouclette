@@ -100,6 +100,7 @@ from boucle.socle.linux.raw import (
     EOPNOTSUPP,
     EPERM,
     EPIPE,
+    ETIME,
     ETIMEDOUT,
 )
 

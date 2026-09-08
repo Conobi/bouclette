@@ -13,6 +13,9 @@ from std.memory import Pointer
 from std.testing import assert_equal, assert_true
 
 from boucle.timeout import Timeout
+from boucle.socle.platform import ETIME
+from boucle.socle.ptr import null_ptr
+from boucle.watch._shared import _LoopShared
 from boucle.watch import WatchLoop, TimerFuture
 from boucle.watch._callback import _KIND_BITS
 from boucle.watch._slab import _Slab
@@ -30,19 +33,33 @@ def _queue_ptr(ref queue: List[Int]) -> Pointer[List[Int], MutUntrackedOrigin]:
     )
 
 
+def _timer_state() -> _TimerFutureState:
+    """A timer state with no loop behind it; the timer callback never reads the shared box."""
+    return _TimerFutureState(
+        Timeout.from_ms(1), null_ptr[_LoopShared, MutUntrackedOrigin]()
+    )
+
+
+def _expire(state: Pointer[_TimerFutureState, MutUntrackedOrigin]):
+    """Deliver -ETIME as the driver would; the state settles itself."""
+    _TimerFutureState._on_timer_cb(
+        state.unsafe_bitcast[NoneType](), -Int(ETIME), UInt32(0)
+    )
+
+
 def test_slab_grows_in_chunks_and_keeps_addresses() raises:
     """Five states in chunks of two span three chunks and never move."""
     var queue = List[Int]()
     var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
     var ptrs = List[Pointer[_TimerFutureState, MutUntrackedOrigin]]()
     for _ in range(5):
-        ptrs.append(slab.alloc(_TimerFutureState(Timeout.from_ms(1))))
+        ptrs.append(slab.alloc(_timer_state()))
     assert_equal(len(slab._chunks), 3, "five slots in chunks of two")
     assert_equal(slab.in_flight(), 5)
     # Growth after the fact must not move what was handed out.
     var addr0 = Int(ptrs[0])
     for _ in range(4):
-        ptrs.append(slab.alloc(_TimerFutureState(Timeout.from_ms(1))))
+        ptrs.append(slab.alloc(_timer_state()))
     assert_equal(Int(ptrs[0]), addr0, "chunk growth must not move slots")
     assert_equal(slab.in_flight(), 9)
     for p in ptrs:
@@ -58,20 +75,18 @@ def test_slot_is_queued_once_by_the_second_event() raises:
     var slab = _Slab[_TimerFutureState](4, 5, _queue_ptr(queue))
 
     # Completion first: the live count drops, nothing is queued yet.
-    var a = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
-    a[].set_result(-62)
-    a[].notify_done()
+    var a = slab.alloc(_timer_state())
+    _expire(a)
     assert_equal(slab.in_flight(), 0, "done leaves the live count")
     assert_equal(len(queue), 0, "handle still alive: nothing to settle")
     a[].mark_owner_dropped()
     assert_equal(len(queue), 1, "the drop is the second event")
 
     # Drop first: nothing is queued until the completion lands.
-    var b = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    var b = slab.alloc(_timer_state())
     b[].mark_owner_dropped()
     assert_equal(len(queue), 1, "dropped before done: not yet settleable")
-    b[].set_result(-62)
-    b[].notify_done()
+    _expire(b)
     assert_equal(len(queue), 2, "the completion is the second event")
 
     # Keys route back to this slab and decode to the two slots.
@@ -89,14 +104,13 @@ def test_freed_slot_is_reused_before_growing() raises:
     """Releasing a slot and allocating again reuses it; no new chunk."""
     var queue = List[Int]()
     var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
-    var a = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
-    var b = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    var a = slab.alloc(_timer_state())
+    var b = slab.alloc(_timer_state())
     var addr_b = Int(b)
     b[].mark_owner_dropped()
-    b[].set_result(-62)
-    b[].notify_done()
+    _expire(b)
     slab.settle(queue.pop() >> _KIND_BITS)
-    var c = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    var c = slab.alloc(_timer_state())
     assert_equal(Int(c), addr_b, "the released slot is handed out again")
     assert_equal(len(slab._chunks), 1, "no growth while a slot is free")
     a[].mark_owner_dropped()
@@ -108,8 +122,8 @@ def test_detach_marks_live_handles_and_keeps_chunks() raises:
     """A state whose handle is alive at detach is marked loop_gone."""
     var queue = List[Int]()
     var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
-    var held = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
-    var orphan = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    var held = slab.alloc(_timer_state())
+    var orphan = slab.alloc(_timer_state())
     orphan[].mark_owner_dropped()
     slab.detach_all()
     assert_true(held[].loop_gone(), "live handle learns the loop is gone")
@@ -183,9 +197,8 @@ def test_key_has_room_for_ten_kinds() raises:
     assert_equal(_KIND_BITS, 4)
     var queue = List[Int]()
     var slab = _Slab[_TimerFutureState](2, 9, _queue_ptr(queue))
-    var s = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
-    s[].set_result(-62)
-    s[].notify_done()
+    var s = slab.alloc(_timer_state())
+    _expire(s)
     s[].mark_owner_dropped()
     assert_equal(len(queue), 1)
     assert_equal(queue[0] & ((1 << _KIND_BITS) - 1), 9, "kind 9 survives the encoding")
@@ -200,7 +213,7 @@ def test_active_count_and_rearmed_link() raises:
     var slab = _Slab[_TimerFutureState](4, 5, _queue_ptr(queue))
     assert_equal(slab.active(), 0)
     assert_true(not slab.is_active(0), "no slot before the first alloc")
-    var p = slab.alloc(_TimerFutureState(Timeout.from_ms(1)))
+    var p = slab.alloc(_timer_state())
     assert_equal(slab.active(), 1)
     assert_true(slab.is_active(0), "slot 0 holds the state")
     assert_equal(slab.in_flight(), 1)

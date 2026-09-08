@@ -211,6 +211,24 @@ struct AutoDriver(IoDriver):
             return self._uring.value().cancel(target, c)
         return self._epoll.value().cancel(target, c)
 
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Re-arm the timeout submitted with `target`; see `IoDriver.timeout_update`.
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec, valid
+                until the next tick or submission flush.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the Completion token for the update itself.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().timeout_update(ts, target, c)
+        return self._epoll.value().timeout_update(ts, target, c)
+
     def accept(
         mut self,
         fd: RawHandle,

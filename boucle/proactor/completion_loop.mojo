@@ -134,6 +134,22 @@ struct CompletionLoop(Movable):
         """
         self._inner.driver.cancel(target, c)
 
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Re-arm the timeout submitted with `target`; see `IoDriver.timeout_update`.
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec, valid
+                until the next tick or submission flush.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the Completion token for the update itself.
+        """
+        self._inner.driver.timeout_update(ts, target, c)
+
     def accept(
         mut self,
         fd: RawHandle,

@@ -28,6 +28,8 @@ from boucle.socle.linux.raw import (
     IORING_SETUP_REGISTERED_FD_ONLY,
     IORING_SETUP_NO_SQARRAY,
     IORING_FSYNC_DATASYNC,
+    IORING_TIMEOUT_ABS,
+    IORING_TIMEOUT_UPDATE,
     IORING_POLL_ADD_MULTI,
     IORING_POLL_UPDATE_EVENTS,
     IORING_POLL_UPDATE_USER_DATA,
@@ -489,6 +491,32 @@ struct IoUringFsyncFlags(TrivialRegisterPassable, Defaultable):
     @implicit
     def __init__(out self, value: UInt32):
         self.value = value
+
+
+struct IoUringTimeoutFlags(TrivialRegisterPassable, Defaultable):
+    """`IORING_TIMEOUT_*` bits for a TIMEOUT or TIMEOUT_REMOVE SQE.
+
+    `UPDATE` turns a TIMEOUT_REMOVE into a re-arm; `ABS` makes the
+    timespec an absolute time on the target's clock.
+    """
+
+    comptime ABS = Self(IORING_TIMEOUT_ABS)
+    comptime UPDATE = Self(IORING_TIMEOUT_UPDATE)
+
+    var value: UInt32
+
+    @always_inline("nodebug")
+    def __init__(out self):
+        self.value = 0
+
+    @always_inline("nodebug")
+    @implicit
+    def __init__(out self, value: UInt32):
+        self.value = value
+
+    @always_inline("nodebug")
+    def __or__(self, rhs: Self) -> Self:
+        return Self(self.value | rhs.value)
 
 
 struct IoUringMsgRingCmds(TrivialRegisterPassable):

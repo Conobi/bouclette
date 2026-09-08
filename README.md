@@ -144,6 +144,8 @@ typed failure: ECONNREFUSED (111)
 
 **Multishot datagrams.** `loop.buffer_pool(count, size)` returns a `BufferPool` the loop owns; `loop.recv_msg_multishot(socket, pool)` returns a `DatagramStream` that keeps receiving into that pool until dropped or ended. `stream.next()` yields a `Datagram` — payload span, `peer_v4()`/`peer_v6()`, `control()` — whose `LeasedBuffer` goes back to the pool when it is dropped. Drive the stream with `loop.step()`, not `run()`: `run()` returns as soon as no one-shot operation is pending. When every buffer is leased the stream ends with `ENOBUFS` — `armed()` turns False and `error()` is set — and `rearm()` resumes it once leases have been dropped. `buffer_pool` accepts a count in 1..32768 (rounded up to a power of two) and a size from 64 bytes to 16 MiB; anything else raises `IOError(EINVAL)`.
 
+**Timers.** `loop.timeout(ms)` returns a `TimerFuture` whose `result()` is True once it expired. `cancel()` asks the loop to cancel it at the next `step()` or `run()` — `result()` then returns False, or True if it expired before the cancel reached the kernel. `reset(ms)` re-arms it from the moment the request reaches the kernel: one submission and one completion per reset on io_uring (`IORING_TIMEOUT_UPDATE`), a heap update on epoll; resets not yet flushed collapse to the last value. Both return False once the timer completed, after a cancel, or when the loop is gone. Dropping the handle does not cancel: an armed timer keeps `run()` alive until it fires. Durations are capped at `Int32.MAX` ms.
+
 **Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned). The submitting verbs raise the same types: `loop.recv`/`loop.send` raise `TransferFailed` and `recv_msg`/`send_msg`/`send_to`/`recv_from` raise `MessageFailed`, always with reason `IO` and the buffer or message inside, when the socket handle is invalid or the driver refuses the submission; nothing stays in flight in that case.
 
 **Lifetimes.** Sockets are *not* moved into the loop: they must stay alive across `run()`, and you close them yourself.
@@ -264,7 +266,7 @@ boucle/                              Public API — what developers import
 │   ├── send.mojo                    SendFuture
 │   ├── recv_msg.mojo                RecvMsgFuture
 │   ├── send_msg.mojo                SendMsgFuture
-│   ├── timer.mojo                   TimerFuture
+│   ├── timer.mojo                   TimerFuture (cancel, reset)
 │   ├── transfer.mojo                TransferResult, TransferFailed, MessageFailed, FailureReason
 │   ├── outcome.mojo                 ConnectOutcome
 │   ├── pool.mojo                    BufferPool, LeasedBuffer (loop-owned receive buffers)
