@@ -180,7 +180,19 @@ struct IoUringDriver(IoDriver):
     (`IORING_REGISTER_PROBE`), the release from `uname` for multishot
     recvmsg (6.0) and buffer rings (5.19), which the probe does not
     expose, and the setup feature flags for `IORING_FEAT_EXT_ARG`. The
-    ring is always requested with `IORING_SETUP_NO_SQARRAY`.
+    ring is always requested with `NO_SQARRAY`, `SINGLE_ISSUER`,
+    `DEFER_TASKRUN`, `COOP_TASKRUN` and `TASKRUN_FLAG`.
+
+    One issuer thread. The thread that constructs the driver is the
+    ring's only issuer for its lifetime: every submission, every
+    `tick()` and every `io_uring_register` must come from it. The kernel
+    reports a violation as EEXIST from `io_uring_enter` or
+    `io_uring_register`, raised here from `tick()` or the offending
+    operation. Moving the driver within that thread is fine. Task work
+    is deferred until the issuer enters the ring with GETEVENTS, which
+    every `tick()` does; when local work is queued the kernel raises
+    `IORING_SQ_TASKRUN`, which `cq_needs_flush()` reads so a submit-only
+    enter adds GETEVENTS too.
 
     Registered buffer rings are kept in `_groups`, keyed by group id, so
     `return_buffer` can recycle a buffer without the caller holding the
@@ -200,7 +212,9 @@ struct IoUringDriver(IoDriver):
     def __init__(out self, *, capacity: Int = 64) raises:
         """Construct an IoUringDriver with the given capacity hint.
 
-        Sets up the ring with `IORING_SETUP_NO_SQARRAY`, then reads
+        Sets up the ring with `NO_SQARRAY` and the four task-work flags
+        (`SINGLE_ISSUER`, `DEFER_TASKRUN`, `COOP_TASKRUN`,
+        `TASKRUN_FLAG`), binding the ring to this thread, then reads
         three facts about the running kernel and keeps only the
         answers `supports()` needs: registers the opcode probe
         (`IORING_REGISTER_PROBE`) -- one extra `io_uring_register`
@@ -225,7 +239,13 @@ struct IoUringDriver(IoDriver):
         """
         self._sentinel_ts = __kernel_timespec(tv_sec=Int64(0), tv_nsec=Int64(0))
         var params = IoUringParams()
-        params.flags |= IoUringSetupFlags.NO_SQARRAY
+        params.flags |= (
+            IoUringSetupFlags.NO_SQARRAY
+            | IoUringSetupFlags.SINGLE_ISSUER
+            | IoUringSetupFlags.DEFER_TASKRUN
+            | IoUringSetupFlags.COOP_TASKRUN
+            | IoUringSetupFlags.TASKRUN_FLAG
+        )
         self._ring = IoUring[](sq_entries=UInt32(capacity), params=params)
         self._setup_flags = params.flags
         var groups = _heap_alloc[List[BufRing]](1)
@@ -846,7 +866,7 @@ struct IoUringDriver(IoDriver):
         """Return the io_uring setup flags requested at construction.
 
         Read-only, exposed so tests can confirm a specific flag (e.g.
-        `IORING_SETUP_NO_SQARRAY`) was actually requested from the
+        `IORING_SETUP_SINGLE_ISSUER`) was actually requested from the
         kernel, without reaching into the ring's internals.
 
         Returns:

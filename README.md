@@ -277,7 +277,7 @@ boucle/                              Public API — what developers import
 │                                    ReadinessHandler
 ├── proactor/                        Raw completion plumbing under watch/
 │   ├── completion_loop.mojo         CompletionLoop — pointer-level escape hatch
-│   ├── loop.mojo                    EventLoop — single-threaded completion-driven loop
+│   ├── loop.mojo                    EventLoop — single-threaded completion-driven loop (enforced by the kernel on io_uring)
 │   └── completion.mojo              Completion, CompletionFn (per-operation callback)
 ├── drivers/                         Backend implementations + auto-detection
 │   ├── driver.mojo                  IoDriver, ReadinessDriver traits

@@ -1,4 +1,11 @@
-"""EventLoop — single-threaded event loop driven by completions."""
+"""EventLoop — single-threaded event loop driven by completions.
+
+One thread owns a loop and its driver for the loop's lifetime. On
+io_uring the kernel enforces it: the ring is set up with
+`IORING_SETUP_SINGLE_ISSUER`, and a submission, tick or register from
+any other thread raises EEXIST. On epoll nothing checks; the rule is the
+same.
+"""
 
 from boucle.drivers.driver import IoDriver
 

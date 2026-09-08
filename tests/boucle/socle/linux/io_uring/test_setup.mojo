@@ -65,9 +65,48 @@ def test_setup() raises:
         )
 
 
+def test_setup_with_taskrun_flags() raises:
+    """A ring set up with the deferred task-work flags answers an idle GETEVENTS enter with 0.
+
+    `DEFER_TASKRUN` requires `SINGLE_ISSUER` (EINVAL otherwise) and makes
+    an enter from any thread but the creator fail with EEXIST. This is
+    the creating thread, so the enter must succeed with no completions.
+    Kernel 6.1 or later; the ring already needs 6.6 for `NO_SQARRAY`.
+    """
+    var params = IoUringParams()
+    params.flags |= (
+        IoUringSetupFlags.NO_SQARRAY
+        | IoUringSetupFlags.SINGLE_ISSUER
+        | IoUringSetupFlags.DEFER_TASKRUN
+        | IoUringSetupFlags.COOP_TASKRUN
+        | IoUringSetupFlags.TASKRUN_FLAG
+    )
+    var fd = io_uring_setup[False](UInt32(16), params)
+    assert_true(
+        fd.unsafe_fd() > -1,
+        "io_uring_setup with the task-work flags should return a valid fd",
+    )
+    assert_true(
+        Bool(params.flags & IoUringSetupFlags.DEFER_TASKRUN),
+        "the kernel must hand the requested flags back unchanged",
+    )
+    var result = io_uring_enter(
+        fd,
+        to_submit=UInt32(0),
+        min_complete=UInt32(0),
+        flags=IoUringEnterFlags.GETEVENTS,
+        arg=NO_ENTER_ARG,
+    )
+    assert_equal(
+        Int(result), 0,
+        "idle GETEVENTS enter on a DEFER_TASKRUN ring should return 0",
+    )
+
+
 def main() raises:
     if not _has_io_uring():
         print("SKIP: io_uring not available")
         return
     test_setup()
+    test_setup_with_taskrun_flags()
     print("PASS: test_setup.mojo")

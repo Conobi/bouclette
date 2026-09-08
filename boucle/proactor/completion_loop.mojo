@@ -8,6 +8,11 @@ takes raw pointers and none of them returns a typed result, so keeping
 the operation state alive until its completion fires is entirely on the
 caller. Reach for `boucle.WatchLoop` instead; use this only when you
 need an operation the futures do not expose yet.
+
+One thread per loop: the thread that constructs a `CompletionLoop` is
+the only one that may submit, tick or register on it. The io_uring
+backend has the kernel enforce this (`IORING_SETUP_SINGLE_ISSUER`,
+EEXIST from any other thread); the epoll backend does not check.
 """
 
 from boucle.handle import RawHandle

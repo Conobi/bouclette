@@ -145,6 +145,39 @@ def test_features_from_degrades_on_unreadable_kernel() raises:
     )
 
 
+def test_setup_carries_taskrun_flags() raises:
+    """The driver requests SINGLE_ISSUER, DEFER_TASKRUN, COOP_TASKRUN and TASKRUN_FLAG.
+
+    They make the constructing thread the ring's only issuer and defer
+    task work to its GETEVENTS enters. The kernel rejects `DEFER_TASKRUN`
+    without `SINGLE_ISSUER`, so the four travel together; a lost flag
+    silently falls back to eager task-work delivery, which no other test
+    can observe.
+    """
+    var driver = IoUringDriver(capacity=4)
+    var flags = driver.setup_flags()
+    assert_true(
+        Bool(flags & IoUringSetupFlags.SINGLE_ISSUER),
+        "driver must request IORING_SETUP_SINGLE_ISSUER at setup",
+    )
+    assert_true(
+        Bool(flags & IoUringSetupFlags.DEFER_TASKRUN),
+        "driver must request IORING_SETUP_DEFER_TASKRUN at setup",
+    )
+    assert_true(
+        Bool(flags & IoUringSetupFlags.COOP_TASKRUN),
+        "driver must request IORING_SETUP_COOP_TASKRUN at setup",
+    )
+    assert_true(
+        Bool(flags & IoUringSetupFlags.TASKRUN_FLAG),
+        "driver must request IORING_SETUP_TASKRUN_FLAG at setup",
+    )
+    assert_true(
+        Bool(flags & IoUringSetupFlags.NO_SQARRAY),
+        "NO_SQARRAY must survive next to the task-work flags",
+    )
+
+
 def main() raises:
     # Pure: does not touch the kernel, so it runs even without io_uring.
     test_features_from_degrades_on_unreadable_kernel()
@@ -155,4 +188,5 @@ def main() raises:
     test_supports_matches_kernel()
     test_supports_survives_move()
     test_setup_carries_no_sqarray()
+    test_setup_carries_taskrun_flags()
     print("PASS: test_io_uring_supports.mojo")
