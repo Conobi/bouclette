@@ -90,11 +90,12 @@ struct _MessageState(_FutureCallback):
         operation is submitted. For a receive the name slot is zeroed
         (a reused message never carries its previous peer; a receive
         that writes no name reports UNSPEC) and offered whole, as is the
-        whole control area; for a send only a set peer and the control
-        record `set_ecn` wrote are offered. Bytes the kernel wrote on an
-        earlier receive are never offered to a send. The payload window
-        may be empty (`iov_len` 0) for a zero-length send or a receive
-        with no bytes requested.
+        whole control area; for a send only a set peer and the records
+        appended to the control area (`Message.append_control` and the
+        helpers on it) are offered, `_control_appended` bytes from
+        offset 0. Bytes the kernel wrote on an earlier receive are never
+        offered to a send. The payload window may be empty (`iov_len`
+        0) for a zero-length send or a receive with no bytes requested.
         """
         self._iov[0].iov_base = UInt64(Int(self.msg._payload.unsafe_ptr()))
         self._iov[0].iov_len = UInt64(len(self.msg._payload))

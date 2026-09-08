@@ -3,10 +3,10 @@
 The RAII handle for a one-shot `WatchLoop.send_msg` (and its `send_to`
 wrapper). It points at a slab-owned `_MessageState` (`_message.mojo`)
 holding the `Message` the kernel reads: the payload, the destination
-and the control record `Message.set_ecn` wrote (it replaces whatever the
-area held). `result()` hands
-the message back unchanged inside a `MessageResult`, or raises
-`MessageFailed` carrying it.
+and the control records appended since the last `clear_control` or
+receive (`Message.set_ecn`, `Message.set_gso_segment_size`,
+`Message.append_control`). `result()` hands the message back unchanged
+inside a `MessageResult`, or raises `MessageFailed` carrying it.
 
 Ownership follows `_callback.mojo`: dropping the future before the
 completion arrives gives the message up and the loop releases it once

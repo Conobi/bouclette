@@ -39,6 +39,9 @@ from boucle.socle.platform import (
     MSG_TRUNC,
     SOL_IP,
     SOL_IPV6,
+    SOL_UDP,
+    UDP_GRO,
+    UDP_SEGMENT,
 )
 
 
@@ -228,6 +231,26 @@ struct ControlMessages[origin: ImmOrigin](ImplicitlyCopyable, Movable):
                 return cm.data()[0] & 0x03
         return None
 
+    def gro_segment_size(self) -> Optional[Int]:
+        """Segment size of a GRO-coalesced datagram.
+
+        The int of the first SOL_UDP/UDP_GRO record with at least four
+        data bytes, read unaligned in host order like `_read_i32` (the
+        kernel writes a native `int`, and every Linux target boucle
+        builds for is little-endian). None when the datagram was not
+        coalesced: the kernel writes the record only then, so a
+        `Socket.set_gro` receiver sees None on a plain datagram.
+        """
+        for cm in self:
+            if (
+                cm.level == Int32(SOL_UDP)
+                and cm.type == Int32(UDP_GRO)
+                and len(cm.data()) >= 4
+            ):
+                var p = cm.data().unsafe_ptr().unsafe_bitcast[Int32]()
+                return Int(p.unsafe_load[alignment=1]())
+        return None
+
 
 # ===----------------------------------------------------------------------=== #
 # Message
@@ -244,17 +267,22 @@ struct Message(Movable):
     shares the bytes with the kernel.
 
     For a send: the payload's whole length is offered, the peer (if set)
-    is the destination, and the control record written by `set_ecn`
-    goes out with the datagram. For a receive: the payload's length is
-    the window, the peer slot receives the sender's address, and up to
-    `control_capacity` bytes of control records are collected.
+    is the destination, and the records appended to the control area
+    since the last `clear_control` or receive (`append_control`,
+    `set_ecn`, `set_gso_segment_size`) go out with the datagram. For a
+    receive: the payload's length is the window, the peer slot receives
+    the sender's address, and up to `control_capacity` bytes of control
+    records are collected.
 
-    The control area keeps two lengths. The bytes the kernel wrote on
-    the last receive are only ever read back (`MessageResult.control`);
-    a send never offers them, so a peer cannot pick the TOS, the
-    pktinfo or anything else of a reply by what it sent. The bytes
-    `set_ecn` wrote are the only ones a send offers. Both start at the
-    front of the area, so at most one of the two is non-zero at a time.
+    The control area keeps two lengths, both counted from the front of
+    the area, at most one non-zero. `_control_received` is what the
+    kernel wrote on the last receive: only ever read back
+    (`MessageResult.control`), never offered to a send, so a peer cannot
+    pick the TOS, the pktinfo or anything else of a reply by what it
+    sent. `_control_appended` is the append-only builder a send offers,
+    rebuilt per send: every append discards the received bytes first,
+    `clear_control` empties it, and `MessageResult.take_message` zeroes
+    both lengths on the way out.
 
     """
 
@@ -271,9 +299,10 @@ struct Message(Movable):
 
         Args:
             payload: The bytes to send, or the window to receive into.
-            control_capacity: Bytes reserved for control records. Each
-                              TOS/TCLASS record takes 24; a receiver that
-                              wants ECN needs at least that much. A
+            control_capacity: Bytes reserved for control records; size it
+                              with `control_space`: 24 for a TOS/TCLASS
+                              record, 24 for a UDP_SEGMENT record, 48 for
+                              a receiver that wants both ECN and GRO. A
                               negative value reserves nothing.
         """
         self._payload = payload^
@@ -302,17 +331,82 @@ struct Message(Movable):
         """
         return self._peer.family()
 
+    @staticmethod
+    def control_space(data_len: Int) -> Int:
+        """Bytes one record with `data_len` bytes of data occupies (CMSG_SPACE).
+
+        16-byte header plus data, rounded up to 8: `control_space(4) +
+        control_space(2)` (48) fits an ECN record and a GSO record.
+        Negative `data_len` counts as 0; a `data_len` above `Int.MAX - 23`
+        returns `Int.MAX` instead of wrapping, so the result is monotone
+        and never below 16.
+        """
+        var n = max(data_len, 0)
+        if n > Int.MAX - 23:
+            return Int.MAX
+        return _cmsg_align(size_of[cmsghdr]() + n)
+
+    def append_control(
+        mut self, level: Int32, type: Int32, data: Span[UInt8, _]
+    ) raises IOError:
+        """Append one control record for the next send.
+
+        Bytes the kernel wrote on the last receive are discarded first,
+        even when the append then fails: a send never offers received
+        records. The record goes after every record appended since the
+        last `clear_control` or receive; the kernel walks them in order
+        and, for a repeated (level, type), applies the last. `level` and
+        `type` are not validated here: the kernel rejects an unknown one
+        at send time (an unknown SOL_UDP type is EINVAL).
+
+        Args:
+            data: The record's payload; `cmsg_len` is 16 plus its
+                  length, unpadded, as the kernel requires for
+                  fixed-size types such as UDP_SEGMENT.
+
+        Raises:
+            IOError(EINVAL) when the record, padded to 8, does not fit
+            in the capacity left after the appended records; nothing is
+            written then.
+        """
+        self._control_received = 0
+        var hdr = size_of[cmsghdr]()
+        # `room` is at most the capacity and never negative. Checking the
+        # unpadded length against it first keeps `len(data)` small, so the
+        # padded size computed next cannot wrap.
+        var room = self.control_capacity() - self._control_appended
+        if room < hdr or len(data) > room - hdr:
+            raise IOError(positive_errno=EINVAL)
+        var record = Self.control_space(len(data))
+        if record > room:
+            raise IOError(positive_errno=EINVAL)
+        var p = self._control.unsafe_ptr().unsafe_offset(self._control_appended)
+        p.unsafe_bitcast[UInt64]().unsafe_store[alignment=1](
+            UInt64(hdr + len(data))
+        )
+        p.unsafe_offset(8).unsafe_bitcast[Int32]().unsafe_store[alignment=1](
+            level
+        )
+        p.unsafe_offset(12).unsafe_bitcast[Int32]().unsafe_store[alignment=1](
+            type
+        )
+        for i in range(len(data)):
+            p[unsafe_offset=hdr + i] = data[i]
+        for i in range(hdr + len(data), record):
+            p[unsafe_offset=i] = UInt8(0)
+        self._control_appended += record
+
     def set_ecn(
         mut self, mark: UInt8, family: Optional[AddrFamily] = None
     ) raises IOError:
-        """Write the control record carrying an ECN codepoint.
+        """Append the control record carrying an ECN codepoint.
 
-        Writes an `IP_TOS` record (one byte) or an `IPV6_TCLASS` record
-        (a four-byte int) at the start of the control area, replacing
-        any record an earlier call wrote and discarding whatever the
-        kernel wrote on the last receive: received records never go out
-        with a send. The family is derived from the peer when one is set
-        and `family` is None; otherwise `family` is required.
+        An `IP_TOS` record (one byte) or an `IPV6_TCLASS` record (a
+        four-byte int) through `append_control`: whatever the kernel
+        wrote on the last receive is discarded, records appended before
+        stay, and a second call appends a second record, of which the
+        kernel applies the last. The family is derived from the peer when
+        one is set and `family` is None; otherwise `family` is required.
 
         A peer that is an IPv4-mapped IPv6 address (::ffff:a.b.c.d)
         derives AF_INET, not AF_INET6: the kernel's IPv6 UDP send path
@@ -333,7 +427,9 @@ struct Message(Movable):
 
         Raises:
             IOError(EINVAL) when neither a peer nor a family is
-            available, or when `control_capacity` cannot hold the record.
+            available (nothing is touched then, not even the received
+            length), or when the 24-byte record does not fit the
+            capacity left.
         """
         var fam: AddrFamily
         if family:
@@ -347,47 +443,48 @@ struct Message(Movable):
                     fam = AddrFamily.INET
         var level: Int32
         var type: Int32
-        var data_len: Int
+        var data = List[UInt8]()
         if fam == AddrFamily.INET:
             level = Int32(SOL_IP)
             type = Int32(IP_TOS)
-            data_len = 1
+            data.append(mark & 0x03)
         elif fam == AddrFamily.INET6:
             level = Int32(SOL_IPV6)
             type = Int32(IPV6_TCLASS)
-            data_len = 4
+            data.append(mark & 0x03)
+            data.append(0)
+            data.append(0)
+            data.append(0)
         else:
             raise IOError(positive_errno=EINVAL)
-        var hdr = size_of[cmsghdr]()
-        var record = _cmsg_align(hdr + data_len)
-        if record > len(self._control):
-            raise IOError(positive_errno=EINVAL)
-        var p = self._control.unsafe_ptr()
-        for i in range(record):
-            p[unsafe_offset=i] = UInt8(0)
-        p.unsafe_bitcast[UInt64]().unsafe_store[alignment=1](
-            UInt64(hdr + data_len)
-        )
-        p.unsafe_offset(8).unsafe_bitcast[Int32]().unsafe_store[alignment=1](
-            level
-        )
-        p.unsafe_offset(12).unsafe_bitcast[Int32]().unsafe_store[alignment=1](
-            type
-        )
-        if data_len == 1:
-            p[unsafe_offset=hdr] = mark & 0x03
-        else:
-            p.unsafe_offset(hdr).unsafe_bitcast[Int32]().unsafe_store[
-                alignment=1
-            ](Int32(mark & 0x03))
-        self._control_appended = record
-        self._control_received = 0
+        self.append_control(level, type, Span(data))
+
+    def set_gso_segment_size(mut self, size: UInt16) raises IOError:
+        """Append the SOL_UDP/UDP_SEGMENT record: send this datagram as
+        `size`-byte segments.
+
+        `cmsg_len` is exactly CMSG_LEN(2) = 18, which the kernel
+        requires. 0 means no segmentation for this datagram, overriding
+        the socket default from `Socket.set_gso_segment_size`. The kernel
+        rejects the send with EINVAL when the payload exceeds
+        UDP_MAX_SEGMENTS segments (64 on older kernels, 128 on recent
+        ones) and with EMSGSIZE when one segment plus headers exceeds
+        the MTU; a payload no longer than `size` is sent plain.
+
+        Raises:
+            IOError(EINVAL) when the 24-byte record does not fit the
+            capacity left.
+        """
+        var data = List[UInt8]()
+        data.append(UInt8(size & 0xFF))
+        data.append(UInt8(size >> 8))
+        self.append_control(Int32(SOL_UDP), Int32(UDP_SEGMENT), Span(data))
 
     def clear_control(mut self):
-        """Drop every control record: received and written alike.
+        """Drop every control record: received and appended alike.
 
         The area keeps its capacity; a send offers no control bytes and
-        `control()` walks nothing until `set_ecn` writes again.
+        `control()` walks nothing until the next append.
         """
         self._control_received = 0
         self._control_appended = 0
@@ -420,7 +517,7 @@ struct Message(Movable):
         """Walk the control records currently held.
 
         Whatever occupies the area: the records the kernel wrote on the
-        last receive, or the record `set_ecn` wrote since (received or
+        last receive, or the records appended since (received or
         appended, never both). The two share the front of the area, so
         only one of them is present at a time.
 
@@ -439,7 +536,7 @@ struct Message(Movable):
         Clamped to the capacity: the kernel truncates and flags
         MSG_CTRUNC rather than overrunning, but the length it reports
         is not trusted past the area. The kernel overwrote the front of
-        the area, so any record `set_ecn` wrote before is gone too.
+        the area, so any record appended before is gone too.
 
         Args:
             len: The `msg_controllen` written back by the kernel.
@@ -584,15 +681,18 @@ struct MessageResult(Movable):
     def take_message(deinit self) -> Message:
         """Take the message back, consuming this result.
 
-        The records the kernel wrote on the receive are dropped on the
-        way out: a message reused for a reply starts with no control
-        bytes to offer, so nothing the peer sent is replayed to it.
+        Both control lengths are zeroed on the way out: the records the
+        kernel wrote on a receive are never replayed to the peer, and
+        the records appended for a send are not offered twice. A message
+        reused for the next send starts its builder over; the capacity
+        is kept.
 
         Returns:
             The message the operation used, payload storage unchanged.
         """
         var msg = self._msg^
         msg._control_received = 0
+        msg._control_appended = 0
         return msg^
 
 

@@ -604,8 +604,11 @@ struct Socket(Movable):
         `IPV6_RECVTCLASS` and `IP_RECVTOS`, so IPv4-mapped peers on a
         dual-stack socket also deliver a TOS record. The record lands in
         the control area of a `recv_msg` whose `Message` has
-        `control_capacity` of at least 24; `ControlMessages.ecn()` reads
-        the codepoint. Raises EAFNOSUPPORT for non-IP sockets.
+        `control_capacity` of at least 24
+        (`Message.control_space(4)`); with `set_gro` also on, the kernel
+        writes the TOS record before the GRO record, so 48 bytes hold
+        both. `ControlMessages.ecn()` reads the codepoint. Raises
+        EAFNOSUPPORT for non-IP sockets.
         """
         var on = Int32(1) if value else Int32(0)
         var family = self._family()
@@ -624,7 +627,9 @@ struct Socket(Movable):
 
         `IP_TOS` on an AF_INET socket; `IPV6_TCLASS` and `IP_TOS` on an
         AF_INET6 socket so mapped destinations are covered. A per-message
-        ECN mark (`Message.set_ecn`) overrides this for that datagram.
+        ECN mark (`Message.set_ecn`) overrides this for that datagram;
+        when several TOS records are appended to one message the kernel
+        applies the last.
 
         Args:
             value: Full TOS byte (DSCP in high 6 bits, ECN in low 2).

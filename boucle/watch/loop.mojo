@@ -924,7 +924,10 @@ struct WatchLoop(Movable):
         slot receives the sender's address; up to `control_capacity`
         bytes of control records are collected (a receiver that wants
         ECN calls `Socket.set_recv_tos` and passes `control_capacity`
-        of at least 24). `RecvMsgFuture.result()` hands the message back
+        of at least 24, `Message.control_space(4)`;
+        one that also enabled `Socket.set_gro` needs 48, because the
+        kernel writes the TOS record before the GRO record and cuts the
+        second off otherwise). `RecvMsgFuture.result()` hands the message back
         with the byte count, the peer and the flags; dropping the future
         gives it up.
 
@@ -994,8 +997,9 @@ struct WatchLoop(Movable):
         The message moves into the loop for the duration of the
         operation. Its whole payload is offered; a peer set with
         `Message.set_peer` is the destination (required on an
-        unconnected datagram socket); the control record `Message.set_ecn`
-        wrote (it replaces whatever the area held) goes out with it.
+        unconnected datagram socket); the control records appended to it
+        (`Message.set_ecn`, `Message.set_gso_segment_size`,
+        `Message.append_control`) go out with it, in order.
         `SendMsgFuture.result()` hands the message back unchanged with
         the byte count; dropping the future gives it up.
 
