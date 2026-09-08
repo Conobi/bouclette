@@ -91,13 +91,18 @@ from boucle.socle.platform import (
     SOCK_STREAM,
     SOCK_DGRAM,
     SOL_SOCKET,
+    SOL_UDP,
     SO_REUSEADDR,
     SO_REUSEPORT,
+    SO_RCVBUF,
+    SO_SNDBUF,
     SO_RCVTIMEO,
     SO_SNDTIMEO,
     SO_ERROR,
     IPPROTO_IPV6,
     IPV6_V6ONLY,
+    UDP_GRO,
+    UDP_SEGMENT,
     O_NONBLOCK,
     O_CLOEXEC,
     MSG_NOSIGNAL,
@@ -246,7 +251,7 @@ def test_socket_syscalls_are_reachable() raises:
 
 
 def test_socket_option_constants_are_reachable() raises:
-    """The values `boucle/net/options.mojo` asserts against."""
+    """The values `boucle/net/options.mojo` and `socket.mojo` assert against."""
     assert_equal(Int(AF_UNSPEC), 0)
     assert_equal(Int(AF_UNIX), 1)
     assert_equal(Int(AF_INET), 2)
@@ -254,8 +259,13 @@ def test_socket_option_constants_are_reachable() raises:
     assert_equal(Int(SOCK_STREAM), 1)
     assert_equal(Int(SOCK_DGRAM), 2)
     assert_equal(Int(SOL_SOCKET), 1)
+    assert_equal(Int(SOL_UDP), 17)
     assert_equal(Int(IPPROTO_IPV6), 41)
     assert_equal(Int(IPV6_V6ONLY), 26)
+    assert_equal(Int(UDP_SEGMENT), 103)
+    assert_equal(Int(UDP_GRO), 104)
+    assert_equal(Int(SO_SNDBUF), 7)
+    assert_equal(Int(SO_RCVBUF), 8)
     assert_equal(Int(O_NONBLOCK), 2048)
     assert_equal(Int(O_CLOEXEC), 524288)
     assert_equal(Int(MSG_NOSIGNAL), 16384)

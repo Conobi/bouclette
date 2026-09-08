@@ -47,7 +47,10 @@ whoever writes the second backend. Each section below is tagged:
   `SOL_IP` at all — though `SOL_IPV6 == IPPROTO_IPV6` numerically, so a
   second backend can alias one to the other), and `IP_RECVTOS` (a
   BSD/Linux extension, not POSIX; macOS numbers it 27, FreeBSD 68,
-  not the Linux value).
+  not the Linux value), and `SOL_UDP` / `UDP_GRO` / `UDP_SEGMENT`
+  (Linux UDP generic segmentation and receive offload; macOS and
+  Windows have no socket-level equivalent, so a second backend
+  reports EOPNOTSUPP from the `Socket` setters rather than faking it).
 - **portable by contract** — not identical in nature across platforms,
   but boucle adopts one backend's encoding as the library-wide
   convention and requires every other backend to reproduce it, so
@@ -202,9 +205,12 @@ from boucle.socle.linux.net.syscalls import (
 # fails the build instead of silently misconfiguring a socket.
 #
 # `MSG_NOSIGNAL`, `SO_REUSEPORT`, `SOL_IP`, `SOL_IPV6` and `IP_RECVTOS`
-# need a per-OS equivalent (see the module docstring); the rest are
-# POSIX. `SOL_IPV6 == IPPROTO_IPV6`, so a second backend can alias one
-# to the other.
+# need a per-OS equivalent (see the module docstring); `SOL_UDP`,
+# `UDP_GRO` and `UDP_SEGMENT` are Linux UDP offload knobs with no twin
+# on macOS or Windows, so a second backend either supplies its own or
+# the `Socket` setters raise EOPNOTSUPP there. The rest are POSIX.
+# `SOL_IPV6 == IPPROTO_IPV6`, so a second backend can alias one to the
+# other.
 
 from boucle.socle.linux.raw import (
     AF_INET,
@@ -227,12 +233,17 @@ from boucle.socle.linux.raw import (
     SOL_IP,
     SOL_IPV6,
     SOL_SOCKET,
+    SOL_UDP,
     SO_ERROR,
+    SO_RCVBUF,
     SO_RCVTIMEO,
     SO_REUSEADDR,
     SO_REUSEPORT,
+    SO_SNDBUF,
     SO_SNDTIMEO,
     SO_TYPE,
+    UDP_GRO,
+    UDP_SEGMENT,
 )
 
 # --- Coroutine stacks (portable) --------------------------------------

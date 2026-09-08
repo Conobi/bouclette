@@ -58,11 +58,15 @@ from boucle.socle.platform import (
     socklen_t,
     EAFNOSUPPORT,
     EBADF,
+    EINVAL,
     SOL_SOCKET,
     SOL_IP,
     SOL_IPV6,
+    SOL_UDP,
     SO_REUSEADDR,
     SO_REUSEPORT,
+    SO_RCVBUF,
+    SO_SNDBUF,
     SO_RCVTIMEO,
     SO_SNDTIMEO,
     SO_ERROR,
@@ -73,6 +77,8 @@ from boucle.socle.platform import (
     IP_TOS,
     IPV6_RECVTCLASS,
     IPV6_TCLASS,
+    UDP_GRO,
+    UDP_SEGMENT,
     O_NONBLOCK,
     O_CLOEXEC,
     MSG_NOSIGNAL,
@@ -209,6 +215,19 @@ def _sys_getsockopt_int(
         return _getsockopt_int(handle._raw, level, optname)
     except e:
         raise IOError.from_error(e)
+
+
+@always_inline
+def _buffer_size_arg(bytes: Int) raises IOError -> Int32:
+    """Narrow a buffer size to the `int` setsockopt takes; EINVAL outside 0..Int32.MAX.
+
+    The kernel reads a negative value as a huge unsigned one and clamps
+    it to the sysctl cap instead of failing, so the range check has to
+    happen here, before any syscall.
+    """
+    if bytes < 0 or bytes > Int(Int32.MAX):
+        raise IOError(positive_errno=EINVAL)
+    return Int32(bytes)
 
 
 @always_inline
@@ -621,6 +640,74 @@ struct Socket(Movable):
             _sys_setsockopt(self._handle, Int32(SOL_IP), Int32(IP_TOS), tos)
         else:
             raise IOError(positive_errno=EAFNOSUPPORT)
+
+    def set_gro(self, value: Bool = True) raises IOError:
+        """`SOL_UDP`/`UDP_GRO`: let the kernel coalesce consecutive datagrams from one peer into one receive.
+
+        A coalesced receive carries a `SOL_UDP`/`UDP_GRO` control record
+        holding the segment size as a 4-byte int, and may span up to 64
+        segments (65535 bytes): a smaller receive buffer truncates the
+        delivery. The kernel writes the TOS record before the GRO one, so
+        a receiver that also asked for `set_recv_tos` needs 48 bytes of
+        control capacity (two 24-byte records) or the GRO record is cut
+        off (`control_truncated()`). The kernel answers ENOPROTOOPT on a
+        non-UDP socket and EOPNOTSUPP on AF_UNIX.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_UDP), Int32(UDP_GRO),
+            Int32(1) if value else Int32(0),
+        )
+
+    def set_gso_segment_size(self, size: UInt16) raises IOError:
+        """`SOL_UDP`/`UDP_SEGMENT`: default segment size for sends on this socket.
+
+        0 disables. A per-message `UDP_SEGMENT` control record overrides
+        it for that datagram. The kernel answers ENOPROTOOPT on a non-UDP
+        socket and EOPNOTSUPP on AF_UNIX.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_UDP), Int32(UDP_SEGMENT), Int32(Int(size))
+        )
+
+    def set_recv_buffer_size(self, bytes: Int) raises IOError:
+        """`SO_RCVBUF`. The kernel doubles the value for bookkeeping and caps it at `net.core.rmem_max`.
+
+        The kernel never fails on range; `bytes` outside 0..Int32.MAX
+        raises EINVAL here before the syscall. Read `recv_buffer_size()`
+        to learn the effective size.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_RCVBUF),
+            _buffer_size_arg(bytes),
+        )
+
+    def set_send_buffer_size(self, bytes: Int) raises IOError:
+        """`SO_SNDBUF`. The kernel doubles the value for bookkeeping and caps it at `net.core.wmem_max`.
+
+        The kernel never fails on range; `bytes` outside 0..Int32.MAX
+        raises EINVAL here before the syscall. Read `send_buffer_size()`
+        to learn the effective size.
+        """
+        _sys_setsockopt(
+            self._handle, Int32(SOL_SOCKET), Int32(SO_SNDBUF),
+            _buffer_size_arg(bytes),
+        )
+
+    def recv_buffer_size(self) raises IOError -> Int:
+        """Kernel value of `SO_RCVBUF`, already doubled and capped."""
+        return Int(
+            _sys_getsockopt_int(
+                self._handle, Int32(SOL_SOCKET), Int32(SO_RCVBUF)
+            )
+        )
+
+    def send_buffer_size(self) raises IOError -> Int:
+        """Kernel value of `SO_SNDBUF`, already doubled and capped."""
+        return Int(
+            _sys_getsockopt_int(
+                self._handle, Int32(SOL_SOCKET), Int32(SO_SNDBUF)
+            )
+        )
 
     def set_recv_timeout(self, timeout_ms: UInt64) raises IOError:
         """Set receive timeout (`SO_RCVTIMEO`); 0 disables."""

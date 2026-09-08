@@ -5,7 +5,8 @@ from boucle.socle.linux.raw.net import (
     AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM,
     IPPROTO_TCP, IPPROTO_UDP,
     IP_TOS, IP_RECVTOS, IPV6_TCLASS, IPV6_RECVTCLASS,
-    SOL_IP, SOL_IPV6, MSG_TRUNC, MSG_CTRUNC,
+    SOL_IP, SOL_IPV6, SOL_SOCKET, SOL_UDP, MSG_TRUNC, MSG_CTRUNC,
+    SO_SNDBUF, SO_RCVBUF, UDP_SEGMENT, UDP_GRO,
 )
 from boucle.socle.linux.raw.epoll import epoll_event
 from boucle.socle.linux.raw.io_uring import (
@@ -63,6 +64,20 @@ def test_tos_constants() raises:
     assert_equal(MSG_CTRUNC, 8)
 
 
+def test_udp_offload_and_buffer_constants() raises:
+    """The `SOL_UDP` offload ids and the `SOL_SOCKET` buffer-size ids `Socket` sets.
+
+    `UDP_SEGMENT` / `UDP_GRO` are the uapi values from `linux/udp.h`;
+    `SO_SNDBUF` / `SO_RCVBUF` from `asm-generic/socket.h`.
+    """
+    assert_equal(SOL_SOCKET, 1)
+    assert_equal(SOL_UDP, 17)
+    assert_equal(UDP_SEGMENT, 103)
+    assert_equal(UDP_GRO, 104)
+    assert_equal(SO_SNDBUF, 7)
+    assert_equal(SO_RCVBUF, 8)
+
+
 def test_cmsghdr_field_offsets() raises:
     """Cmsg_len sits at 0 (8 bytes), cmsg_level at 8, cmsg_type at 12.
 
@@ -87,5 +102,6 @@ def test_cmsghdr_field_offsets() raises:
 def main() raises:
     test_net_structs()
     test_tos_constants()
+    test_udp_offload_and_buffer_constants()
     test_cmsghdr_field_offsets()
     print("PASS: test_net_structs.mojo")
