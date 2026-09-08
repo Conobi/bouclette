@@ -82,9 +82,6 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Equatable, Writable):
 
         Args:
             rhs: The outcome to compare against.
-
-        Returns:
-            True when both describe the same outcome.
         """
         return self._tag == rhs._tag
 
@@ -94,54 +91,36 @@ struct ConnectOutcome(ImplicitlyCopyable, Movable, Equatable, Writable):
 
         Args:
             rhs: The outcome to compare against.
-
-        Returns:
-            True when the outcomes differ.
         """
         return self._tag != rhs._tag
 
     @always_inline("nodebug")
     def is_connected(self) -> Bool:
         """Return True if the connect succeeded.
-
-        Returns:
-            True when the outcome is CONNECTED.
         """
         return self._tag == UInt8(0)
 
     @always_inline("nodebug")
     def is_refused(self) -> Bool:
         """Return True if the connection was refused.
-
-        Returns:
-            True when the outcome is REFUSED.
         """
         return self._tag == UInt8(1)
 
     @always_inline("nodebug")
     def is_timeout(self) -> Bool:
         """Return True if the connect timed out.
-
-        Returns:
-            True when the outcome is TIMEOUT.
         """
         return self._tag == UInt8(2)
 
     @always_inline("nodebug")
     def is_network_unreachable(self) -> Bool:
         """Return True if the network or host was unreachable.
-
-        Returns:
-            True when the outcome is NETWORK_UNREACHABLE.
         """
         return self._tag == UInt8(3)
 
     @always_inline("nodebug")
     def is_error(self) -> Bool:
         """Return True if the outcome is an unclassified error.
-
-        Returns:
-            True when the outcome is ERROR.
         """
         return self._tag == UInt8(4)
 

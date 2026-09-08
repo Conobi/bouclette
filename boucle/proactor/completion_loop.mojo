@@ -51,7 +51,6 @@ struct CompletionLoop(Movable):
         )
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._inner = move._inner^
 
     def __deinit__(deinit self):

@@ -797,12 +797,6 @@ struct Fsync[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
         ref [Self.origin]sqe: Sqe[Self.type],
         fd: UnsafeFd,
     ):
-        """Prepare an fsync SQE.
-
-        Args:
-            sqe: The SQE to prepare.
-            fd: The file descriptor to sync.
-        """
         _prep_rw(
             sqe,
             IoUringOp.FSYNC,
@@ -814,24 +808,21 @@ struct Fsync[type: SQE, origin: MutOrigin](RegisterPassable, Operation):
 
     @always_inline("nodebug")
     def user_data(var self, value: UInt64) -> Self:
-        """Set the user_data field."""
         self.sqe[].user_data = value
         return self^
 
     @always_inline("nodebug")
     def personality(var self, value: UInt16) -> Self:
-        """Set the personality field."""
         self.sqe[].personality = value
         return self^
 
     @always_inline("nodebug")
     def fsync_flags(var self, flags: IoUringFsyncFlags) -> Self:
-        """Set fsync flags (DATASYNC for fdatasync semantics)."""
+        """DATASYNC for fdatasync semantics."""
         self.sqe[].op_flags = UInt32(flags.value)
         return self^
 
     @always_inline("nodebug")
     def sqe_flags(var self, flags: IoUringSqeFlags) -> Self:
-        """Set SQE flags."""
         self.sqe[].flags |= flags
         return self^

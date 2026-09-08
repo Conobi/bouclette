@@ -17,18 +17,7 @@ from boucle.socle.ptr import null_ptr
 def _worker_entry(
     arg: Pointer[NoneType, MutUntrackedOrigin],
 ) -> Pointer[NoneType, MutUntrackedOrigin]:
-    """Run the worker loop: pop, execute, push result, until shutdown.
-
-    `arg` is the shared `_WorkQueue`, type-erased for `pthread_create`.
-    The last worker to exit frees the queue's backing memory, since the
-    queue may still be referenced by other threads still winding down.
-
-    Args:
-        arg: Type-erased pointer to the shared `_WorkQueue`.
-
-    Returns:
-        A null pointer; pthread's return value is unused here.
-    """
+    """Pop→execute→push-result loop; the last worker to exit frees the queue."""
     var q = arg.unsafe_bitcast[_WorkQueue]()
     while True:
         var item = q[].pop()
@@ -59,17 +48,6 @@ struct WorkerPool(Movable):
     queue's backing memory outlives the pool itself when workers are
     still winding down; whichever worker exits last frees it from
     `_worker_entry`, so the pool never races a worker for that free.
-
-    Fields:
-        _queue: Heap-resident state shared with every worker thread.
-        _threads: The pool's worker threads, one per requested slot.
-        _wakeup_fd_copy: Cached copy of the queue's eventfd, for
-                         `wakeup_fd()` and `drain()`. The queue's
-                         `OwnedHandle` remains the sole owner.
-        _owns_queue: False once `_queue` has been released — either by
-                     `__deinit__` or by a failed `__init__` — so a
-                     moved-from or already-torn-down pool never touches
-                     it again.
     """
 
     var _queue: Pointer[_WorkQueue, MutUntrackedOrigin]
@@ -78,16 +56,10 @@ struct WorkerPool(Movable):
     var _owns_queue: Bool
 
     def __init__(out self, *, thread_count: Int = 4) raises:
-        """Create a pool and spawn `thread_count` worker threads.
+        """Create a pool and spawn `thread_count` worker threads (1..64).
 
-        Args:
-            thread_count: Number of OS threads to spawn, 1 to 64.
-
-        Raises:
-            If `thread_count` is out of range, the eventfd or queue
-            cannot be created, or a thread fails to spawn. On the last
-            of these, every thread spawned so far is shut down and
-            detached before the error propagates.
+        On partial spawn failure, threads already running are shut down
+        and detached before the error propagates.
         """
         if thread_count < 1 or thread_count > 64:
             raise "thread_count must be between 1 and 64"
@@ -144,36 +116,24 @@ struct WorkerPool(Movable):
                 raise e^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._queue = move._queue
         self._threads = move._threads^
         self._wakeup_fd_copy = move._wakeup_fd_copy
         self._owns_queue = move._owns_queue
 
     def submit(mut self, var item: WorkItem) raises:
-        """Enqueue a work item for a worker thread to run.
-
-        Args:
-            item: The work to run.
-
-        Raises:
-            If the pool no longer owns its queue.
-        """
+        """Enqueue a work item for a worker thread to run."""
         if not self._owns_queue:
             raise "pool is shut down"
         self._queue[].push(item^)
 
     def drain(mut self) -> List[_CompletedWork]:
-        """Clear the wakeup eventfd and return every finished result.
-
-        Returns:
-            Every `_CompletedWork` queued since the last drain, FIFO.
-        """
+        """Clear the wakeup eventfd and return every finished result."""
         drain_eventfd(self._wakeup_fd_copy)
         return self._queue[].drain_results()
 
     def wakeup_fd(self) -> RawHandle:
-        """Return the eventfd a loop should watch for finished work."""
+        """The eventfd a loop should watch for finished work."""
         return self._wakeup_fd_copy
 
     def __deinit__(deinit self):

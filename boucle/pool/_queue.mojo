@@ -61,14 +61,7 @@ comptime _DEFAULT_CAPACITY = 256
 
 
 struct WorkItem(Movable):
-    """One unit of blocking work submitted to the pool.
-
-    Fields:
-        work_fn: The function a worker thread runs off the event loop.
-        context: Opaque pointer passed to `work_fn`, owned by the caller.
-        completion: The caller's completion token, fired with the result
-                    once the loop drains it from the queue.
-    """
+    """One unit of blocking work submitted to the pool."""
 
     var work_fn: WorkFn
     var context: Pointer[NoneType, MutUntrackedOrigin]
@@ -81,19 +74,12 @@ struct WorkItem(Movable):
         context: Pointer[NoneType, MutUntrackedOrigin],
         completion: Pointer[Completion, MutUntrackedOrigin],
     ):
-        """Bundle a unit of work with the context and completion it fires.
-
-        Args:
-            work_fn: The function a worker thread runs.
-            context: Opaque pointer passed to `work_fn`.
-            completion: The completion token fired with the result.
-        """
+        """Bundle a unit of work with the context and completion it fires."""
         self.work_fn = work_fn
         self.context = context
         self.completion = completion
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.work_fn = move.work_fn
         self.context = move.context
         self.completion = move.completion
@@ -103,12 +89,7 @@ struct WorkItem(Movable):
 
 
 struct _CompletedWork(Movable):
-    """The outcome of one `WorkItem`, ready for the loop to deliver.
-
-    Fields:
-        completion: The completion token to fire.
-        result: The value `work_fn` returned.
-    """
+    """The outcome of one `WorkItem`, ready for the loop to deliver."""
 
     var completion: Pointer[Completion, MutUntrackedOrigin]
     var result: Int32
@@ -119,17 +100,11 @@ struct _CompletedWork(Movable):
         completion: Pointer[Completion, MutUntrackedOrigin],
         result: Int32,
     ):
-        """Pair a finished work item's completion with its result.
-
-        Args:
-            completion: The completion token to fire.
-            result: The value `work_fn` returned.
-        """
+        """Pair a finished work item's completion with its result."""
         self.completion = completion
         self.result = result
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.completion = move.completion
         self.result = move.result
 
@@ -153,32 +128,10 @@ struct _WorkQueue(Movable):
     returned `List`s on the calling (loop) thread, where allocation is
     safe.
 
-    Fields:
-        _items: Pending-work ring buffer, FIFO.
-        _items_head: Index of the oldest pending item.
-        _items_count: Number of pending items currently queued. Atomic so
-                      a worker's re-read after `condvar.wait()` cannot be
-                      served from a stale cached value across the
-                      intervening `external_call`.
-        _items_cap: Capacity of `_items`.
-        _results: Finished-work ring buffer, FIFO.
-        _results_head: Index of the oldest finished result.
-        _results_count: Number of finished results currently queued.
-                        Atomic for the same reason as `_items_count`.
-        _results_cap: Capacity of `_results`.
-        _mutex: Guards `_items` and `_results`; every counter access
-                still happens under it, but the counters are atomic so
-                the compiler cannot cache them across a pthread call.
-        _condvar: Signalled on `push` and `shutdown`; `pop` waits on it.
-        _shutdown: Set once, never cleared. `pop` returns `None` once set
-                   and the pending queue is empty. Atomic (0/1) so a
-                   worker blocked in the wait loop observes the flag as
-                   soon as `shutdown()` sets it.
-        _wakeup_fd: The loop's eventfd. Notified after every
-                    `push_result`, outside the lock.
-        _active_threads: Worker threads that have not yet called
-                         `thread_exited`. Atomic for the same reason as
-                         the other counters.
+    Counters are `Atomic` despite being guarded by the mutex: the Mojo
+    compiler's alias analysis caches struct fields across `external_call`
+    to pthread functions, so a worker's re-read after `condvar.wait()`
+    would see stale values without the atomic load barrier.
     """
 
     var _items: Pointer[WorkItem, MutUntrackedOrigin]
@@ -205,18 +158,7 @@ struct _WorkQueue(Movable):
         items_capacity: Int = _DEFAULT_CAPACITY,
         results_capacity: Int = _DEFAULT_CAPACITY,
     ) raises:
-        """Create an empty queue shared by `thread_count` workers.
-
-        Args:
-            wakeup_fd: The loop's eventfd, notified on every completed item.
-            thread_count: Number of worker threads sharing this queue.
-            items_capacity: Maximum pending items queued at once.
-            results_capacity: Maximum finished results queued at once.
-
-        Raises:
-            If `wakeup_fd` is not a valid handle, or the mutex/condvar
-            cannot be initialised.
-        """
+        """Create an empty queue shared by `thread_count` workers."""
         self._items = unsafe_alloc[WorkItem](items_capacity)
         self._items_head = 0
         self._items_count = Atomic[DType.int64](0)
@@ -234,7 +176,6 @@ struct _WorkQueue(Movable):
         self._active_threads = Atomic[DType.int64](Int64(thread_count))
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._items = move._items
         self._items_head = move._items_head
         self._items_count = Atomic[DType.int64](
@@ -280,13 +221,7 @@ struct _WorkQueue(Movable):
         self._results.unsafe_free()
 
     def push(mut self, var item: WorkItem):
-        """Submit a work item for a worker thread to run.
-
-        Called from the loop thread. Wakes one blocked worker.
-
-        Args:
-            item: The work to run.
-        """
+        """Submit a work item for a worker thread. Wakes one blocked worker."""
         self._mutex.lock()
         var ic = Int(self._items_count.load[ordering=Ordering.RELAXED]())
         debug_assert(ic < self._items_cap, "work queue full")
@@ -297,14 +232,7 @@ struct _WorkQueue(Movable):
         self._mutex.unlock()
 
     def pop(mut self) -> Optional[WorkItem]:
-        """Block until work is available or the queue is shut down.
-
-        Called from a worker thread.
-
-        Returns:
-            The next work item, FIFO, or `None` once `shutdown()` has been
-            called and no work remains.
-        """
+        """Block until work is available, or return `None` after shutdown."""
         self._mutex.lock()
         while (
             Int(self._items_count.load[ordering=Ordering.RELAXED]()) == 0
@@ -325,12 +253,8 @@ struct _WorkQueue(Movable):
     def push_result(mut self, var result: _CompletedWork):
         """Hand a finished item's outcome back to the loop thread.
 
-        Called from a worker thread. Notifies the loop's eventfd after
-        releasing the lock, so a slow write(2) never blocks another
-        worker from posting its own result.
-
-        Args:
-            result: The completion token and value to deliver.
+        Notifies the loop's eventfd after releasing the lock, so a slow
+        write(2) never blocks another worker from posting its own result.
         """
         self._mutex.lock()
         var rc = Int(self._results_count.load[ordering=Ordering.RELAXED]())
@@ -344,13 +268,8 @@ struct _WorkQueue(Movable):
     def drain_results(mut self) -> List[_CompletedWork]:
         """Take every finished result currently queued.
 
-        Called from the loop thread after the eventfd wakes it. The
-        returned `List` is built here, on the calling (loop) thread,
+        The returned `List` is built on the calling (loop) thread,
         where allocation is safe.
-
-        Returns:
-            Every `_CompletedWork` queued since the last drain, FIFO.
-            Empty if none arrived.
         """
         self._mutex.lock()
         var out = List[_CompletedWork]()
@@ -381,14 +300,8 @@ struct _WorkQueue(Movable):
     def cancel_pending(mut self) -> List[WorkItem]:
         """Take every work item still waiting for a worker.
 
-        Called during pool teardown, after `shutdown()`, to hand back
-        whatever no worker got to. The caller is responsible for firing
-        each item's completion with a cancellation result. The returned
-        `List` is built here, on the calling (loop) thread, where
-        allocation is safe.
-
-        Returns:
-            Every `WorkItem` that was queued but not yet popped.
+        Called during pool teardown. The caller fires each item's
+        completion with a cancellation result.
         """
         self._mutex.lock()
         var out = List[WorkItem]()
@@ -404,12 +317,7 @@ struct _WorkQueue(Movable):
         return out^
 
     def thread_exited(mut self) -> Bool:
-        """Record that one worker thread has exited its run loop.
-
-        Returns:
-            True if this was the last active worker thread, meaning the
-            queue's shared state can now be safely freed.
-        """
+        """Record that one worker exited; returns True if it was the last."""
         self._mutex.lock()
         var prev = self._active_threads.fetch_sub[
             ordering=Ordering.RELAXED
@@ -419,18 +327,9 @@ struct _WorkQueue(Movable):
         return is_last
 
     def wakeup_fd_raw(self) raises -> RawHandle:
-        """Return the loop's eventfd, checked.
-
-        Raises:
-            If the stored handle is somehow invalid (negative).
-        """
+        """Return the loop's eventfd (raises if invalid)."""
         return self._wakeup_fd.raw()
 
     def wakeup_fd_raw_unchecked(self) -> RawHandle:
-        """Return the loop's eventfd without validating it.
-
-        Used from worker threads, which never need `raises` on their hot
-        path and trust the loop to keep the handle valid for the queue's
-        lifetime.
-        """
+        """Return the loop's eventfd without validation (worker hot path)."""
         return self._wakeup_fd._raw

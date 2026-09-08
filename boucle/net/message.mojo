@@ -69,10 +69,6 @@ struct ControlMessage[origin: ImmOrigin](ImplicitlyCopyable, Movable):
 
     Parameters:
         origin: The origin of the control area the record was read from.
-
-    Fields:
-        level: The `cmsg_level` (SOL_IP, SOL_IPV6, SOL_SOCKET, ...).
-        type: The `cmsg_type` within that level (IP_TOS, IPV6_TCLASS, ...).
     """
 
     var level: Int32
@@ -82,13 +78,7 @@ struct ControlMessage[origin: ImmOrigin](ImplicitlyCopyable, Movable):
     def __init__(
         out self, level: Int32, type: Int32, data: Span[UInt8, Self.origin]
     ):
-        """Construct a record view.
-
-        Args:
-            level: The record's protocol level.
-            type: The record's type within the level.
-            data: The record's data bytes, header and padding excluded.
-        """
+        """Construct a record view."""
         self.level = level
         self.type = type
         self._data = data
@@ -266,15 +256,6 @@ struct Message(Movable):
     `set_ecn` wrote are the only ones a send offers. Both start at the
     front of the area, so at most one of the two is non-zero at a time.
 
-    Fields:
-        _payload: The data buffer, moved in.
-        _peer: The peer address slot; `addr_len() == 0` when unset.
-        _control: The control area, allocated at full `control_capacity`
-                  bytes up front; writers fill bytes in place.
-        _control_received: How many bytes of `_control` the kernel wrote
-                           on the last receive. Never offered to a send.
-        _control_appended: How many bytes of `_control` hold the record
-                           `set_ecn` wrote. The only bytes a send offers.
     """
 
     var _payload: List[UInt8]
@@ -476,18 +457,9 @@ struct Message(Movable):
 struct MessageResult(Movable):
     """The outcome of one completed send_msg or recv_msg.
 
-    Mojo 1.0 cannot destructure a tuple holding a non-copyable value, so
-    the byte count, the message and the kernel's `msg_flags` travel in
-    one named struct, the same shape as `TransferResult`.
-
-    Fields:
-        count: How many payload bytes moved. For a receive this is how
-               many bytes at the front of the payload are valid; the
-               payload's length is unchanged. For a send it is how many
-               bytes went out. Under MSG_TRUNC the kernel reports the
-               full datagram length here, which can exceed the payload;
-               `transferred()` clamps to the payload's own length and
-               never does.
+    `count` is the number of payload bytes moved. Under MSG_TRUNC the
+    kernel reports the full datagram length, which can exceed the payload;
+    `transferred()` clamps to the payload's own length.
     """
 
     var count: Int
@@ -495,24 +467,12 @@ struct MessageResult(Movable):
     var _flags: Int32
 
     def __init__(out self, count: Int, var msg: Message, flags: Int32):
-        """Pair a byte count with the message the operation used.
-
-        Args:
-            count: The number of bytes transferred.
-            msg: The message, handed back from the loop.
-            flags: The `msg_flags` the kernel wrote (MSG_TRUNC,
-                   MSG_CTRUNC); 0 for a send.
-        """
+        """Pair a byte count with the message the operation used."""
         self.count = count
         self._msg = msg^
         self._flags = flags
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source result.
-        """
         self.count = move.count
         self._msg = move._msg^
         self._flags = move._flags

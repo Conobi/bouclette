@@ -92,7 +92,6 @@ struct EpollDriver(ReadinessDriver):
         self._events = unsafe_alloc[epoll_event](capacity)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._epfd = move._epfd
         self._events = move._events
         self._max_events = move._max_events

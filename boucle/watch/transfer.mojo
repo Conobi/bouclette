@@ -33,16 +33,6 @@ from boucle.socle.platform import ECANCELED, EINVAL
 
 struct TransferResult(Movable):
     """The outcome of one completed recv or send: a byte count and the buffer.
-
-    Fields:
-        count: How many bytes the operation moved. For a recv this is
-               how many bytes at the front of the buffer are valid — the
-               buffer's length is not changed by the operation. For a
-               send it is how many bytes of the buffer went out; a short
-               send is not an error, so compare it with the length you
-               submitted. Under MSG_TRUNC the raw count can exceed the
-               buffer; `transferred()` clamps to the buffer's own length
-               and never does.
     """
 
     var count: Int
@@ -59,11 +49,6 @@ struct TransferResult(Movable):
         self._buf = buf^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source result to move from.
-        """
         self.count = move.count
         self._buf = move._buf^
 
@@ -135,9 +120,6 @@ struct FailureReason(TrivialRegisterPassable, Equatable, Writable):
 
         Args:
             rhs: The reason to compare against.
-
-        Returns:
-            True if the tags are equal.
         """
         return self._tag == rhs._tag
 
@@ -147,9 +129,6 @@ struct FailureReason(TrivialRegisterPassable, Equatable, Writable):
 
         Args:
             rhs: The reason to compare against.
-
-        Returns:
-            True if the tags differ.
         """
         return self._tag != rhs._tag
 
@@ -177,12 +156,6 @@ struct FailureReason(TrivialRegisterPassable, Equatable, Writable):
 
 struct TransferFailed(Movable, Writable):
     """Raised by RecvFuture.result and SendFuture.result, and by WatchLoop.recv and send.
-
-    Fields:
-        error: An IOError wrapping the errno. The completion's errno, or
-               the driver's at submission, for IO; EINVAL for NOT_DONE;
-               ECANCELED for LOOP_GONE.
-        reason: Why there is no result.
     """
 
     var error: IOError
@@ -215,11 +188,6 @@ struct TransferFailed(Movable, Writable):
         self._buf = buf^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source failure.
-        """
         self.error = move.error
         self.reason = move.reason
         self._buf = move._buf^
@@ -227,13 +195,6 @@ struct TransferFailed(Movable, Writable):
     @staticmethod
     def io(result: Int, var buf: List[UInt8]) -> Self:
         """Build the IO failure from a negative completion result.
-
-        Args:
-            result: The completion result (a negated errno).
-            buf: The buffer that was in flight.
-
-        Returns:
-            A failure carrying the errno and the buffer.
         """
         return Self(IOError.from_errno(result), FailureReason.IO, Optional(buf^))
 
@@ -285,12 +246,6 @@ struct TransferFailed(Movable, Writable):
 
 struct MessageFailed(Movable, Writable):
     """Raised by the message futures' result() and by the message verbs of WatchLoop.
-
-    Fields:
-        error: An IOError wrapping the errno. The completion's errno, or
-               the driver's at submission, for IO; EINVAL for NOT_DONE;
-               ECANCELED for LOOP_GONE.
-        reason: Why there is no result.
     """
 
     var error: IOError
@@ -323,11 +278,6 @@ struct MessageFailed(Movable, Writable):
         self._msg = msg^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source failure.
-        """
         self.error = move.error
         self.reason = move.reason
         self._msg = move._msg^
@@ -335,13 +285,6 @@ struct MessageFailed(Movable, Writable):
     @staticmethod
     def io(result: Int, var msg: Message) -> Self:
         """Build the IO failure from a negative completion result.
-
-        Args:
-            result: The completion result (a negated errno).
-            msg: The message that was in flight.
-
-        Returns:
-            A failure carrying the errno and the message.
         """
         return Self(IOError.from_errno(result), FailureReason.IO, Optional(msg^))
 
@@ -398,11 +341,6 @@ struct MessageFailed(Movable, Writable):
 
 struct FileTransferResult(Movable):
     """The outcome of one completed file read or write: byte count + aligned buffer.
-
-    Fields:
-        _count: How many bytes the operation moved. For a read this is
-                how many bytes at the front of the buffer are valid. For
-                a write it is how many bytes were written to the file.
     """
 
     var _count: Int
@@ -419,7 +357,6 @@ struct FileTransferResult(Movable):
         self._buf = buf^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._count = move._count
         self._buf = move._buf^
 
@@ -446,10 +383,6 @@ struct FileTransferResult(Movable):
 
 struct FileTransferFailed(Movable, Writable):
     """Raised by file read/write futures and by WatchLoop.read/write.
-
-    Fields:
-        error: An IOError wrapping the errno.
-        reason: Why there is no result.
     """
 
     var error: IOError
@@ -478,7 +411,6 @@ struct FileTransferFailed(Movable, Writable):
         self._buf = buf^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.error = move.error
         self.reason = move.reason
         self._buf = move._buf^

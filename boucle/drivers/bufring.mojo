@@ -148,7 +148,6 @@ struct BufRing(Movable):
         self.owns_ring = False
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.ring_addr = move.ring_addr
         self.ring_entries = move.ring_entries
         self.mask = move.mask

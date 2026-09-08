@@ -47,31 +47,6 @@ struct _ConnectWithTimeoutState(_InFlightState):
     connect or timeout. The other operation is then cancelled via deferred
     flush_cancel(). Implements _InFlightState so the WatchLoop registry
     can settle its ownership like any simple state.
-
-    Fields:
-        _connect_cmp: Completion token for the connect operation.
-        _timeout_cmp: Completion token for the timeout operation.
-        _cancel_cmp: Completion token for the cancel operation.
-        _addr_stor: Copy of the target address (IPv4 or IPv6) for
-                    pointer stability.
-        _ts: Timeout duration for operation pointer stability.
-        _result: Raw completion result from the resolving callback.
-        _result_set: True once a non-ECANCELED completion resolves the
-                     operation.
-        _resolved_by: 0=connect, 1=timeout.
-        _cancel_target: 0=none, 1=cancel-timeout, 2=cancel-connect.
-        _cancel_submitted: Whether cancel has been flagged.
-        _total_completions: Number of completions received so far (done
-                            when 3).
-        _uncounted_internal: Cancel completions that arrived since the
-                             loop last took the count; step() subtracts
-                             them from what a tick dispatched.
-        done: True when all 3 completions have been received.
-        consumed: True after result() has been called.
-        _owner_dropped: True if the ConnectWithTimeoutFuture was dropped
-                        before done; the WatchLoop then frees this state.
-        _loop_gone: True if the WatchLoop was destroyed before done; the
-                    ConnectWithTimeoutFuture then frees this state.
     """
 
     var _connect_cmp: Completion
@@ -126,11 +101,6 @@ struct _ConnectWithTimeoutState(_InFlightState):
         self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source state to move from.
-        """
         self._connect_cmp = move._connect_cmp^
         self._timeout_cmp = move._timeout_cmp^
         self._cancel_cmp = move._cancel_cmp^
@@ -151,25 +121,16 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
     def is_done(self) -> Bool:
         """Return True once all 3 completions have arrived.
-
-        Returns:
-            True if no callback will write this state again.
         """
         return self.done
 
     def owner_dropped(self) -> Bool:
         """Return True if the ConnectWithTimeoutFuture was dropped early.
-
-        Returns:
-            True if the WatchLoop must free this state.
         """
         return self._owner_dropped
 
     def loop_gone(self) -> Bool:
         """Return True if the WatchLoop was destroyed before completion.
-
-        Returns:
-            True if the ConnectWithTimeoutFuture is the sole remaining owner.
         """
         return self._loop_gone
 
@@ -180,9 +141,6 @@ struct _ConnectWithTimeoutState(_InFlightState):
 
     def bind(mut self, link: _SlotLink):
         """Record the slot this state lives in and the queue to notify.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         self._link = link
 
@@ -403,18 +361,10 @@ struct ConnectWithTimeoutFuture(Movable):
         state: Pointer[_ConnectWithTimeoutState, MutUntrackedOrigin],
     ):
         """Construct a ConnectWithTimeoutFuture wrapping a slab-owned state.
-
-        Args:
-            state: Pointer to the slab-owned _ConnectWithTimeoutState.
         """
         self._state = state
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor — transfers ownership of the state pointer.
-
-        Args:
-            move: The source ConnectWithTimeoutFuture to move from.
-        """
         self._state = move._state
 
     def __deinit__(deinit self):

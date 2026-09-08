@@ -203,68 +203,26 @@ struct IoUringSetupFlags(TrivialRegisterPassable, Defaultable, Boolable):
 
     @always_inline("nodebug")
     def __eq__(self, rhs: Self) -> Bool:
-        """Compares one IoUringSetupFlags to another for equality.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            True if the IoUringSetupFlags are the same and False otherwise.
-        """
         return self.value == rhs.value
 
     @always_inline("nodebug")
     def __ne__(self, rhs: Self) -> Bool:
-        """Compares one IoUringSetupFlags to another for inequality.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            False if the IoUringSetupFlags are the same and True otherwise.
-        """
         return self.value != rhs.value
 
     @always_inline("nodebug")
     def __or__(self, rhs: Self) -> Self:
-        """Returns `self | rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self | rhs`.
-        """
         return self.value | rhs.value
 
     @always_inline("nodebug")
     def __ior__(mut self, rhs: Self):
-        """Computes `self | rhs` and saves the result in self.
-
-        Args:
-            rhs: The RHS value.
-        """
         self = self | rhs
 
     @always_inline("nodebug")
     def __and__(self, rhs: Self) -> Self:
-        """Returns `self & rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self & rhs`.
-        """
         return self.value & rhs.value
 
     @always_inline("nodebug")
     def __bool__(self) -> Bool:
-        """Converts this flags to Bool.
-
-        Returns:
-            False Bool value if the value is equal to 0 and True otherwise.
-        """
         return self.value != 0
 
 
@@ -297,23 +255,10 @@ struct IoUringFeatureFlags(TrivialRegisterPassable, Defaultable, Boolable):
 
     @always_inline("nodebug")
     def __and__(self, rhs: Self) -> Self:
-        """Returns `self & rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self & rhs`.
-        """
         return self.value & rhs.value
 
     @always_inline("nodebug")
     def __bool__(self) -> Bool:
-        """Converts this flags to Bool.
-
-        Returns:
-            False Bool value if the value is equal to 0 and True otherwise.
-        """
         return self.value != 0
 
 
@@ -407,23 +352,10 @@ struct IoUringEnterFlags(TrivialRegisterPassable, Defaultable):
 
     @always_inline("nodebug")
     def __or__(self, rhs: Self) -> Self:
-        """Returns `self | rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self | rhs`.
-        """
         return self.value | rhs.value
 
     @always_inline("nodebug")
     def __ior__(mut self, rhs: Self):
-        """Computes `self | rhs` and saves the result in self.
-
-        Args:
-            rhs: The RHS value.
-        """
         self = self | rhs
 
 
@@ -449,23 +381,10 @@ struct IoUringSqeFlags(TrivialRegisterPassable, Defaultable):
 
     @always_inline("nodebug")
     def __or__(self, rhs: Self) -> Self:
-        """Returns `self | rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self | rhs`.
-        """
         return self.value | rhs.value
 
     @always_inline("nodebug")
     def __ior__(mut self, rhs: Self):
-        """Computes `self | rhs` and saves the result in self.
-
-        Args:
-            rhs: The RHS value.
-        """
         self = self | rhs
 
 
@@ -488,35 +407,14 @@ struct IoUringCqeFlags(TrivialRegisterPassable, Defaultable, Boolable):
 
     @always_inline("nodebug")
     def __and__(self, rhs: Self) -> Self:
-        """Returns `self & rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self & rhs`.
-        """
         return self.value & rhs.value
 
     @always_inline("nodebug")
     def __bool__(self) -> Bool:
-        """Converts this flags to Bool.
-
-        Returns:
-            False Bool value if the value is equal to 0 and True otherwise.
-        """
         return self.value != 0
 
     @always_inline("nodebug")
     def __rshift__(self, rhs: Int) -> Self:
-        """Returns `self >> rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self >> rhs`.
-        """
         return self.value >> UInt32(rhs)
 
 
@@ -735,14 +633,6 @@ struct SQE(TrivialRegisterPassable):
 
     @always_inline
     def __is__(self, rhs: Self) -> Bool:
-        """Defines whether one SQE has the same identity as another.
-
-        Args:
-            rhs: The SQE to compare against.
-
-        Returns:
-            True if the SQEs have the same identity, False otherwise.
-        """
         return (
             self.id == rhs.id
             and self.size == rhs.size
@@ -809,14 +699,6 @@ struct CQE(TrivialRegisterPassable):
 
     @always_inline
     def __is__(self, rhs: Self) -> Bool:
-        """Defines whether one CQE has the same identity as another.
-
-        Args:
-            rhs: The CQE to compare against.
-
-        Returns:
-            True if the CQEs have the same identity, False otherwise.
-        """
         return (
             self.id == rhs.id
             and self.size == rhs.size
@@ -964,23 +846,11 @@ struct IoUringFd[is_registered: Bool](
 
     @always_inline("nodebug")
     def __init__(out self, *, unsafe_fd: UnsafeFd):
-        """Constructs an IoUringFd from an unsafe file descriptor.
-
-        Args:
-            unsafe_fd: The unsafe file descriptor.
-
-        Safety:
-            The resource pointed to by `unsafe_fd` must be open.
-        """
+        """Safety: `unsafe_fd` must be open."""
         self._fd = unsafe_fd
 
     @always_inline("nodebug")
     def unsafe_fd(self) -> UnsafeFd:
-        """Extracts an unsafe file descriptor.
-
-        Returns:
-            The unsafe file descriptor.
-        """
         return self._fd
 
 
@@ -1006,22 +876,12 @@ struct OwnedFd[is_registered: Bool = False](
 
     @always_inline("nodebug")
     def __init__(out self, *, unsafe_fd: UnsafeFd):
-        """Constructs an OwnedFd from an unsafe file descriptor.
-
-        Args:
-            unsafe_fd: The unsafe file descriptor.
-
-        Safety:
-            The resource pointed to by `unsafe_fd` must be open and suitable for
-            assuming ownership. The resource must not require any cleanup other
-            than `close/unregister`.
-        """
+        """Safety: `unsafe_fd` must be open and not require cleanup beyond close/unregister."""
         debug_assert(unsafe_fd > -1, "invalid file descriptor")
         self._fd = unsafe_fd
 
     @always_inline("nodebug")
     def __deinit__(deinit self):
-        """Closes/unregisters the file descriptor."""
         comptime if Self.is_registered:
             var op = IoUringRsrcUpdate()
             op.offset = UInt32(self._fd)
@@ -1047,11 +907,6 @@ struct OwnedFd[is_registered: Bool = False](
 
     @always_inline("nodebug")
     def unsafe_fd(self) -> UnsafeFd:
-        """Extracts an unsafe file descriptor.
-
-        Returns:
-            The unsafe file descriptor.
-        """
         return self._fd
 
     @always_inline("nodebug")
@@ -1239,14 +1094,7 @@ comptime IO_URING_PROBE_OPS = 256
 
 
 struct IoUringProbeOp(Defaultable, ImplicitlyCopyable, Movable):
-    """One entry of the `IORING_REGISTER_PROBE` reply (`io_uring_probe_op`).
-
-    Fields:
-        op: The opcode this entry describes; equals its index.
-        resv: Reserved.
-        flags: `IO_URING_OP_SUPPORTED` when the kernel implements `op`.
-        resv2: Reserved.
-    """
+    """One entry of the `IORING_REGISTER_PROBE` reply (`io_uring_probe_op`)."""
 
     var op: UInt8
     var resv: UInt8
@@ -1255,7 +1103,6 @@ struct IoUringProbeOp(Defaultable, ImplicitlyCopyable, Movable):
 
     @always_inline
     def __init__(out self):
-        """Construct a zeroed entry."""
         _size_eq[Self, 8]()
         self.op = 0
         self.resv = 0
@@ -1269,13 +1116,6 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
     Zero it, hand `as_register_arg(unsafe_opcode=REGISTER_PROBE)` to
     `io_uring_register`, then ask `is_supported`. Layout is the kernel's
     `io_uring_probe` header followed by `IO_URING_PROBE_OPS` entries.
-
-    Fields:
-        last_op: The highest opcode this kernel knows.
-        ops_len: How many entries the kernel filled (`last_op + 1`).
-        resv: Reserved.
-        resv2: Reserved.
-        ops: One entry per opcode, indexed by opcode.
     """
 
     var last_op: UInt8
@@ -1301,18 +1141,7 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
     ](
         ref [origin] self, *, unsafe_opcode: IoUringRegisterOp
     ) -> RegisterArg[origin]:
-        """Describe this probe to `io_uring_register`.
-
-        Parameters:
-            origin: The origin of `self`.
-
-        Args:
-            unsafe_opcode: `IoUringRegisterOp.REGISTER_PROBE`; no other
-                           opcode takes this argument.
-
-        Returns:
-            A register argument with `nr_args = IO_URING_PROBE_OPS`.
-        """
+        """Build the register argument; `unsafe_opcode` must be `REGISTER_PROBE`."""
         # Bind &self first: inlining Pointer(to=self) into the
         # constructor arg list risks losing the stack address mid-marshal.
         var self_p = Pointer(to=self)
@@ -1325,18 +1154,7 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
         )
 
     def is_supported(self, op: IoUringOp) -> Bool:
-        """Return True when the kernel reported `op` as supported.
-
-        Before registration every opcode is unsupported: `last_op` is 0
-        and `ops[0].flags` is 0.
-
-        Args:
-            op: The opcode to check.
-
-        Returns:
-            True if `op <= last_op` and its entry carries
-            `IO_URING_OP_SUPPORTED`.
-        """
+        """Before registration every opcode reads as unsupported."""
         var index = Int(op.id)
         # op.id is UInt8 (max 255) and IO_URING_PROBE_OPS is 256, so this
         # second check never rejects; it documents the array bound rather

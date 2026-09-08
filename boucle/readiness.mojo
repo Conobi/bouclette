@@ -75,7 +75,6 @@ struct ReadinessRegistry(Movable):
         self._driver = _ReadinessDriver(capacity=capacity)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._driver = move._driver^
 
     def register(
@@ -261,7 +260,6 @@ struct ReadinessLoop[Handler: ReadinessHandler](Movable):
         self._handler = handler^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._registry = move._registry^
         self._handler = move._handler^
 

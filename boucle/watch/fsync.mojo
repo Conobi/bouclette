@@ -34,17 +34,6 @@ struct _FsyncState(_FutureCallback):
     Implements _FutureCallback so the generic `_dispatch` can deliver
     completion results into this struct and the WatchLoop registry can
     settle its ownership.
-
-    Fields:
-        completion: The per-operation completion token (fn ptr + context
-                    ptr) whose address the driver holds.
-        _result: Raw completion result (0 on success, or negative errno).
-        done: True once the completion callback has fired.
-        _owner_dropped: True if the FsyncFuture was dropped before done;
-                        the WatchLoop then frees this state.
-        _loop_gone: True if the WatchLoop was destroyed before done;
-                    the FsyncFuture then frees this state.
-        _link: The slot this state lives in and the loop's settle queue.
     """
 
     var completion: Completion
@@ -68,11 +57,6 @@ struct _FsyncState(_FutureCallback):
         self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Args:
-            move: The source state to move from.
-        """
         self.completion = move.completion^
         self._result = move._result
         self.done = move.done
@@ -82,35 +66,22 @@ struct _FsyncState(_FutureCallback):
 
     def set_result(mut self, result: Int):
         """Store the raw completion result of the fsync and mark it done.
-
-        Args:
-            result: The completion result reported by the backend (0 on
-                    success, or negative errno on failure).
         """
         self._result = result
         self.done = True
 
     def is_done(self) -> Bool:
         """Return True once the completion callback has fired.
-
-        Returns:
-            True if no callback will write this state again.
         """
         return self.done
 
     def owner_dropped(self) -> Bool:
         """Return True if the FsyncFuture was dropped before completion.
-
-        Returns:
-            True if the WatchLoop must free this state.
         """
         return self._owner_dropped
 
     def loop_gone(self) -> Bool:
         """Return True if the WatchLoop was destroyed before completion.
-
-        Returns:
-            True if the FsyncFuture is the sole remaining owner.
         """
         return self._loop_gone
 
@@ -120,9 +91,6 @@ struct _FsyncState(_FutureCallback):
 
     def bind(mut self, link: _SlotLink):
         """Record the slot this state lives in and the queue to notify.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         self._link = link
 
@@ -164,11 +132,6 @@ struct FsyncFuture(Movable):
         self._state = state
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor --- transfers ownership of the state pointer.
-
-        Args:
-            move: The source FsyncFuture to move from.
-        """
         self._state = move._state
 
     def __deinit__(deinit self):

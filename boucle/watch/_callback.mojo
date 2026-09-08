@@ -49,14 +49,6 @@ struct _SlotLink(Copyable, ImplicitlyCopyable, Movable):
     slot's key onto the loop's settle queue, so every slot is queued
     exactly once. The completion also decrements the slab's live count,
     which is how `in_flight_count` stays exact without a scan.
-
-    Fields:
-        key: The slot's identity as the loop's sweep understands it —
-             the slab index shifted left by `_KIND_BITS`, with the
-             slab's kind in the low bits. -1 while unbound.
-        queue: The loop's settle queue. Never touched once the loop is
-               gone.
-        live: The slab's count of submitted, not yet done operations.
     """
 
     var key: Int
@@ -135,9 +127,6 @@ trait _InFlightState(Deinitable, Movable):
 
     def is_done(self) -> Bool:
         """Return True once every completion of the operation has arrived.
-
-        Returns:
-            True if the state will never be written by a callback again.
         """
         ...
 
@@ -147,9 +136,6 @@ trait _InFlightState(Deinitable, Movable):
         When True, nobody will read the result and nobody else will free
         the state: the loop must release it once the state is done, or
         when the loop itself is destroyed.
-
-        Returns:
-            True if the owning Future is gone; False if it still exists.
         """
         ...
 
@@ -158,9 +144,6 @@ trait _InFlightState(Deinitable, Movable):
 
         When True, no callback can ever fire again and the Future handle
         is the sole owner of the state.
-
-        Returns:
-            True if the loop is gone; False while it is alive.
         """
         ...
 
@@ -174,9 +157,6 @@ trait _InFlightState(Deinitable, Movable):
 
         Called by the slab right after the state is moved into its
         slot, before the operation is submitted.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         ...
 

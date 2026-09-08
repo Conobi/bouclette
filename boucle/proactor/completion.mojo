@@ -52,7 +52,6 @@ struct Completion(Movable):
         self.context = context
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.invoke = move.invoke
         self.context = move.context
 

@@ -31,7 +31,6 @@ struct EventLoop[D: IoDriver](Movable):
         self.running = False
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.driver = move.driver^
         self.running = move.running
 

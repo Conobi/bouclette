@@ -78,9 +78,6 @@ def _is_etime(e: Error) -> Bool:
 
     Args:
         e: An error raised by a socle syscall wrapper.
-
-    Returns:
-        True for `"-62"`; False for any other text.
     """
     try:
         return Errno(error=e) is Errno(errno=UInt16(ETIME))
@@ -135,12 +132,6 @@ def _timespec_from_ms(timeout_ms: Int) -> __kernel_timespec:
 @fieldwise_init
 struct _KernelFeatures(TrivialRegisterPassable):
     """The three feature answers `supports()` reports from.
-
-    Fields:
-        multishot_recvmsg: RECVMSG probed as supported and the kernel is
-                            6.0 or newer.
-        buffer_ring: The kernel is 5.19 or newer.
-        timeout_arg: `IORING_FEAT_EXT_ARG` was reported at setup.
     """
 
     var multishot_recvmsg: Bool
@@ -196,19 +187,6 @@ struct IoUringDriver(IoDriver):
     `BufRing`. The table is heap-boxed because a completion callback may
     call `return_buffer` while `tick()` holds `mut self`; going through a
     loaded pointer guarantees the callback's writes are observed.
-
-    Fields:
-        _ring: The io_uring instance.
-        _groups: Registered buffer rings keyed by group id (see above).
-        _setup_flags: The io_uring setup flags requested at construction
-                      (always includes `IORING_SETUP_NO_SQARRAY`).
-        _supports_multishot_recvmsg: RECVMSG probes as supported and the
-                                     kernel is 6.0 or newer.
-        _supports_buffer_ring: The kernel is 5.19 or newer.
-        _supports_timeout_arg: `IORING_FEAT_EXT_ARG` was reported at setup.
-        _sentinel_ts: Timespec of the sentinel timeout on kernels without
-                      `IORING_FEAT_EXT_ARG`; the kernel copies it at
-                      submission, so one field serves every bounded tick.
     """
 
     var _ring: IoUring[]
@@ -286,7 +264,6 @@ struct IoUringDriver(IoDriver):
         self._supports_timeout_arg = features.timeout_arg
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._ring = move._ring^
         self._groups = move._groups
         self._setup_flags = move._setup_flags
@@ -886,9 +863,6 @@ struct IoUringDriver(IoDriver):
 
         Args:
             feature: The capability to query.
-
-        Returns:
-            True if the feature can be used on this driver.
         """
         if feature is DriverFeature.MULTISHOT_RECVMSG:
             return self._supports_multishot_recvmsg

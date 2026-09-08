@@ -29,25 +29,6 @@ from boucle.watch._shared import _LoopShared
 
 struct _PoolState(_InFlightState):
     """Slab-owned state of one buffer pool.
-
-    Fields:
-        memory: Start of buffer 0; buffer `i` is at `memory + i * buffer_size`.
-        buffer_size: Bytes per buffer.
-        count: Number of buffers (a power of two).
-        group_id: The driver group this pool is registered as.
-        available: Buffers neither queued in a stream nor held by a lease.
-        streams: Streams referencing this pool (armed, or awaiting their
-                 terminal completion).
-        registered: True while the driver group exists.
-        closing: True once the handle dropped; a multishot receive
-                 refuses a closing pool.
-        _shared: The loop's shared box (driver, liveness).
-        _abandoned: The loop died with a stream selecting from this
-                    pool; the memory is leaked, never freed.
-        _queued: True once the slot key was pushed to the settle queue.
-        _owner_dropped: The `BufferPool` handle is gone.
-        _loop_gone: The loop was destroyed with this state in flight.
-        _link: The slot this state lives in and the loop's settle queue.
     """
 
     var memory: Pointer[UInt8, MutUntrackedOrigin]
@@ -98,7 +79,6 @@ struct _PoolState(_InFlightState):
         self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.memory = move.memory
         self.buffer_size = move.buffer_size
         self.count = move.count
@@ -159,9 +139,6 @@ struct _PoolState(_InFlightState):
 
         Args:
             buf_id: A buffer id from a delivery.
-
-        Returns:
-            True when `buf_id < count`.
         """
         return Int(buf_id) < self.count
 
@@ -290,9 +267,6 @@ struct _PoolState(_InFlightState):
 
     def bind(mut self, link: _SlotLink):
         """Record the slot this state lives in and the queue to notify.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         self._link = link
 
@@ -318,10 +292,6 @@ struct LeasedBuffer(Movable):
     When every buffer is leased the stream ends with ENOBUFS and resumes
     only after leases return and the caller re-arms: holding leases is
     the backpressure lever. Inert once the loop is gone.
-
-    Fields:
-        _pool: The slab-owned pool state the buffer belongs to.
-        _id: The buffer id within that pool.
     """
 
     var _pool: Pointer[_PoolState, MutUntrackedOrigin]
@@ -340,7 +310,6 @@ struct LeasedBuffer(Movable):
         self._id = id
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._pool = move._pool
         self._id = move._id
 
@@ -380,9 +349,6 @@ struct BufferPool(Movable):
     loop releases the pool (driver group unregistered, memory freed) at
     the sweep after every lease has returned and every stream using it
     has ended. Once the loop is gone the handle is inert.
-
-    Fields:
-        _state: The slab-owned pool state.
     """
 
     var _state: Pointer[_PoolState, MutUntrackedOrigin]
@@ -396,7 +362,6 @@ struct BufferPool(Movable):
         self._state = state
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._state = move._state
 
     def __deinit__(deinit self):

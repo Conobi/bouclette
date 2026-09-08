@@ -70,9 +70,6 @@ def _is_queue_full(e: Error) -> Bool:
 
     Args:
         e: The error the driver raised.
-
-    Returns:
-        True for `-EAGAIN`; False for anything else.
     """
     return IOError.from_error(e).is_would_block()
 
@@ -80,11 +77,6 @@ def _is_queue_full(e: Error) -> Bool:
 @fieldwise_init
 struct _Delivery(ImplicitlyCopyable, Movable):
     """One completed delivery waiting to be taken.
-
-    Fields:
-        buf_id: The provided buffer the delivery landed in.
-        result: The completion result (bytes written into the buffer).
-        flags: The completion flags as the driver encoded them.
     """
 
     var buf_id: UInt16
@@ -99,34 +91,6 @@ struct _Delivery(ImplicitlyCopyable, Movable):
 
 struct _StreamState(_InFlightState):
     """Slab-owned state of one multishot recvmsg stream.
-
-    Fields:
-        completion: Token of the multishot operation; fires once per delivery.
-        cancel_completion: Token of the internal cancel submitted on drop.
-        _msg: msghdr template (name capacity, control capacity, iov).
-        _iov: The template's single zero-length iov.
-        fd: The socket, kept for re-arms.
-        group_id: The pool's driver group.
-        control_capacity: Control bytes reserved in every buffer.
-        pool: The pool deliveries lease from.
-        deliveries: Completed deliveries not yet taken, oldest first.
-        armed: True while the caller may expect deliveries (an operation
-               is in flight or a re-arm is pending).
-        error: Set when the stream ended on an error while held.
-        rearm_requested: A re-arm waits on the deferred list.
-        cancel_requested: A cancel waits on the deferred list.
-        cancel_submitted: The cancel was handed to the driver.
-        cancel_done: The cancel's own completion arrived.
-        cancel_failed: The driver refused the cancel for a genuine error;
-                       the slot waits for the operation to end on its own.
-        pool_detached: This stream no longer counts against the pool.
-        _finished: The slot key was pushed on the settle queue.
-        _live_counted: The slab still counts this state live.
-        _deferred_queued: The slot key is on the deferred list.
-        _shared: The loop's shared box.
-        _owner_dropped: The `DatagramStream` handle is gone.
-        _loop_gone: The loop was destroyed with this stream in flight.
-        _link: The slot this state lives in and the loop's settle queue.
     """
 
     var completion: Completion
@@ -204,14 +168,6 @@ struct _StreamState(_InFlightState):
         self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        The msghdr pointer and the completion contexts are not rebased:
-        `wire()` runs after the move into the slot, never before.
-
-        Args:
-            move: The source state.
-        """
         self.completion = move.completion^
         self.cancel_completion = move.cancel_completion^
         self._msg = move._msg
@@ -547,9 +503,6 @@ struct _StreamState(_InFlightState):
 
     def bind(mut self, link: _SlotLink):
         """Record the slot this state lives in and the queue to notify.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         self._link = link
 
@@ -595,11 +548,6 @@ struct _StreamState(_InFlightState):
 
 struct Datagram(Movable):
     """One received datagram: a leased buffer plus its decoded delivery header.
-
-    Fields:
-        buffer: The lease; dropping the datagram returns it to the pool.
-        _flags: The completion flags.
-        _control_capacity: Control bytes reserved in the buffer.
     """
 
     var buffer: LeasedBuffer
@@ -624,7 +572,6 @@ struct Datagram(Movable):
         self._control_capacity = control_capacity
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.buffer = move.buffer^
         self._flags = move._flags
         self._control_capacity = move._control_capacity
@@ -730,9 +677,6 @@ struct DatagramStream(Movable):
     pending error and no hang-up bit) ends the stream with EIO. On
     io_uring a read-shut or errored socket never terminates the stream;
     it stays armed with no completion, so drop the stream to release it.
-
-    Fields:
-        _state: The slab-owned stream state.
     """
 
     var _state: Pointer[_StreamState, MutUntrackedOrigin]
@@ -746,7 +690,6 @@ struct DatagramStream(Movable):
         self._state = state
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._state = move._state
 
     def __deinit__(deinit self):

@@ -353,9 +353,6 @@ trait IoDriver(Movable):
 
         Args:
             feature: The capability to query.
-
-        Returns:
-            True if submissions relying on `feature` will be accepted.
         """
         ...
 

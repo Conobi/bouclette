@@ -34,21 +34,9 @@ from boucle.watch._callback import _FutureCallback, _SlotLink
 struct _MessageState(_FutureCallback):
     """Internal state for a single async sendmsg or recvmsg operation.
 
-    Fields:
-        completion: The per-operation completion token whose address the
-                    driver holds.
-        msg: The message, owned here for the whole operation.
-        _hdr: The msghdr the driver is pointed at.
-        _iov: The single iovec `_hdr.msg_iov` points at.
-        _receiving: True for recvmsg (offer the name slot and the whole
-                    control area; record what the kernel wrote), False
-                    for sendmsg (offer the peer if set and the record
-                    `set_ecn` wrote; never what a receive wrote).
-        _result: Raw completion result (bytes >= 0, or negative errno).
-        done: True once the completion callback has fired.
-        _owner_dropped: True if the future was dropped before done.
-        _loop_gone: True if the WatchLoop was destroyed before done.
-        _link: The slot this state lives in and the loop's settle queue.
+    Owns the `Message` and the `msghdr` + one-entry `iovec` the driver
+    reads from. Call `wire()` after slab placement to point the msghdr
+    at the message's buffers.
     """
 
     var completion: Completion
@@ -84,14 +72,6 @@ struct _MessageState(_FutureCallback):
         self._link = _SlotLink()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        The msghdr pointers are not rebased: `wire()` runs after the
-        move into the slot, never before.
-
-        Args:
-            move: The source state.
-        """
         self.completion = move.completion^
         self.msg = move.msg^
         self._hdr = move._hdr
@@ -195,9 +175,6 @@ struct _MessageState(_FutureCallback):
 
         After a successful receive the peer length and control length
         follow what the kernel wrote into the msghdr.
-
-        Args:
-            result: The completion result (bytes >= 0, or negative errno).
         """
         debug_assert(not self.done, "completion delivered twice")
         self._result = result
@@ -208,25 +185,16 @@ struct _MessageState(_FutureCallback):
 
     def is_done(self) -> Bool:
         """Return True once the completion callback has fired.
-
-        Returns:
-            True if no callback will write this state again.
         """
         return self.done
 
     def owner_dropped(self) -> Bool:
         """Return True if the future was dropped before completion.
-
-        Returns:
-            True if the WatchLoop must free this state.
         """
         return self._owner_dropped
 
     def loop_gone(self) -> Bool:
         """Return True if the WatchLoop was destroyed before completion.
-
-        Returns:
-            True if the future is the sole remaining owner.
         """
         return self._loop_gone
 
@@ -236,9 +204,6 @@ struct _MessageState(_FutureCallback):
 
     def bind(mut self, link: _SlotLink):
         """Record the slot this state lives in and the queue to notify.
-
-        Args:
-            link: The slot key and the loop's settle queue.
         """
         self._link = link
 

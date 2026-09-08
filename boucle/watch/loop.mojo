@@ -236,7 +236,6 @@ struct WatchLoop(Movable):
         self._free_group_ids = List[UInt16]()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._driver = move._driver^
         self._pending = move._pending
         self._settle = move._settle

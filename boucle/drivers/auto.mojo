@@ -32,9 +32,6 @@ def _native_datagram_path_rule(multishot: Bool, buffer_ring: Bool) -> Bool:
     Args:
         multishot: Whether `MULTISHOT_RECVMSG` is supported.
         buffer_ring: Whether `BUFFER_RING` is supported.
-
-    Returns:
-        True if both are supported.
     """
     return multishot and buffer_ring
 
@@ -120,7 +117,6 @@ struct AutoDriver(IoDriver):
         self._backend = Backend.EPOLL
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._backend = move._backend
         self._uring = move._uring^
         self._epoll = move._epoll^

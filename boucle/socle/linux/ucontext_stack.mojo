@@ -84,12 +84,10 @@ struct _MappedRegion(Movable):
         self._total = total
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor. Transfers ownership of the mapped region."""
         self._base = move._base
         self._total = move._total
 
     def __deinit__(deinit self):
-        """Unmap the entire region (guard page + usable stack)."""
         _ = syscall[__NR_munmap, Scalar[DType.int64]](self._base, self._total)
 
     def usable_base(self, page_size: UInt) -> Pointer[UInt8, MutUntrackedOrigin]:
@@ -135,11 +133,9 @@ struct _UContext(Movable):
         self._buf = alloc_ucontext()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor. Transfers ownership of the buffer."""
         self._buf = move._buf
 
     def __deinit__(deinit self):
-        """Free the ucontext_t buffer."""
         free_ucontext(self._buf)
 
     def getcontext(mut self) raises:
@@ -258,7 +254,6 @@ struct _UcontextStack(Movable):
         self._pool_ref = null_ptr[NoneType, MutUntrackedOrigin]()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor. Transfers ownership of all resources."""
         self._region = move._region^
         self._caller_ctx = move._caller_ctx^
         self._coro_ctx = move._coro_ctx^

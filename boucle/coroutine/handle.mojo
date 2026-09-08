@@ -103,7 +103,6 @@ struct Coroutine[State: Movable & Deinitable](Movable, Deinitable where False):
             raise e^
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor for Coroutine. Transfers the inner pointer."""
         self._inner = move._inner
 
     def resume(mut self) raises:

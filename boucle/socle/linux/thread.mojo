@@ -38,7 +38,6 @@ struct _Mutex(Movable):
             raise "pthread_mutex_init failed: " + String(res)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._raw = move._raw
 
     def lock(mut self):
@@ -78,7 +77,6 @@ struct _Condvar(Movable):
             raise "pthread_cond_init failed: " + String(res)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._raw = move._raw
 
     def wait(mut self, ref mutex: _Mutex):
@@ -168,7 +166,6 @@ struct _Thread(Movable):
             raise "pthread_create failed: " + String(res)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._handle = move._handle
         self._detached = move._detached
 

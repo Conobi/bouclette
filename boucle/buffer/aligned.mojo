@@ -16,14 +16,7 @@ from std.os import abort
 
 
 struct AlignedBuffer(Movable, Sized):
-    """A fixed-capacity byte buffer whose backing memory is aligned.
-
-    Fields:
-        _ptr: Start of the allocated region.
-        _len: Number of bytes currently in use (0..capacity).
-        _cap: Total capacity in bytes (fixed at construction).
-        _alignment: Alignment of `_ptr` in bytes (power of two).
-    """
+    """A fixed-capacity byte buffer whose backing memory is aligned."""
 
     var _ptr: Pointer[UInt8, MutUntrackedOrigin]
     var _len: Int
@@ -35,12 +28,7 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def __init__(out self, *, capacity: Int, alignment: Int = 1):
-        """Allocate `capacity` bytes aligned to `alignment`.
-
-        Args:
-            capacity: Number of bytes to allocate (must be positive).
-            alignment: Byte alignment (must be a positive power of two).
-        """
+        """Allocate `capacity` bytes aligned to `alignment`."""
         if capacity <= 0:
             abort("AlignedBuffer: capacity must be positive")
         if alignment <= 0 or (alignment & (alignment - 1)) != 0:
@@ -57,11 +45,6 @@ struct AlignedBuffer(Movable, Sized):
 
         Sets length equal to capacity so the entire buffer is immediately
         addressable.
-
-        Args:
-            capacity: Number of bytes to allocate (must be positive).
-            alignment: Byte alignment (must be a positive power of two).
-            fill: Byte value to write into every position.
         """
         if capacity <= 0:
             abort("AlignedBuffer: capacity must be positive")
@@ -78,14 +61,6 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor.
-
-        Transfers ownership of the backing allocation. The moved-from
-        value is consumed by `deinit` — its destructor does not run.
-
-        Args:
-            move: The source buffer to move from.
-        """
         self._ptr = move._ptr
         self._len = move._len
         self._cap = move._cap
@@ -101,11 +76,6 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def __len__(self) -> Int:
-        """Return the number of bytes currently in use.
-
-        Returns:
-            The current length, always in ``0..capacity``.
-        """
         return self._len
 
     # ------------------------------------------------------------------
@@ -113,24 +83,12 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def __getitem__(self, index: Int) -> UInt8:
-        """Read the byte at `index`.
-
-        Args:
-            index: Position within the used region.
-
-        Returns:
-            The byte value at `index`.
-        """
+        """Read the byte at `index` (bounds-checked via `debug_assert`)."""
         debug_assert(0 <= index < self._len, "AlignedBuffer: index out of range")
         return self._ptr.unsafe_offset(index).unsafe_load()
 
     def __setitem__(mut self, index: Int, value: UInt8):
-        """Write `value` at `index`.
-
-        Args:
-            index: Position within the used region.
-            value: Byte value to store.
-        """
+        """Write `value` at `index` (bounds-checked via `debug_assert`)."""
         debug_assert(0 <= index < self._len, "AlignedBuffer: index out of range")
         self._ptr.unsafe_offset(index).unsafe_store(value)
 
@@ -139,27 +97,14 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def append(mut self, b: UInt8):
-        """Append a single byte.
-
-        Aborts unconditionally if the buffer is full.
-
-        Args:
-            b: The byte to append.
-        """
+        """Append a single byte. Aborts unconditionally if full."""
         if self._len >= self._cap:
             abort("AlignedBuffer.append: buffer full")
         self._ptr.unsafe_offset(self._len).unsafe_store(b)
         self._len += 1
 
     def extend(mut self, data: Span[UInt8, _]):
-        """Append all bytes from `data`.
-
-        Aborts unconditionally if the combined length would exceed
-        capacity.
-
-        Args:
-            data: A span of bytes to copy in.
-        """
+        """Append all bytes from `data`. Aborts if overflow."""
         if self._len + len(data) > self._cap:
             abort("AlignedBuffer.extend: would overflow")
         for i in range(len(data)):
@@ -171,9 +116,6 @@ struct AlignedBuffer(Movable, Sized):
 
         The caller is responsible for any bytes between the old and new
         lengths being meaningful.
-
-        Args:
-            new_len: The new length (must be in ``0..capacity``).
         """
         debug_assert(
             0 <= new_len <= self._cap, "AlignedBuffer.resize: out of range"
@@ -189,13 +131,7 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def as_span(ref self) -> Span[UInt8, origin_of(self)]:
-        """Return a read-only span over the used region.
-
-        The span borrows `self`, so the buffer must outlive the span.
-
-        Returns:
-            A span of `len(self)` bytes starting at the buffer origin.
-        """
+        """Borrow the used region as a read-only span."""
         return Span[UInt8, origin_of(self)](
             unsafe_ptr=Pointer[UInt8, origin_of(self)](
                 unsafe_from_address=Int(self._ptr)
@@ -208,30 +144,13 @@ struct AlignedBuffer(Movable, Sized):
     # ------------------------------------------------------------------
 
     def capacity(self) -> Int:
-        """Return the total buffer capacity in bytes.
-
-        Returns:
-            The capacity set at construction time.
-        """
+        """Total buffer capacity in bytes, fixed at construction."""
         return self._cap
 
     def alignment(self) -> Int:
-        """Return the alignment guarantee in bytes.
-
-        Returns:
-            The alignment set at construction time.
-        """
+        """Alignment guarantee in bytes, fixed at construction."""
         return self._alignment
 
     def unsafe_ptr(self) -> Pointer[UInt8, MutUntrackedOrigin]:
-        """Return the raw pointer to the start of the buffer.
-
-        Safety:
-            The caller must not free or reallocate through this pointer.
-            The pointer is valid for `capacity()` bytes as long as the
-            buffer is alive.
-
-        Returns:
-            A raw pointer to byte 0 of the allocation.
-        """
+        """Raw pointer to byte 0; valid for `capacity()` bytes while alive."""
         return self._ptr

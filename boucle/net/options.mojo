@@ -31,26 +31,10 @@ struct SocketType(TrivialRegisterPassable, Equatable):
 
     @always_inline("nodebug")
     def __eq__(self, rhs: Self) -> Bool:
-        """Return True when both carry the same SOCK_* id.
-
-        Args:
-            rhs: The type to compare against.
-
-        Returns:
-            True if the ids match.
-        """
         return self.id == rhs.id
 
     @always_inline("nodebug")
     def __ne__(self, rhs: Self) -> Bool:
-        """Return True when the SOCK_* ids differ.
-
-        Args:
-            rhs: The type to compare against.
-
-        Returns:
-            True if the ids differ.
-        """
         return self.id != rhs.id
 
 
@@ -104,26 +88,10 @@ struct AddrFamily(TrivialRegisterPassable, Equatable):
 
     @always_inline("nodebug")
     def __eq__(self, rhs: Self) -> Bool:
-        """Return True when both carry the same AF_* id.
-
-        Args:
-            rhs: The family to compare against.
-
-        Returns:
-            True if the ids are equal.
-        """
         return self.id == rhs.id
 
     @always_inline("nodebug")
     def __ne__(self, rhs: Self) -> Bool:
-        """Return True when the AF_* ids differ.
-
-        Args:
-            rhs: The family to compare against.
-
-        Returns:
-            True if the ids differ.
-        """
         return self.id != rhs.id
 
     @staticmethod
@@ -307,12 +275,10 @@ struct Shutdown(TrivialRegisterPassable, Equatable):
 
     @always_inline("nodebug")
     def __eq__(self, other: Self) -> Bool:
-        """Returns True if both values represent the same shutdown direction."""
         return self.value == other.value
 
     @always_inline("nodebug")
     def __ne__(self, other: Self) -> Bool:
-        """Returns True if the values represent different shutdown directions."""
         return self.value != other.value
 
 

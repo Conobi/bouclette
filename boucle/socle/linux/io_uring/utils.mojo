@@ -22,14 +22,6 @@ struct AtomicOrdering(TrivialRegisterPassable):
 
     @always_inline("nodebug")
     def __is__(self, rhs: Self) -> Bool:
-        """Defines whether one AtomicOrdering has the same identity as another.
-
-        Args:
-            rhs: The AtomicOrdering to compare against.
-
-        Returns:
-            True if theAtomicOrderings have the same identity, False otherwise.
-        """
         return self.id == rhs.id
 
 
@@ -56,37 +48,14 @@ def _atomic_store[
 
 @always_inline("nodebug")
 def _next_power_of_two(value: UInt32) -> UInt32:
-    """Returns the smallest power of two greater than or equal
-    to the input value.
-
-    When the return value overflows, function panics if assertions are enabled,
-    and the return value wraps to 0 otherwise (the only situation in which
-    function can return 0).
-
-    Args:
-        value: The input value.
-
-    Returns:
-        The smallest power of two greater than or equal to the input value.
-    """
+    """Panics on overflow; wraps to 0 without assertions."""
     debug_assert(value <= UInt32(1 << (bit_width_of[UInt32]() - 1)), "result overflow")
     return _one_less_than_next_power_of_two(value) + 1
 
 
 @always_inline("nodebug")
 def _one_less_than_next_power_of_two(value: UInt32) -> UInt32:
-    """Returns one less than the next power of two.
-
-    Args:
-        value: The input value.
-
-    Returns:
-        One less than the next power of two of the input value.
-
-    This function cannot overflow, as in the `_next_power_of_two`
-    overflow cases it instead ends up returning the maximum value
-    of the type, and can return 0 for 0.
-    """
+    """Cannot overflow; returns `UInt32.MAX` in the overflow case, 0 for 0."""
     if value <= 1:
         return 0
 
@@ -100,16 +69,6 @@ def _one_less_than_next_power_of_two(value: UInt32) -> UInt32:
 
 @always_inline("nodebug")
 def _add_with_overflow(lhs: UInt32, rhs: UInt32) -> _AddOverflowResult:
-    """Computes `lhs + rhs` and a `Bool` indicating overflow.
-
-    Args:
-        lhs: The lhs value.
-        rhs: The rhs value.
-
-    Returns:
-        A struct with the results of the operation and a `Bool` indicating
-        overflow.
-    """
     return llvm_intrinsic[
         "llvm.uadd.with.overflow",
         _AddOverflowResult,
@@ -117,18 +76,7 @@ def _add_with_overflow(lhs: UInt32, rhs: UInt32) -> _AddOverflowResult:
 
 @always_inline("nodebug")
 def _checked_add(lhs: UInt32, rhs: UInt32) raises -> UInt32:
-    """Computes `lhs + rhs`.
-
-    Args:
-        lhs: The lhs value.
-        rhs: The rhs value.
-
-    Returns:
-        `lhs + rhs` value.
-
-    Raises:
-        If an overflow occurs.
-    """
+    """Raises on overflow."""
     var res = _add_with_overflow(lhs, rhs)
     if unlikely(res.overflow):
         raise "integer overflow"
@@ -137,18 +85,7 @@ def _checked_add(lhs: UInt32, rhs: UInt32) raises -> UInt32:
 
 @always_inline("nodebug")
 def _checked_mul(lhs: UInt32, rhs: UInt32) raises -> UInt32:
-    """Computes `lhs * rhs` with overflow detection.
-
-    Args:
-        lhs: The lhs value.
-        rhs: The rhs value.
-
-    Returns:
-        `lhs * rhs` value.
-
-    Raises:
-        If an overflow occurs.
-    """
+    """Raises on overflow."""
     var res = llvm_intrinsic[
         "llvm.umul.with.overflow",
         _AddOverflowResult,

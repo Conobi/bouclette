@@ -228,30 +228,6 @@ struct _EpollOp(ImplicitlyCopyable, Movable):
     `group_id` is only meaningful for a MULTISHOT_RECVMSG op: the
     provided-buffer group its deliveries draw from. Such an op is the
     one kind whose slot stays active while its completions fire.
-
-    Fields:
-        kind: Which operation this slot holds.
-        fd: The descriptor the caller submitted; kept for reference
-            only, never passed to a syscall after submission.
-        dup_fd: The driver's private `dup()` of `fd`, taken by
-                `_register_op`. Every epoll_ctl and every I/O syscall
-                the driver issues for this op runs on it, and
-                `_detach_op` closes it. -1 for NOP and TIMEOUT, which
-                have no descriptor.
-        buf: Address of the caller's buffer (RECV, SEND).
-        len: Length of that buffer.
-        addr: Unused; kept for layout parity with the connect path.
-        addr_len: Unused; see `addr`.
-        msg: Address of the caller's msghdr (RECVMSG, SENDMSG,
-             MULTISHOT_RECVMSG template).
-        flags: The caller's `recvmsg(2)` flags, added to MSG_DONTWAIT
-               (RECVMSG).
-        completion: The caller-owned Completion to fire.
-        deadline_ns: Absolute CLOCK_MONOTONIC deadline (TIMEOUT).
-        pool_index: This slot's index in the pool.
-        generation: Bumped on every free; part of the epoll user data.
-        active: Whether the slot is allocated.
-        group_id: The provided-buffer group (MULTISHOT_RECVMSG).
     """
 
     var kind: _OpKind
@@ -322,13 +298,6 @@ struct _BufGroup(Copyable, Movable):
     io_uring keeps provided buffers in a kernel ring; epoll has no such
     thing, so the driver keeps the free ids itself and picks one per
     datagram in `_deliver_multishot_recvmsg`.
-
-    Fields:
-        id: Group id chosen by the caller.
-        base: Address of buffer 0; buffer `i` starts at `base + i * size`.
-        size: Bytes per buffer.
-        count: Number of buffers in the group.
-        free: Ids not currently handed out by a delivery.
     """
 
     var id: UInt16
@@ -359,7 +328,6 @@ struct _TimerHeap(Movable):
         self._entries = List[_TimerEntry]()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._entries = move._entries^
 
     def push(mut self, entry: _TimerEntry):
@@ -389,9 +357,6 @@ struct _TimerHeap(Movable):
 
         Args:
             index: The pool index to search for.
-
-        Returns:
-            True if found and removed, False otherwise.
         """
         for i in range(len(self._entries)):
             if self._entries[i].pool_index == index:
@@ -493,7 +458,6 @@ struct _OpPool(Movable):
             self._free.append(i)
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._slots = move._slots
         self._free = move._free^
         self._capacity = move._capacity
@@ -623,7 +587,6 @@ struct _DriverState(Movable):
         self.worker_pool = None
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self.pool = move.pool^
         self.timers = move.timers^
         self.ready = move.ready^
@@ -809,7 +772,6 @@ struct EpollCompletionDriver(IoDriver):
         )
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor. Copies the state pointer for address stability."""
         self._epfd = move._epfd
         self._events = move._events
         self._max_events = move._max_events
@@ -846,9 +808,6 @@ struct EpollCompletionDriver(IoDriver):
 
         Args:
             feature: The capability to query.
-
-        Returns:
-            True.
         """
         return True
 

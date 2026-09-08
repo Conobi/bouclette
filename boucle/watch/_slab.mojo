@@ -36,20 +36,6 @@ comptime _ACTIVE = UInt8(1)  # a state lives in the slot
 
 struct _Slab[F: _InFlightState](Movable):
     """Address-stable pool of `F` states with a free list.
-
-    Fields:
-        _chunks: Base pointer of every chunk allocated so far.
-        _chunk_shift: log2 of the slots per chunk; the chunk size is
-                      rounded up to a power of two so a slot lookup is
-                      a shift and a mask, not two divisions.
-        _free: Indices of slots holding no state.
-        _flags: `_ACTIVE` bit, one entry per slot.
-        _live: Heap-boxed count of submitted, not yet done operations;
-               boxed so the links can decrement it after the loop moves.
-        _kind: This slab's tag in the low bits of every key it issues.
-        _queue: The loop's settle queue, handed to every bound state.
-        _leaked: True once a handle was left attached at loop
-                 destruction, in which case the chunks are never freed.
     """
 
     var _chunks: List[Pointer[Self.F, MutUntrackedOrigin]]
@@ -91,7 +77,6 @@ struct _Slab[F: _InFlightState](Movable):
         self._leaked = False
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor."""
         self._chunks = move._chunks^
         self._chunk_shift = move._chunk_shift
         self._free = move._free^

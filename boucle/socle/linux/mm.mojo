@@ -273,44 +273,18 @@ struct MapFlags(TrivialRegisterPassable, Defaultable):
 
     @always_inline("nodebug")
     def __or__(self, rhs: Self) -> Self:
-        """Returns `self | rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self | rhs`.
-        """
         return self.value | rhs.value
 
     @always_inline("nodebug")
     def __ior__(mut self, rhs: Self):
-        """Computes `self | rhs` and saves the result in self.
-
-        Args:
-            rhs: The RHS value.
-        """
         self = self | rhs
 
     @always_inline("nodebug")
     def __and__(self, rhs: Self) -> Self:
-        """Returns `self & rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self & rhs`.
-        """
         return self.value & rhs.value
 
     @always_inline("nodebug")
     def __bool__(self) -> Bool:
-        """Returns True when at least one flag bit is set.
-
-        Returns:
-            `self.value != 0`.
-        """
         return self.value != 0
 
     @always_inline("nodebug")
@@ -352,14 +326,6 @@ struct ProtFlags(TrivialRegisterPassable, Defaultable):
 
     @always_inline("nodebug")
     def __or__(self, rhs: Self) -> Self:
-        """Returns `self | rhs`.
-
-        Args:
-            rhs: The RHS value.
-
-        Returns:
-            `self | rhs`.
-        """
         return self.value | rhs.value
 
 

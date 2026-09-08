@@ -122,7 +122,6 @@ struct _CoroInner[State: Movable & Deinitable](Movable):
         self.error_msg = String()
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor for _CoroInner. Transfers all fields."""
         self.magic = move.magic
         self.stack = move.stack
         self.phase = move.phase

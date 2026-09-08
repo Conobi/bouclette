@@ -32,18 +32,10 @@ struct RecvMsgFuture(Movable):
 
     def __init__(out self, state: Pointer[_MessageState, MutUntrackedOrigin]):
         """Construct a RecvMsgFuture wrapping a slab-owned state.
-
-        Args:
-            state: Pointer to the slab-owned _MessageState.
         """
         self._state = state
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor — transfers ownership of the state pointer.
-
-        Args:
-            move: The source future.
-        """
         self._state = move._state
 
     def __deinit__(deinit self):
@@ -105,8 +97,5 @@ struct RecvMsgFuture(Movable):
 
         Stays False forever if the loop was destroyed first; result()
         then raises LOOP_GONE.
-
-        Returns:
-            True once the completion callback has fired.
         """
         return self._state[].done

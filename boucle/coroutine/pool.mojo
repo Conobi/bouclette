@@ -83,7 +83,6 @@ struct StackPool(Movable):
         )
 
     def __init__(out self, *, deinit move: Self):
-        """Move constructor. Copies the inner pointer for address stability."""
         self._inner = move._inner
 
     def __deinit__(deinit self):
