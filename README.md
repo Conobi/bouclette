@@ -4,26 +4,26 @@
 </h1>
 
 <p align="center">
-  <i>Platform-agnostic I/O foundation for Mojo: completion and readiness loops over shared portable types.</i>
+  <i>Platform-agnostic I/O for Mojo.</i>
 </p>
 
 > [!WARNING]
 > **Active development — not production-ready.**
-> APIs are unstable, and the only supported backends are `io_uring` and `epoll` on Linux.
+> APIs are still unstable, and the only supported backends are `io_uring` and `epoll` on Linux.
 ---
 
-## Why Bouclette
+bouclette (pronounced *booklet*, `/bu.klɛt/`) is a lightweight I/O library for Mojo. Backend-agnostic, modern Linux features, zero unnecessary abstractions.
 
-Most I/O libraries pick one model and emulate the other. Bouclette exposes both as first-class APIs over shared types, so you pick the model that fits your workload — not the one your library chose for you.
-
-- **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`/`SocketAddrV6`, `IOError` and `Backend`. No adapter layers.
-- **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
-- **Automatic backend selection.** `Backend.AUTO` picks io_uring only when the kernel serves the datagram path natively (multishot recvmsg and provided-buffer rings, 6.0+), epoll otherwise. A single binary works across kernel versions.
-- **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value* and `send_msg`/`recv_msg` take a `Message` the same way. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count, and a failed operation hands it back inside the typed `TransferFailed`/`MessageFailed` error. Dropping the future without running the loop is harmless.
-- **One errno type.** Every failure carries an `IOError` with the errno, printing as `ECONNREFUSED (111)`. `Socket` calls raise it directly; the completion futures wrap it in `TransferFailed`/`MessageFailed` so the in-flight buffer rides back with the error.
-- **`socle/` is private.** OS abstractions (syscalls, fd, errno, epoll/io_uring wrappers) live in `bouclette/socle/`, and `bouclette/socle/platform.mojo` is the single seam where the portable layer names a concrete OS. Platform-specific features require an explicit `socle/` import — the path makes the portability trade-off visible.
-- **Stackful coroutines.** Real yield/resume via `ucontext` — no state machine transform. Coroutines run on their own stack and suspend cooperatively. Temporary bridge until Mojo ships native async/await.
-- **Portable by design.** The architecture supports multiple backends per platform. Currently Linux-only (io_uring + epoll); macOS (kqueue) and Windows (IOCP) are planned.
+- Dual I/O models
+- Auto backend fallback
+- Owned in-flight buffers
+- Zero-copy recv
+- Multishot datagrams
+- Sans-I/O composable
+- Stackful coroutines
+- Slab allocation
+- GSO / GRO / ECN
+- Timer cancel + reset
 
 ### Platform coverage
 
@@ -34,8 +34,8 @@ Most I/O libraries pick one model and emulate the other. Bouclette exposes both 
 | epoll (emulated) | Completion | Linux | ✅ |
 | kqueue | Readiness | macOS | Planned |
 | kqueue (emulated) | Completion | macOS | Planned |
-| IOCP | Completion | Windows | Planned |
-| IOCP (emulated) | Readiness | Windows | Planned |
+| IOCP | Completion | Windows | - |
+| IOCP (emulated) | Readiness | Windows | - |
 
 ---
 
@@ -133,124 +133,12 @@ echoed: xxxxx
 capacity still 32
 typed failure: ECONNREFUSED (111)
 ```
-
-**Buffer ownership.** `recv`/`send` take `var buf: List[UInt8]`, so the loop owns the bytes for exactly as long as the operation is in flight. You get them back from `result()` as a `TransferResult`: `count` bytes moved, `transferred()` is a span over them, `take_buffer()` returns the list itself. The buffer's *length* is the recv window — a list of length 32 asks for at most 32 bytes — and the length is not changed by the operation. Dropping a future instead of calling `result()` simply gives the buffer up.
-
-**Datagrams.** `send_msg`/`recv_msg` take a `Message`: a payload list, an optional peer (`set_peer`) and a control area (`control_capacity`). `send_to(socket, buf, addr)` and `recv_from(socket, buf)` are the two-line wrappers. The `MessageResult` carries `count`, `peer_v4()`/`peer_v6()`, `control()` (a walker over cmsg records, with `ecn()` for the codepoint), `truncated()`/`control_truncated()`, and `take_message()`. To receive ECN, call `socket.set_recv_tos()` and give the receiving message at least 24 bytes of control capacity; to send it, `msg.set_ecn(mark)` after `set_peer` (a v4-mapped v6 peer gets an `IP_TOS` record, as the kernel requires). Send-side control records are an append-only builder rebuilt per send: `append_control(level, type, data)` is the primitive, `set_ecn` and `set_gso_segment_size(size)` (a `UDP_SEGMENT` record, so one `sendmsg` goes out as `size`-byte datagrams) sit on it, any append discards what the last receive wrote, `clear_control()` empties the area, and `take_message()` hands the message back empty. Size the area with `Message.control_space(data_len)`: 24 per ECN or GSO record, 48 for both. A receiver with `socket.set_gro()` gets consecutive datagrams from one peer coalesced into one receive and reads the segment size with `control().gro_segment_size()`; with `set_recv_tos()` as well it needs 48 bytes of control capacity, or one of the two records is cut off. `recv_msg` on a datagram socket reports the full datagram length even past the window; on a stream socket it reports the bytes copied and discards nothing.
-
-**Multishot datagrams.** `loop.buffer_pool(count, size)` returns a `BufferPool` the loop owns; `loop.recv_msg_multishot(socket, pool)` returns a `DatagramStream` that keeps receiving into that pool until dropped or ended. `stream.next()` yields a `Datagram` — payload span, `peer_v4()`/`peer_v6()`, `control()` — whose `LeasedBuffer` goes back to the pool when it is dropped. Drive the stream with `loop.step()`, not `run()`: `run()` returns as soon as no one-shot operation is pending. When every buffer is leased the stream ends with `ENOBUFS` — `armed()` turns False and `error()` is set — and `rearm()` resumes it once leases have been dropped. `buffer_pool` accepts a count in 1..32768 (rounded up to a power of two) and a size from 64 bytes to 16 MiB; anything else raises `IOError(EINVAL)`.
-
-**Timers.** `loop.timeout(ms)` returns a `TimerFuture` whose `result()` is True once it expired. `cancel()` asks the loop to cancel it at the next `step()` or `run()` — `result()` then returns False, or True if it expired before the cancel reached the kernel. `reset(ms)` re-arms it from the moment the request reaches the kernel: one submission and one completion per reset on io_uring (`IORING_TIMEOUT_UPDATE`), a heap update on epoll; resets not yet flushed collapse to the last value. Both return False once the timer completed, after a cancel, or when the loop is gone. Dropping the handle does not cancel: an armed timer keeps `run()` alive until it fires. Durations are capped at `Int32.MAX` ms.
-
-**Failures return the buffer.** `RecvFuture.result()`/`SendFuture.result()` raise `TransferFailed`; the message futures raise `MessageFailed`. `reason` is `IO` (errno in `error`, buffer recoverable with `take_buffer()`/`take_message()`), `NOT_DONE` (called before the loop ran; the loop still owns the buffer) or `LOOP_GONE` (the loop was destroyed first; the buffer was abandoned). The submitting verbs raise the same types: `loop.recv`/`loop.send` raise `TransferFailed` and `recv_msg`/`send_msg`/`send_to`/`recv_from` raise `MessageFailed`, always with reason `IO` and the buffer or message inside, when the socket handle is invalid or the driver refuses the submission; nothing stays in flight in that case.
-
-**Lifetimes.** Sockets are *not* moved into the loop: they must stay alive across `run()`, and you close them yourself.
-
-### Readiness — `ReadinessLoop`
-
-You implement a `ReadinessHandler`; the loop tells you when I/O is possible and you perform it. `on_ready` receives the loop's `ReadinessRegistry` by `mut`, so re-arming, changing interest or deregistering is an ordinary method call — no pointer to the loop.
-
-```mojo
-from bouclette import (
-    Interest,
-    Readiness,
-    ReadinessHandler,
-    ReadinessLoop,
-    ReadinessRegistry,
-    Socket,
-    SocketAddrV4,
-    Token,
-)
-from bouclette.net.options import Backlog
-
-
-struct EchoHandler(ReadinessHandler):
-    """Reads whatever arrives, then drops its own registration."""
-
-    var peer: Socket
-    var bytes_read: Int
-
-    def __init__(out self, var peer: Socket):
-        self.peer = peer^
-        self.bytes_read = 0
-
-    def __init__(out self, *, deinit move: Self):
-        self.peer = move.peer^
-        self.bytes_read = move.bytes_read
-
-    def on_ready(
-        mut self,
-        mut registry: ReadinessRegistry,
-        token: Token,
-        readiness: Readiness,
-    ):
-        if readiness.is_readable():
-            var buf = InlineArray[UInt8, 64](fill=0)
-            # on_ready cannot raise: handle I/O errors here.
-            try:
-                self.bytes_read = self.peer.recv(buf)
-            except e:
-                print("read failed:", e)
-            try:
-                registry.deregister(self.peer)
-            except e:
-                print("deregister failed:", e)
-
-
-def main() raises:
-    var server = Socket.tcp_v4()
-    server.set_blocking(True)
-    server.bind(SocketAddrV4(127, 0, 0, 1, port=0))
-    server.listen(Backlog.DEFAULT)
-    var port = server.local_addr_v4().port
-
-    var client = Socket.tcp_connect(SocketAddrV4(127, 0, 0, 1, port=port))
-    var peer = server.accept()
-
-    # Register first, then hand the populated registry to the loop.
-    var registry = ReadinessRegistry(capacity=16)
-    registry.register(peer, Interest.READABLE, Token(1))
-    var loop = ReadinessLoop(EchoHandler(peer^), registry^)
-
-    _ = client.send(String("hello").as_bytes())
-    loop.run_once(timeout_ms=1000)
-
-    print("read", loop.handler().bytes_read, "bytes")
-
-    client.close()
-    server.close()
-```
-
-```
-read 5 bytes
-```
-
-Read handler state back with `loop.handler()`; reach the interest set from outside a callback with `loop.registry()`, or use the `register` / `modify` / `deregister` methods the loop forwards. The `_raw` variants of each take a bare file descriptor for pipes and timerfds.
-
-### Driving a loop
-
-| Verb | Meaning | Where |
-|---|---|---|
-| `run()` | Block until every submitted operation has completed, then return (drain). | `WatchLoop` |
-| `step(timeout_ms)` | Drive one bounded tick, for long-lived work that re-arms itself (e.g. a datagram stream). | `WatchLoop` |
-| `run_forever()` | Loop until `stop()` is called. | `CompletionLoop`, `EventLoop` |
-| `run_once()` | One blocking tick. | `CompletionLoop`, `EventLoop`, `ReadinessLoop` (with an optional `timeout_ms`) |
-| `poll()` | One non-blocking tick. | `CompletionLoop`, `EventLoop`, `ReadinessLoop` |
-
-There is nothing to run forever on a `WatchLoop`, whose unit of work is a set of futures; there is nothing to drain on a loop whose work is an open-ended stream of events.
-
-Capacity is a hint everywhere and is spelled `capacity=`; every timeout is milliseconds and is spelled `timeout_ms=`.
-
-### Escape hatch
-
-`bouclette.proactor.CompletionLoop` is the raw, pointer-level completion API that `WatchLoop` is built on: every operation takes a caller-owned `Completion` and bare pointers, with no typed results and no buffer ownership. It exists for backends and for callers who need to bypass the future machinery — it is not the completion model users should reach for.
-
 ---
 
 ## Project layout
 
 ```
-bouclette/                              Public API — what developers import
+bouclette/                           Public API — what developers import
 ├── watch/                           Completion model: WatchLoop + asyncio-style Futures
 │   ├── loop.mojo                    WatchLoop (accept, connect, connect_with_timeout,
 │   │                                recv, send, recv_msg, send_msg, recv_from, send_to,
