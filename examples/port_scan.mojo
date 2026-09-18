@@ -16,10 +16,10 @@ Examples:
     ./port_scan 192.168.1.1 80-443 1000
 """
 
-from boucle.watch import WatchLoop, ConnectWithTimeoutFuture, ConnectOutcome
-from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4
-from boucle.net.ip import IpAddrV4
+from bouclette.watch import WatchLoop, ConnectWithTimeoutFuture, ConnectOutcome
+from bouclette.net.socket import Socket
+from bouclette.net.addr import SocketAddrV4
+from bouclette.net.ip import IpAddrV4
 from std.sys import argv
 
 

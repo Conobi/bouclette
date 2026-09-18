@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 prerelease-mode = "allow"
 
 [[package]]
-name = "boucle"
+name = "bouclette"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -1,5 +1,5 @@
 [project]
-name = "boucle"
+name = "bouclette"
 version = "0.1.0"
 description = "Platform-agnostic I/O library for Mojo"
 license = "MIT"
@@ -11,9 +11,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
-    "mojo==1.0.0",
-]
+dev = ["mojo==1.0.0"]
 
 [build-system]
 requires = [
@@ -28,7 +26,7 @@ build-backend = "mojox_build"
 prerelease = "allow"
 
 [tool.mojox]
-packages = ["boucle"]
+packages = ["bouclette"]
 test-parallel = true
 
 [tool.mojox.lints]

@@ -13,7 +13,7 @@ Run:
     uv run -- mojo run -I . -D ASSERT=all examples/coro_echo.mojo
 """
 
-from boucle.coroutine import Coroutine, Yielder
+from bouclette.coroutine import Coroutine, Yielder
 from std.testing import assert_true
 
 

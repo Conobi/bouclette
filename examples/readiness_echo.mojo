@@ -6,20 +6,20 @@ Demonstrates the ReadinessLoop API with Socket:
   3. Send a message from the client.
   4. run_once() — the handler observes readability and reads the bytes.
 
-In readiness-driven I/O, boucle tells you when I/O is possible.
+In readiness-driven I/O, bouclette tells you when I/O is possible.
 You own the buffers and perform the actual read/write yourself.
 
 Run:
     uv run -- mojo run -I . -D ASSERT=all examples/readiness_echo.mojo
 """
 
-from boucle.readiness import ReadinessLoop, ReadinessHandler, ReadinessRegistry
-from boucle.interest import Interest
-from boucle.readiness_state import Readiness
-from boucle.token import Token
-from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4
-from boucle.net.options import Backlog
+from bouclette.readiness import ReadinessLoop, ReadinessHandler, ReadinessRegistry
+from bouclette.interest import Interest
+from bouclette.readiness_state import Readiness
+from bouclette.token import Token
+from bouclette.net.socket import Socket
+from bouclette.net.addr import SocketAddrV4
+from bouclette.net.options import Backlog
 from std.testing import assert_equal, assert_true
 
 

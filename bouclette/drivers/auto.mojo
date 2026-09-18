@@ -1,0 +1,458 @@
+"""Auto-selecting completion driver with io_uring-to-epoll fallback.
+
+Constructs an IoUringDriver and keeps it only when the kernel supports
+every feature the datagram path needs natively (multishot recvmsg and
+provided-buffer rings); otherwise, or when io_uring is unavailable,
+falls back to EpollCompletionDriver, which emulates them. compio applies
+the same all-or-nothing rule. Implements IoDriver by delegating every
+method to whichever backend is active. The backend branch is perfectly
+predicted after init — essentially zero cost.
+"""
+
+from std.collections import Optional
+from std.memory import Pointer
+
+from bouclette.proactor.completion import Completion
+from bouclette.handle import RawHandle
+from bouclette.drivers.driver import IoDriver
+from bouclette.drivers.backend import Backend
+from bouclette.drivers.feature import DriverFeature
+from bouclette.drivers.io_uring import IoUringDriver
+from bouclette.drivers.epoll_completion import EpollCompletionDriver
+from bouclette.socle import is_linux
+
+
+def _native_datagram_path_rule(multishot: Bool, buffer_ring: Bool) -> Bool:
+    """The selection rule as a pure function of the two probed features.
+
+    Kept apart from the driver so it can be pinned as a truth table
+    without a ring: io_uring serves the datagram path natively only
+    when both multishot recvmsg and provided-buffer rings are there.
+
+    Args:
+        multishot: Whether `MULTISHOT_RECVMSG` is supported.
+        buffer_ring: Whether `BUFFER_RING` is supported.
+    """
+    return multishot and buffer_ring
+
+
+def _native_datagram_path(ref driver: IoUringDriver) -> Bool:
+    """Return True when io_uring can serve the datagram path natively.
+
+    Args:
+        driver: A freshly constructed io_uring driver.
+
+    Returns:
+        `_native_datagram_path_rule` applied to the driver's answers for
+        `MULTISHOT_RECVMSG` and `BUFFER_RING`.
+    """
+    return _native_datagram_path_rule(
+        driver.supports(DriverFeature.MULTISHOT_RECVMSG),
+        driver.supports(DriverFeature.BUFFER_RING),
+    )
+
+
+struct AutoDriver(IoDriver):
+    """IoDriver that probes for io_uring and falls back to epoll.
+
+    At construction, attempts to create an IoUringDriver. If the
+    io_uring syscalls are unavailable (ENOSYS on older kernels or in
+    restricted containers), or if the kernel lacks native multishot
+    recvmsg (6.0) or buffer rings (5.19), falls back to
+    EpollCompletionDriver so that `WatchLoop` behaves the same on every
+    backend. The bounded-wait feature (`TIMEOUT_ARG`) never affects the
+    choice: the io_uring driver falls back internally.
+
+    The caller can force a specific backend via the `backend`
+    keyword argument. Backend.IO_URING skips the rule: io_uring is used
+    whenever it constructs, and a submission the kernel cannot serve
+    then raises EOPNOTSUPP. Backend.EPOLL skips probing entirely.
+    With Backend.AUTO (the default), the rule runs.
+
+    After init, every IoDriver method delegates to the active
+    backend via a single branch on `_backend`. This branch is
+    perfectly predicted by the CPU after the first call.
+    """
+
+    var _backend: Backend
+    var _uring: Optional[IoUringDriver]
+    var _epoll: Optional[EpollCompletionDriver]
+
+    def __init__(
+        out self,
+        *,
+        capacity: Int = 64,
+        backend: Backend = Backend.AUTO,
+    ) raises:
+        """Probe for io_uring and construct the appropriate backend.
+
+        Args:
+            capacity: How many operations the driver should be ready to
+                      hold at once (default 64). A hint, forwarded to
+                      whichever backend wins the probe.
+            backend: Force a specific backend. Backend.AUTO (default)
+                     probes for io_uring and keeps it only when the
+                     datagram path is native; Backend.IO_URING requires
+                     io_uring or raises and skips the rule; Backend.EPOLL
+                     skips probing entirely.
+        """
+        comptime if not is_linux:
+            if backend is Backend.IO_URING or backend is Backend.EPOLL:
+                raise "Backend.IO_URING and Backend.EPOLL require Linux"
+
+        if backend is not Backend.EPOLL:
+            try:
+                var uring = IoUringDriver(capacity=capacity)
+                if backend is Backend.IO_URING or _native_datagram_path(uring):
+                    self._uring = uring^
+                    self._epoll = None
+                    self._backend = Backend.IO_URING
+                    return
+                _ = uring^
+            except:
+                if backend is Backend.IO_URING:
+                    raise "io_uring unavailable (ENOSYS)"
+        self._uring = None
+        self._epoll = EpollCompletionDriver(capacity=capacity)
+        self._backend = Backend.EPOLL
+
+    def __init__(out self, *, deinit move: Self):
+        self._backend = move._backend
+        self._uring = move._uring^
+        self._epoll = move._epoll^
+
+    def __deinit__(deinit self):
+        """Release resources held by the active backend only.
+
+        The inactive Optional is None so its destructor is a no-op.
+        The active Optional contains the driver whose destructor
+        releases all kernel resources.
+        """
+        _ = self._uring^
+        _ = self._epoll^
+
+    def tick(mut self, wait: Bool, timeout_ms: Int = -1) raises -> Int:
+        """Submit pending work and dispatch completed operations.
+
+        Args:
+            wait: If True, block until at least one completion arrives
+                  or `timeout_ms` has passed. If False, return
+                  immediately after dispatching any already-available
+                  completions.
+            timeout_ms: Upper bound on the wait in milliseconds; -1 for
+                        none, 0 to poll.
+
+        Returns:
+            The number of dispatched completions.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().tick(wait, timeout_ms)
+        return self._epoll.value().tick(wait, timeout_ms)
+
+    def nop(
+        mut self, c: Pointer[Completion, MutUntrackedOrigin]
+    ) raises:
+        """Queue a no-op operation.
+
+        Args:
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().nop(c)
+        return self._epoll.value().nop(c)
+
+    def connect(
+        mut self,
+        fd: RawHandle,
+        addr: Pointer[UInt8, ImmStaticOrigin],
+        addr_len: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a connect on socket `fd` to the given address.
+
+        Args:
+            fd: The socket file descriptor.
+            addr: Pointer to the sockaddr structure.
+            addr_len: Size in bytes of the sockaddr structure.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().connect(fd, addr, addr_len, c)
+        return self._epoll.value().connect(fd, addr, addr_len, c)
+
+    def timeout(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a timeout (kernel timer).
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec. Caller
+                must keep it alive until the completion fires.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().timeout(ts, c)
+        return self._epoll.value().timeout(ts, c)
+
+    def cancel(
+        mut self,
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Cancel a previously submitted operation.
+
+        Args:
+            target: Pointer to the Completion of the operation to cancel.
+            c: Pointer to the Completion token for the cancel itself.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().cancel(target, c)
+        return self._epoll.value().cancel(target, c)
+
+    def timeout_update(
+        mut self,
+        ts: Pointer[NoneType, MutUntrackedOrigin],
+        target: Pointer[Completion, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Re-arm the timeout submitted with `target`; see `IoDriver.timeout_update`.
+
+        Args:
+            ts: Opaque pointer to a platform-specific timespec, valid
+                until the next tick or submission flush.
+            target: The Completion the timeout was submitted with.
+            c: Pointer to the Completion token for the update itself.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().timeout_update(ts, target, c)
+        return self._epoll.value().timeout_update(ts, target, c)
+
+    def accept(
+        mut self,
+        fd: RawHandle,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an accept on listening socket `fd`.
+
+        Args:
+            fd: The listening socket file descriptor.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().accept(fd, c)
+        return self._epoll.value().accept(fd, c)
+
+    def recv(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a recv from socket `fd` into `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Buffer to receive into.
+            len: Maximum bytes to receive.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().recv(fd, buf, len, c)
+        return self._epoll.value().recv(fd, buf, len, c)
+
+    def send(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a send on socket `fd` from `buf`.
+
+        Args:
+            fd: The socket file descriptor.
+            buf: Data to send.
+            len: Number of bytes to send.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().send(fd, buf, len, c)
+        return self._epoll.value().send(fd, buf, len, c)
+
+    def read(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pread.
+
+        Args:
+            fd: File descriptor opened for reading.
+            buf: Destination buffer.
+            len: Maximum bytes to read.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().read(fd, buf, len, offset, c)
+        return self._epoll.value().read(fd, buf, len, offset, c)
+
+    def write(
+        mut self,
+        fd: RawHandle,
+        buf: Pointer[UInt8, MutUntrackedOrigin],
+        len: UInt32,
+        offset: UInt64,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async pwrite.
+
+        Args:
+            fd: File descriptor opened for writing.
+            buf: Source buffer.
+            len: Number of bytes to write.
+            offset: File offset in bytes.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().write(fd, buf, len, offset, c)
+        return self._epoll.value().write(fd, buf, len, offset, c)
+
+    def fsync(
+        mut self,
+        fd: RawHandle,
+        datasync: Bool,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue an async fsync or fdatasync.
+
+        Args:
+            fd: File descriptor.
+            datasync: If True, fdatasync semantics.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().fsync(fd, datasync, c)
+        return self._epoll.value().fsync(fd, datasync, c)
+
+    def recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+        flags: UInt32 = 0,
+    ) raises:
+        """Queue a recvmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Opaque pointer to a platform-specific message header.
+            c: Pointer to the caller-owned Completion token.
+            flags: `recvmsg(2)` flags to pass through; 0 for none.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().recvmsg(fd, msg, c, flags)
+        return self._epoll.value().recvmsg(fd, msg, c, flags)
+
+    def sendmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a sendmsg on socket `fd`.
+
+        Args:
+            fd: The socket file descriptor.
+            msg: Opaque pointer to a platform-specific message header.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().sendmsg(fd, msg, c)
+        return self._epoll.value().sendmsg(fd, msg, c)
+
+    def multishot_recvmsg(
+        mut self,
+        fd: RawHandle,
+        msg: Pointer[NoneType, MutUntrackedOrigin],
+        group_id: UInt16,
+        c: Pointer[Completion, MutUntrackedOrigin],
+    ) raises:
+        """Queue a multishot recvmsg into provided buffers.
+
+        Args:
+            fd: The datagram socket.
+            msg: Opaque pointer to the msghdr template.
+            group_id: A registered buffer group.
+            c: Pointer to the caller-owned Completion token.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().multishot_recvmsg(fd, msg, group_id, c)
+        return self._epoll.value().multishot_recvmsg(fd, msg, group_id, c)
+
+    def register_buffer_group(
+        mut self,
+        base: Pointer[UInt8, MutUntrackedOrigin],
+        size: UInt32,
+        count: Int,
+        group_id: UInt16,
+    ) raises:
+        """Register a provided-buffer group.
+
+        Args:
+            base: Address of buffer 0.
+            size: Bytes per buffer.
+            count: Number of buffers.
+            group_id: Caller-chosen id.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().register_buffer_group(
+                base, size, count, group_id
+            )
+        return self._epoll.value().register_buffer_group(
+            base, size, count, group_id
+        )
+
+    def unregister_buffer_group(mut self, group_id: UInt16) raises:
+        """Tear down a provided-buffer group.
+
+        Args:
+            group_id: The group to remove.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().unregister_buffer_group(group_id)
+        return self._epoll.value().unregister_buffer_group(group_id)
+
+    def return_buffer(mut self, group_id: UInt16, buf_id: UInt16):
+        """Return a delivered buffer to its group.
+
+        Args:
+            group_id: The group the buffer belongs to.
+            buf_id: The id from the delivery's flags.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().return_buffer(group_id, buf_id)
+        return self._epoll.value().return_buffer(group_id, buf_id)
+
+    def backend(self) -> Backend:
+        """Return which kernel I/O mechanism this driver uses."""
+        return self._backend
+
+    def supports(self, feature: DriverFeature) -> Bool:
+        """Return the active backend's answer for `feature`.
+
+        Args:
+            feature: The capability to query.
+
+        Returns:
+            What the io_uring or epoll driver reports.
+        """
+        if self._backend is Backend.IO_URING:
+            return self._uring.value().supports(feature)
+        return self._epoll.value().supports(feature)

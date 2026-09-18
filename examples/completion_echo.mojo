@@ -17,10 +17,10 @@ Run:
     uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 """
 
-from boucle.watch import WatchLoop
-from boucle.net.socket import Socket
-from boucle.net.addr import SocketAddrV4
-from boucle.net.options import Backlog
+from bouclette.watch import WatchLoop
+from bouclette.net.socket import Socket
+from bouclette.net.addr import SocketAddrV4
+from bouclette.net.options import Backlog
 from std.testing import assert_equal, assert_true
 
 

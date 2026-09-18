@@ -1,6 +1,6 @@
 <h1 align="center">
   🔁<br/>
-  Boucle
+  Bouclette
 </h1>
 
 <p align="center">
@@ -12,16 +12,16 @@
 > APIs are unstable, and the only supported backends are `io_uring` and `epoll` on Linux.
 ---
 
-## Why Boucle
+## Why Bouclette
 
-Most I/O libraries pick one model and emulate the other. Boucle exposes both as first-class APIs over shared types, so you pick the model that fits your workload — not the one your library chose for you.
+Most I/O libraries pick one model and emulate the other. Bouclette exposes both as first-class APIs over shared types, so you pick the model that fits your workload — not the one your library chose for you.
 
 - **Two models, one type system.** `WatchLoop` (completion: submit work, get notified) and `ReadinessLoop` (readiness: get notified, do the I/O yourself) share `Socket`, `SocketAddrV4`/`SocketAddrV6`, `IOError` and `Backend`. No adapter layers.
 - **Sans-I/O compatible.** Zero protocol opinions. Protocol libraries (HTTP, QUIC) stay framework-free and compose with either loop at the application level.
 - **Automatic backend selection.** `Backend.AUTO` picks io_uring only when the kernel serves the datagram path natively (multishot recvmsg and provided-buffer rings, 6.0+), epoll otherwise. A single binary works across kernel versions.
 - **The loop owns in-flight buffers.** `send`/`recv` take the buffer *by value* and `send_msg`/`recv_msg` take a `Message` the same way. While the kernel reads or writes it, nothing else can touch or free it; `result()` hands it back with the byte count, and a failed operation hands it back inside the typed `TransferFailed`/`MessageFailed` error. Dropping the future without running the loop is harmless.
 - **One errno type.** Every failure carries an `IOError` with the errno, printing as `ECONNREFUSED (111)`. `Socket` calls raise it directly; the completion futures wrap it in `TransferFailed`/`MessageFailed` so the in-flight buffer rides back with the error.
-- **`socle/` is private.** OS abstractions (syscalls, fd, errno, epoll/io_uring wrappers) live in `boucle/socle/`, and `boucle/socle/platform.mojo` is the single seam where the portable layer names a concrete OS. Platform-specific features require an explicit `socle/` import — the path makes the portability trade-off visible.
+- **`socle/` is private.** OS abstractions (syscalls, fd, errno, epoll/io_uring wrappers) live in `bouclette/socle/`, and `bouclette/socle/platform.mojo` is the single seam where the portable layer names a concrete OS. Platform-specific features require an explicit `socle/` import — the path makes the portability trade-off visible.
 - **Stackful coroutines.** Real yield/resume via `ucontext` — no state machine transform. Coroutines run on their own stack and suspend cooperatively. Temporary bridge until Mojo ships native async/await.
 - **Portable by design.** The architecture supports multiple backends per platform. Currently Linux-only (io_uring + epoll); macOS (kqueue) and Windows (IOCP) are planned.
 
@@ -37,17 +37,13 @@ Most I/O libraries pick one model and emulate the other. Boucle exposes both as 
 | IOCP | Completion | Windows | Planned |
 | IOCP (emulated) | Readiness | Windows | Planned |
 
-For a feature-by-feature comparison with mio, libuv, compio, monoio, libxev and
-TigerBeetle's I/O layer, including where Boucle is behind, see
-[`docs/feature-comparison.md`](docs/feature-comparison.md).
-
 ---
 
 ## Install / build
 
 ```bash
 uv sync                                                        # Install dev dependencies
-uv run mojox check                                             # Type-check / compile boucle
+uv run mojox check                                             # Type-check / compile bouclette
 ```
 
 ## Run tests
@@ -87,8 +83,8 @@ uv run -- mojo run -I . -D ASSERT=all examples/completion_echo.mojo
 Submit operations, call `run()`, read the results out of the futures it handed you.
 
 ```mojo
-from boucle import Backend, IOError, Socket, SocketAddrV4, WatchLoop
-from boucle.net.options import Backlog
+from bouclette import Backend, IOError, Socket, SocketAddrV4, WatchLoop
+from bouclette.net.options import Backlog
 
 
 def main() raises:
@@ -155,7 +151,7 @@ typed failure: ECONNREFUSED (111)
 You implement a `ReadinessHandler`; the loop tells you when I/O is possible and you perform it. `on_ready` receives the loop's `ReadinessRegistry` by `mut`, so re-arming, changing interest or deregistering is an ordinary method call — no pointer to the loop.
 
 ```mojo
-from boucle import (
+from bouclette import (
     Interest,
     Readiness,
     ReadinessHandler,
@@ -165,7 +161,7 @@ from boucle import (
     SocketAddrV4,
     Token,
 )
-from boucle.net.options import Backlog
+from bouclette.net.options import Backlog
 
 
 struct EchoHandler(ReadinessHandler):
@@ -247,14 +243,14 @@ Capacity is a hint everywhere and is spelled `capacity=`; every timeout is milli
 
 ### Escape hatch
 
-`boucle.proactor.CompletionLoop` is the raw, pointer-level completion API that `WatchLoop` is built on: every operation takes a caller-owned `Completion` and bare pointers, with no typed results and no buffer ownership. It exists for backends and for callers who need to bypass the future machinery — it is not the completion model users should reach for.
+`bouclette.proactor.CompletionLoop` is the raw, pointer-level completion API that `WatchLoop` is built on: every operation takes a caller-owned `Completion` and bare pointers, with no typed results and no buffer ownership. It exists for backends and for callers who need to bypass the future machinery — it is not the completion model users should reach for.
 
 ---
 
 ## Project layout
 
 ```
-boucle/                              Public API — what developers import
+bouclette/                              Public API — what developers import
 ├── watch/                           Completion model: WatchLoop + asyncio-style Futures
 │   ├── loop.mojo                    WatchLoop (accept, connect, connect_with_timeout,
 │   │                                recv, send, recv_msg, send_msg, recv_from, send_to,
