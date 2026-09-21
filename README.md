@@ -19,6 +19,7 @@ bouclette (pronounced *booklet*, `/bu.klɛt/`) is a lightweight I/O library for 
 - Owned in-flight buffers
 - Zero-copy recv
 - Multishot datagrams
+- Batched datagram send (sendmmsg)
 - Sans-I/O composable
 - Stackful coroutines
 - Slab allocation
@@ -142,7 +143,8 @@ bouclette/                           Public API — what developers import
 ├── watch/                           Completion model: WatchLoop + asyncio-style Futures
 │   ├── loop.mojo                    WatchLoop (accept, connect, connect_with_timeout,
 │   │                                recv, send, recv_msg, send_msg, recv_from, send_to,
-│   │                                timeout, buffer_pool, recv_msg_multishot, run, step)
+│   │                                timeout, buffer_pool, recv_msg_multishot,
+│   │                                datagram_sink, run, step)
 │   ├── accept.mojo                  AcceptFuture
 │   ├── connect.mojo                 ConnectFuture
 │   ├── connect_timeout.mojo         ConnectWithTimeoutFuture (composite connect+timer)
@@ -155,6 +157,7 @@ bouclette/                           Public API — what developers import
 │   ├── outcome.mojo                 ConnectOutcome
 │   ├── pool.mojo                    BufferPool, LeasedBuffer (loop-owned receive buffers)
 │   ├── stream.mojo                  Datagram, DatagramStream (multishot recvmsg)
+│   ├── sink.mojo                    DatagramSink (fire-and-forget batched send, sendmmsg)
 │   ├── _shared.mojo                 Driver pointer, liveness and tally shared with slab states
 │   ├── _callback.mojo               Internal future-state ownership hooks
 │   ├── _message.mojo                Slab-owned msghdr state behind the message futures
