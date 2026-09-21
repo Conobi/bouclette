@@ -78,6 +78,7 @@ from bouclette.buffer import AlignedBuffer
 from bouclette.watch.read_file import _ReadFileState, ReadFileFuture
 from bouclette.watch.write_file import _WriteFileState, WriteFileFuture
 from bouclette.watch.fsync import _FsyncState, FsyncFuture
+from bouclette.watch.sink import _SinkState, DatagramSink
 
 
 # Slab kinds, stored in the low `_KIND_BITS` of every settle-queue key.
@@ -94,6 +95,7 @@ comptime _KIND_POOL = 9
 comptime _KIND_READ_FILE = 10
 comptime _KIND_WRITE_FILE = 11
 comptime _KIND_FSYNC = 12
+comptime _KIND_SINK = 13
 
 
 def _slot_index(key: Int) -> Int:
@@ -130,7 +132,7 @@ struct WatchLoop(Movable):
     stream and internal completions out of it. Both run() and step()
     drive that bookkeeping.
 
-    The thirteen slabs hold every operation state, simple and composite
+    The fourteen slabs hold every operation state, simple and composite
     alike, plus the datagram streams (`_streams`) and the buffer pools,
     and double as the registry of what is not yet settled; they are what
     let the loop release orphaned states and inform surviving handles
@@ -183,6 +185,7 @@ struct WatchLoop(Movable):
     var _read_files: _Slab[_ReadFileState]
     var _write_files: _Slab[_WriteFileState]
     var _fsyncs: _Slab[_FsyncState]
+    var _sinks: _Slab[_SinkState]
     var _next_group_id: Int
     var _free_group_ids: List[UInt16]
     var _deferred: Pointer[List[Int], MutUntrackedOrigin]
@@ -233,6 +236,7 @@ struct WatchLoop(Movable):
             capacity, _KIND_WRITE_FILE, q
         )
         self._fsyncs = _Slab[_FsyncState](capacity, _KIND_FSYNC, q)
+        self._sinks = _Slab[_SinkState](capacity, _KIND_SINK, q)
         self._next_group_id = 0
         self._free_group_ids = List[UInt16]()
 
@@ -254,6 +258,7 @@ struct WatchLoop(Movable):
         self._read_files = move._read_files^
         self._write_files = move._write_files^
         self._fsyncs = move._fsyncs^
+        self._sinks = move._sinks^
         self._next_group_id = move._next_group_id
         self._free_group_ids = move._free_group_ids^
         self._deferred = move._deferred
@@ -347,6 +352,8 @@ struct WatchLoop(Movable):
             self._send_msgs._leaked = True
         if self._pools.in_flight() > 0:
             self._pools._leaked = True
+        if self._sinks.in_flight() > 0:
+            self._sinks._leaked = True
         self._accepts.abandon_all()
         self._connects.abandon_all()
         self._connects_with_timeout.abandon_all()
@@ -360,6 +367,7 @@ struct WatchLoop(Movable):
         self._read_files.abandon_all()
         self._write_files.abandon_all()
         self._fsyncs.abandon_all()
+        self._sinks.abandon_all()
         self._shared[].driver_alive = False
         self._driver^.__deinit__()
         self._accepts.detach_all()
@@ -375,6 +383,7 @@ struct WatchLoop(Movable):
         self._read_files.detach_all()
         self._write_files.detach_all()
         self._fsyncs.detach_all()
+        self._sinks.detach_all()
         self._deferred.unsafe_deinit_pointee()
         self._deferred.unsafe_free()
         self._shared.unsafe_deinit_pointee()
@@ -412,6 +421,7 @@ struct WatchLoop(Movable):
             + self._read_files.in_flight()
             + self._write_files.in_flight()
             + self._fsyncs.in_flight()
+            + self._sinks.in_flight()
         )
 
     def pending_composites(self) -> Int:
@@ -1209,6 +1219,43 @@ struct WatchLoop(Movable):
         state_ptr[].registered = True
         return BufferPool(state_ptr)
 
+    def datagram_sink(
+        mut self,
+        ref socket: Socket,
+        *,
+        capacity: Int = 64,
+        max_payload: Int = 1500,
+        control_capacity: Int = 0,
+    ) raises IOError -> DatagramSink:
+        """Create a send-side datagram sink with pre-allocated slots.
+
+        Memory footprint is approximately
+        `capacity * (max_payload + control_capacity + 128)` bytes.
+
+        Args:
+            socket: A bound datagram socket.
+            capacity: Number of send slots to pre-allocate.
+            max_payload: Bytes per slot's internal payload buffer.
+            control_capacity: Bytes per slot's control area (24 for ECN,
+                              48 for ECN + GSO).
+
+        Returns:
+            The sink handle.
+
+        Raises:
+            `IOError(EINVAL)` if `socket` is not a datagram socket, or if
+            `capacity < 1` or `max_payload < 1`.
+        """
+        if not socket.is_datagram() or capacity < 1 or max_payload < 1:
+            raise IOError(positive_errno=EINVAL)
+
+        var fd = socket.raw()
+        var state_ptr = self._sinks.alloc(
+            _SinkState(fd, capacity, max_payload, control_capacity, self._shared)
+        )
+        state_ptr[].wire_all_completions()
+        return DatagramSink(state_ptr)
+
     def recv_msg_multishot(
         mut self,
         ref socket: Socket,
@@ -1557,6 +1604,8 @@ struct WatchLoop(Movable):
                 self._write_files.settle(index)
             elif kind == _KIND_FSYNC:
                 self._fsyncs.settle(index)
+            elif kind == _KIND_SINK:
+                self._sinks.settle(index)
             else:
                 self._connects_with_timeout.settle(index)
         self._settling.clear()
