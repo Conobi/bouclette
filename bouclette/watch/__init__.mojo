@@ -18,6 +18,7 @@ from .recv import RecvFuture
 from .recv_msg import RecvMsgFuture
 from .send import SendFuture
 from .send_msg import SendMsgFuture
+from .sink import DatagramSink
 from .stream import Datagram, DatagramStream
 from .transfer import (
     FailureReason,
