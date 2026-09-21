@@ -2,7 +2,8 @@
 
 Exercises `push()`, `push_msg()`, `flush()`, slot exhaustion (ENOSPC),
 oversized payloads (EMSGSIZE), batch submission, drop-with-in-flight
-settlement, slot reuse after completion, and epoll backend.
+settlement, slot reuse after completion, epoll backend, and epoll's
+`sendmmsg(2)` batch flush path.
 """
 
 from std.testing import assert_equal, assert_true
@@ -354,6 +355,38 @@ def test_push_flush_epoll() raises:
     _ = loop^
 
 
+def test_sendmmsg_batch_epoll() raises:
+    """Flush 3 datagrams on epoll via sendmmsg; verify all arrive."""
+    var sender = Socket.udp_v4()
+    sender.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var addr = receiver.local_addr_v4()
+
+    var loop = WatchLoop(capacity=16, backend=Backend.EPOLL)
+    var sink = loop.datagram_sink(sender, capacity=8, max_payload=64)
+    for i in range(3):
+        var d = _payload(i)
+        sink.push(Span(d), addr)
+    assert_equal(sink.pending(), 3)
+    var submitted = sink.flush()
+    assert_equal(submitted, 3, "all 3 submitted in one sendmmsg")
+    # On epoll sendmmsg path, sends complete synchronously.
+    assert_equal(sink.completed(), 3, "all 3 completed inline")
+    assert_equal(sink.in_flight(), 0, "nothing in flight on epoll")
+
+    for _ in range(3):
+        var got = _recv_one(receiver)
+        assert_equal(len(got), 4)
+        assert_equal(Int(got[0]), ord("S"))
+
+    _ = sink^
+    _ = loop.step(0)
+    receiver.close()
+    sender.close()
+    _ = loop^
+
+
 def test_push_after_loop_gone(backend: Backend) raises:
     """Push on a sink whose loop was destroyed raises instead of crashing."""
     var sender = Socket.udp_v4()
@@ -423,4 +456,6 @@ def main() raises:
     print("ok: push_after_loop_gone (AUTO)")
     test_push_flush_epoll()
     print("ok: push_flush_epoll (EPOLL)")
+    test_sendmmsg_batch_epoll()
+    print("ok: sendmmsg_batch_epoll (EPOLL)")
     print("PASS: test_datagram_sink.mojo")

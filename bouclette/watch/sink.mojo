@@ -29,6 +29,7 @@ from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 
+from bouclette.drivers.backend import Backend
 from bouclette.error import IOError
 from bouclette.handle import RawHandle
 from bouclette.net.addr import (
@@ -40,6 +41,7 @@ from bouclette.net.message import Message
 from bouclette.net.options import AddrFamily
 from bouclette.proactor.completion import Completion
 from bouclette.socle.platform import (
+    EAGAIN,
     EINVAL,
     EMSGSIZE,
     ENOSPC,
@@ -47,8 +49,10 @@ from bouclette.socle.platform import (
     IPV6_TCLASS,
     SOL_IP,
     SOL_IPV6,
+    _sendmmsg,
     cmsghdr,
     iovec,
+    mmsghdr,
     msghdr,
 )
 from bouclette.socle.ptr import null_ptr
@@ -239,6 +243,7 @@ struct _SinkState(_InFlightState):
     var _finished: Bool
     var _link: _SlotLink
     var _shared: Pointer[_LoopShared, MutUntrackedOrigin]
+    var _mmsghdr_buf: Pointer[mmsghdr, MutUntrackedOrigin]
 
     def __init__(
         out self,
@@ -279,6 +284,9 @@ struct _SinkState(_InFlightState):
         self._finished = False
         self._link = _SlotLink()
         self._shared = shared
+        self._mmsghdr_buf = unsafe_alloc[mmsghdr](capacity)
+        for j in range(capacity):
+            self._mmsghdr_buf.unsafe_offset(j).unsafe_write(mmsghdr())
         # Initialize slots in reverse so the free stack pops low indices
         # first, matching the slab's convention.
         var i = capacity - 1
@@ -307,9 +315,13 @@ struct _SinkState(_InFlightState):
         self._finished = move._finished
         self._link = move._link
         self._shared = move._shared
+        self._mmsghdr_buf = move._mmsghdr_buf
 
     def __deinit__(deinit self):
         """Destroy every slot and free the slot array."""
+        for i in range(self._capacity):
+            self._mmsghdr_buf.unsafe_offset(i).unsafe_deinit_pointee()
+        self._mmsghdr_buf.unsafe_free()
         for i in range(self._capacity):
             self._slots.unsafe_offset(i).unsafe_deinit_pointee()
         self._slots.unsafe_free()
@@ -443,6 +455,21 @@ struct _SinkState(_InFlightState):
         slot[].status = _QUEUED
         self._queue.append(idx)
 
+    def flush(mut self) raises IOError -> Int:
+        """Dispatch to the backend-appropriate flush path.
+
+        Checks `_loop_gone` / `driver_alive` before reading
+        `driver[].backend()`, so the guard runs first on every path.
+
+        Returns:
+            Number of slots successfully submitted.
+        """
+        if self._loop_gone or not self._shared[].driver_alive:
+            raise IOError(positive_errno=EINVAL)
+        if self._shared[].driver[].backend() is Backend.EPOLL:
+            return self.flush_via_sendmmsg()
+        return self.flush_via_sendmsg()
+
     def flush_via_sendmsg(mut self) raises IOError -> Int:
         """Submit queued slots to the driver via `sendmsg`.
 
@@ -480,6 +507,58 @@ struct _SinkState(_InFlightState):
                     self._failed += 1
         self._queue = remaining^
         return submitted
+
+    def flush_via_sendmmsg(mut self) raises IOError -> Int:
+        """Submit queued slots via one sendmmsg(2) syscall.
+
+        Builds the pre-allocated mmsghdr array from queued slots, calls
+        sendmmsg directly (no driver involvement), and marks sent slots
+        FREE inline. Returns 0 on EAGAIN (all slots stay QUEUED).
+
+        Returns:
+            Number of slots successfully sent.
+        """
+        if self._loop_gone or not self._shared[].driver_alive:
+            raise IOError(positive_errno=EINVAL)
+        var count = len(self._queue)
+        if count == 0:
+            return 0
+        var payload_addr = Int(self._payload_buf.unsafe_ptr())
+        for i in range(count):
+            var idx = self._queue[i]
+            var slot = self._slots.unsafe_offset(idx)
+            slot[].wire(payload_addr)
+            self._mmsghdr_buf.unsafe_offset(i)[].msg_hdr = slot[].hdr
+            self._mmsghdr_buf.unsafe_offset(i)[].msg_len = 0
+        var sent = _sendmmsg(
+            self.fd,
+            Pointer[NoneType, MutUntrackedOrigin](
+                unsafe_from_address=Int(self._mmsghdr_buf)
+            ),
+            UInt32(count),
+            UInt32(0),
+        )
+        if sent < 0:
+            if Int(-sent) == EAGAIN:
+                return 0
+            # The first queued datagram caused a permanent error (e.g.
+            # EMSGSIZE). Evict it so the rest of the queue can proceed
+            # on the next flush, matching flush_via_sendmsg's per-slot
+            # error handling.
+            self._return_slot(self._queue.pop(0))
+            self._failed += 1
+            return 0
+        var remaining = List[Int]()
+        for i in range(count):
+            var idx = self._queue[i]
+            if i < sent:
+                self._slots.unsafe_offset(idx)[].reset()
+                self._free_stack.append(idx)
+                self._completed += 1
+            else:
+                remaining.append(idx)
+        self._queue = remaining^
+        return sent
 
     def _return_slot(mut self, idx: Int):
         """Reset a slot and return it to the free stack (error-path helper).
@@ -702,18 +781,16 @@ struct DatagramSink(Movable):
         self._state[].push_msg_into_slot(msg^)
 
     def flush(mut self) raises IOError -> Int:
-        """Submit queued datagrams to the driver.
+        """Submit queued datagrams to the kernel.
 
-        Each queued slot is submitted as one `sendmsg`. A slot refused
-        because the submission queue is full stays queued and is retried
-        on the next flush. Any other driver error resets the slot and
-        counts it as failed. Returns 0 when no slots are queued or the
-        loop is gone.
+        On io_uring, each slot becomes one sendmsg SQE; completions
+        arrive via `step()`. On epoll, all queued slots are sent in one
+        `sendmmsg(2)` syscall and complete synchronously.
 
         Returns:
             Number of datagrams successfully submitted.
         """
-        return self._state[].flush_via_sendmsg()
+        return self._state[].flush()
 
     def pending(self) -> Int:
         """Return how many datagrams are queued but not yet submitted."""
