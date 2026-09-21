@@ -90,6 +90,7 @@ from bouclette.socle.linux.raw import (
     EINTR,
     EINVAL,
     EIO,
+    EMSGSIZE,
     ENETUNREACH,
     ENOBUFS,
     ENOENT,

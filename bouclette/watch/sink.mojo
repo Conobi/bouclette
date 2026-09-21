@@ -41,6 +41,7 @@ from bouclette.net.options import AddrFamily
 from bouclette.proactor.completion import Completion
 from bouclette.socle.platform import (
     EINVAL,
+    EMSGSIZE,
     ENOSPC,
     IP_TOS,
     IPV6_TCLASS,
@@ -53,6 +54,7 @@ from bouclette.socle.platform import (
 from bouclette.socle.ptr import null_ptr
 from bouclette.watch._callback import _InFlightState, _SlotLink
 from bouclette.watch._shared import _LoopShared
+from bouclette.watch.stream import _is_queue_full
 
 
 # Slot status values.
@@ -352,7 +354,7 @@ struct _SinkState(_InFlightState):
         if len(self._free_stack) == 0:
             raise IOError(positive_errno=ENOSPC)
         if len(payload) > self._max_payload:
-            raise IOError(positive_errno=EINVAL)
+            raise IOError(positive_errno=EMSGSIZE)
         var idx = self._free_stack.pop()
         var slot = self._slots.unsafe_offset(idx)
         debug_assert(slot[].status == _FREE, "free-stack slot not FREE")
@@ -435,12 +437,13 @@ struct _SinkState(_InFlightState):
         slot[].status = _QUEUED
         self._queue.append(idx)
 
-    def flush_via_sendmsg(mut self) -> Int:
+    def flush_via_sendmsg(mut self) raises IOError -> Int:
         """Submit queued slots to the driver via `sendmsg`.
 
-        Each queued slot is wired and submitted. A slot the driver
-        refuses stays QUEUED and is retried on the next flush. Returns
-        0 when the driver is gone.
+        Each queued slot is wired and submitted. A slot refused because
+        the submission queue is full stays QUEUED and is retried on the
+        next flush. Any other driver error resets the slot and counts it
+        as failed. Returns 0 when the driver is gone.
 
         Returns:
             Number of slots successfully submitted.
@@ -463,8 +466,12 @@ struct _SinkState(_InFlightState):
                 slot[].status = _IN_FLIGHT
                 self._in_flight += 1
                 submitted += 1
-            except:
-                remaining.append(idx)
+            except e:
+                if _is_queue_full(e):
+                    remaining.append(idx)
+                else:
+                    self._return_slot(idx)
+                    self._failed += 1
         self._queue = remaining^
         return submitted
 
@@ -573,7 +580,10 @@ struct _SinkState(_InFlightState):
         In-flight `push_msg()` slots have their `Message` parked on the
         heap (leaked). In-flight `push()` slots reference the shared
         payload buffer, which is parked on the heap if any such slot
-        exists. Called at loop destruction before the driver is torn down.
+        exists; those with a non-empty control area (`control_appended
+        > 0`) also have their per-slot `control` list parked, since the
+        msghdr's `msg_control` points at it. Called at loop destruction
+        before the driver is torn down.
         """
         var leak_payload = False
         for i in range(self._capacity):
@@ -585,6 +595,18 @@ struct _SinkState(_InFlightState):
                     parked.unsafe_write(m^)
                 else:
                     leak_payload = True
+                    if slot[].control_appended > 0:
+                        var ctl_ptr = Pointer[
+                            List[UInt8], MutUntrackedOrigin
+                        ](
+                            unsafe_from_address=Int(
+                                Pointer(to=slot[].control)
+                            )
+                        )
+                        var ctl = ctl_ptr.unsafe_take_pointee()
+                        ctl_ptr.unsafe_write(List[UInt8]())
+                        var parked_ctl = unsafe_alloc[List[UInt8]](1)
+                        parked_ctl.unsafe_write(ctl^)
         if leak_payload:
             var parked = unsafe_alloc[List[UInt8]](1)
             parked.unsafe_write(self._payload_buf^)
@@ -673,12 +695,14 @@ struct DatagramSink(Movable):
         """
         self._state[].push_msg_into_slot(msg^)
 
-    def flush(mut self) -> Int:
+    def flush(mut self) raises IOError -> Int:
         """Submit queued datagrams to the driver.
 
-        Each queued slot is submitted as one `sendmsg`. A slot the
-        driver refuses stays queued and is retried on the next flush.
-        Returns 0 when no slots are queued or the loop is gone.
+        Each queued slot is submitted as one `sendmsg`. A slot refused
+        because the submission queue is full stays queued and is retried
+        on the next flush. Any other driver error resets the slot and
+        counts it as failed. Returns 0 when no slots are queued or the
+        loop is gone.
 
         Returns:
             Number of datagrams successfully submitted.
