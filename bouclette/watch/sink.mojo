@@ -347,9 +347,9 @@ struct _SinkState(_InFlightState):
 
         Raises:
             `IOError(ENOSPC)` when no free slot is available.
-            `IOError(EINVAL)` when the payload exceeds the maximum, the
-            address family is unrecognised, or the control capacity
-            cannot hold an ECN record.
+            `IOError(EMSGSIZE)` when the payload exceeds `max_payload`.
+            `IOError(EINVAL)` when the address family is unrecognised
+            or the control capacity cannot hold an ECN record.
         """
         if len(self._free_stack) == 0:
             raise IOError(positive_errno=ENOSPC)
@@ -672,9 +672,9 @@ struct DatagramSink(Movable):
 
         Raises:
             `IOError(ENOSPC)` if every slot is in use.
-            `IOError(EINVAL)` if the payload exceeds the maximum, the
-            address family is unrecognised, or the control capacity
-            cannot hold an ECN record.
+            `IOError(EMSGSIZE)` if the payload exceeds `max_payload`.
+            `IOError(EINVAL)` if the address family is unrecognised
+            or the control capacity cannot hold an ECN record.
         """
         self._state[].push_into_slot(
             payload, SocketAddrStorAny(addr.addr_stor()), ecn
