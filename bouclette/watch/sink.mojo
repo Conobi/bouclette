@@ -348,9 +348,12 @@ struct _SinkState(_InFlightState):
         Raises:
             `IOError(ENOSPC)` when no free slot is available.
             `IOError(EMSGSIZE)` when the payload exceeds `max_payload`.
-            `IOError(EINVAL)` when the address family is unrecognised
-            or the control capacity cannot hold an ECN record.
+            `IOError(EINVAL)` when the loop is gone, the address family
+            is unrecognised, or the control capacity cannot hold an ECN
+            record.
         """
+        if self._loop_gone:
+            raise IOError(positive_errno=EINVAL)
         if len(self._free_stack) == 0:
             raise IOError(positive_errno=ENOSPC)
         if len(payload) > self._max_payload:
@@ -427,7 +430,10 @@ struct _SinkState(_InFlightState):
 
         Raises:
             `IOError(ENOSPC)` when no free slot is available.
+            `IOError(EINVAL)` when the loop is gone.
         """
+        if self._loop_gone:
+            raise IOError(positive_errno=EINVAL)
         if len(self._free_stack) == 0:
             raise IOError(positive_errno=ENOSPC)
         var idx = self._free_stack.pop()
@@ -448,8 +454,8 @@ struct _SinkState(_InFlightState):
         Returns:
             Number of slots successfully submitted.
         """
-        if not self._shared[].driver_alive:
-            return 0
+        if self._loop_gone or not self._shared[].driver_alive:
+            raise IOError(positive_errno=EINVAL)
         var submitted = 0
         var remaining = List[Int]()
         var payload_addr = Int(self._payload_buf.unsafe_ptr())

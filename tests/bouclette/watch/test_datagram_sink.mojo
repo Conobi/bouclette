@@ -354,6 +354,56 @@ def test_push_flush_epoll() raises:
     _ = loop^
 
 
+def test_push_after_loop_gone(backend: Backend) raises:
+    """Push on a sink whose loop was destroyed raises instead of crashing."""
+    var sender = Socket.udp_v4()
+    sender.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var receiver = Socket.udp_v4()
+    receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
+    var addr = receiver.local_addr_v4()
+
+    var loop = WatchLoop(capacity=16, backend=backend)
+    var sink = loop.datagram_sink(sender, capacity=4, max_payload=64)
+    var data = _payload(1)
+    sink.push(Span(data), addr)
+    _ = sink.flush()
+    _ = loop.step(timeout_ms=1000)
+
+    # Destroy the loop while the sink handle survives.
+    _ = sender^
+    _ = receiver^
+    _ = loop^
+
+    # push() must raise, not crash.
+    var got_error = False
+    try:
+        var data2 = _payload(2)
+        sink.push(Span(data2), addr)
+    except:
+        got_error = True
+    assert_true(got_error, "push() should raise after loop gone")
+
+    # push_msg() must also raise.
+    got_error = False
+    try:
+        var msg = Message(_payload(3))
+        msg.set_peer(addr)
+        sink.push_msg(msg^)
+    except:
+        got_error = True
+    assert_true(got_error, "push_msg() should raise after loop gone")
+
+    # flush() must also raise.
+    got_error = False
+    try:
+        _ = sink.flush()
+    except:
+        got_error = True
+    assert_true(got_error, "flush() should raise after loop gone")
+
+    _ = sink^
+
+
 def main() raises:
     test_push_flush_completes(Backend.AUTO)
     print("ok: push_flush_completes (AUTO)")
@@ -369,6 +419,8 @@ def main() raises:
     print("ok: sink_drop_with_in_flight (AUTO)")
     test_slot_reuse_after_completion(Backend.AUTO)
     print("ok: slot_reuse_after_completion (AUTO)")
+    test_push_after_loop_gone(Backend.AUTO)
+    print("ok: push_after_loop_gone (AUTO)")
     test_push_flush_epoll()
     print("ok: push_flush_epoll (EPOLL)")
     print("PASS: test_datagram_sink.mojo")
