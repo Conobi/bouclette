@@ -37,6 +37,7 @@ comptime __NR_fcntl = _pick[72, 25]()
 comptime __NR_accept4 = _pick[288, 242]()
 comptime __NR_recvmsg = _pick[47, 212]()
 comptime __NR_sendmsg = _pick[46, 211]()
+comptime __NR_sendmmsg = _pick[307, 269]()
 comptime __NR_clock_gettime = _pick[228, 113]()
 # WARNING: On aarch64, this maps to __NR_epoll_pwait (6 args, not 4).
 # For raw-syscall use on aarch64, use __NR_epoll_pwait with sigmask args.

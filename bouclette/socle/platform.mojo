@@ -168,6 +168,7 @@ from bouclette.socle.linux.raw import (
 from bouclette.socle.linux.raw import (
     cmsghdr,
     iovec,
+    mmsghdr,
     msghdr,
 )
 
@@ -193,6 +194,7 @@ from bouclette.socle.linux.net.syscalls import (
     _recv,
     _recvfrom,
     _send,
+    _sendmmsg,
     _sendto,
     _setsockopt,
     _setsockopt_timeval,

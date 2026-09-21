@@ -26,11 +26,13 @@ from bouclette.socle.linux.raw import (
     __NR_connect,
     __NR_recvfrom,
     __NR_sendto,
+    __NR_sendmmsg,
     __NR_shutdown,
     __NR_getsockopt,
     __NR_getsockname,
     __NR_getpeername,
     __NR_fcntl,
+    EINTR,
 )
 from bouclette.socle.linux.errno import _check_for_errors, unsafe_decode_result
 from bouclette.socle.linux.raw.ctypes import c_void
@@ -433,3 +435,34 @@ def _fcntl_setfl(fd: Int32, flags: Int32) raises:
     """
     var res = syscall[__NR_fcntl, Scalar[DType.int64]](fd, Int32(F_SETFL), flags)
     _check_for_errors(res)
+
+
+@always_inline
+def _sendmmsg(
+    fd: Int32,
+    msgvec: Pointer[NoneType, MutUntrackedOrigin],
+    vlen: UInt32,
+    flags: UInt32,
+) -> Int:
+    """Send multiple messages via sendmmsg(2).
+
+    Retries on EINTR (only returned when zero messages were sent).
+
+    Args:
+        fd: Socket file descriptor.
+        msgvec: Pointer to an array of mmsghdr structs.
+        vlen: Number of messages to send.
+        flags: sendmmsg flags (typically 0).
+
+    Returns:
+        Count of messages sent, or negated errno on failure.
+    """
+    while True:
+        var res = syscall[__NR_sendmmsg, Scalar[DType.int64]](
+            fd, msgvec, vlen, flags
+        )
+        if res >= 0:
+            return Int(res)
+        if Int(-res) == EINTR:
+            continue
+        return Int(res)

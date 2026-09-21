@@ -1,6 +1,6 @@
 from bouclette.socle.linux.raw.net import (
     sockaddr_in, sockaddr_in6, in_addr, in6_addr,
-    iovec, msghdr,
+    iovec, msghdr, mmsghdr,
     cmsghdr, in_pktinfo, in6_pktinfo,
     AF_INET, AF_INET6, SOCK_STREAM, SOCK_DGRAM,
     IPPROTO_TCP, IPPROTO_UDP,
@@ -25,6 +25,7 @@ def test_net_structs() raises:
     assert_equal(size_of[sockaddr_in6](), 28)
     assert_equal(size_of[iovec](), 16)
     assert_equal(size_of[msghdr](), 56)
+    assert_equal(size_of[mmsghdr](), 64)
 
     # Golden UAPI sizes -- guard against silent struct-padding regressions.
     # epoll_event is __packed__ on x86_64 (12 bytes); natural alignment on aarch64 (16 bytes).
@@ -99,9 +100,17 @@ def test_cmsghdr_field_offsets() raises:
     assert_equal(Int(bytes[unsafe_offset=12]), 67)
 
 
+def test_mmsghdr_field_offsets() raises:
+    """The msg_len field sits at offset 56 (right after the 56-byte msghdr)."""
+    var m = mmsghdr()
+    var base = Int(Pointer(to=m))
+    assert_equal(Int(Pointer(to=m.msg_len)) - base, 56)
+
+
 def main() raises:
     test_net_structs()
     test_tos_constants()
     test_udp_offload_and_buffer_constants()
     test_cmsghdr_field_offsets()
+    test_mmsghdr_field_offsets()
     print("PASS: test_net_structs.mojo")

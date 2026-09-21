@@ -7,6 +7,7 @@ is wrong for the current architecture, the syscall returns -ENOSYS.
 
 from bouclette.socle.linux.raw import (
     __NR_getpid, __NR_pipe2, __NR_read, __NR_write, __NR_close,
+    __NR_sendmmsg,
     EBADF,
 )
 from bouclette.socle.linux.raw import syscall
@@ -50,8 +51,17 @@ def test_close_invalid_fd() raises:
     assert_equal(Int(ret), -Int(EBADF), "expected -EBADF")
 
 
+def test_sendmmsg_invalid_fd() raises:
+    """__NR_sendmmsg with invalid fd returns -EBADF, not -ENOSYS."""
+    var ret = syscall[__NR_sendmmsg, Int64](
+        Int32(-1), UInt64(0), UInt32(0), UInt32(0)
+    )
+    assert_equal(Int(ret), -Int(EBADF), "expected -EBADF from sendmmsg")
+
+
 def main() raises:
     test_getpid()
     test_write_read_roundtrip()
     test_close_invalid_fd()
+    test_sendmmsg_invalid_fd()
     print("PASS: test_syscall_verification.mojo")

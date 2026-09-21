@@ -266,6 +266,22 @@ struct msghdr(ImplicitlyCopyable, Movable):
         self._pad1 = 0
 
 
+# mmsghdr is 64 bytes on both x86_64 and aarch64.
+# offsets: msg_hdr=0 (56 bytes msghdr), msg_len=56, [pad=60]
+@fieldwise_init
+struct mmsghdr(ImplicitlyCopyable, Movable):
+    var msg_hdr: msghdr
+    var msg_len: UInt32
+    var _pad0: UInt32
+
+    @always_inline
+    def __init__(out self):
+        comptime assert size_of[Self]() == 64
+        self.msg_hdr = msghdr()
+        self.msg_len = 0
+        self._pad0 = 0
+
+
 # cmsghdr is 16 bytes -- cmsg_len is size_t (8 bytes on x86_64)
 @fieldwise_init
 struct cmsghdr(ImplicitlyCopyable, Movable):
