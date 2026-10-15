@@ -345,7 +345,7 @@ def _setsockopt_timeval(
     Raises:
         On syscall failure.
     """
-    var tv = InlineArray[Int64, 2](fill=Int64(0))
+    var tv = Array[Int64, 2](fill=Int64(0))
     tv[0] = Int64(ms // 1000)
     tv[1] = Int64((ms % 1000) * 1000)
     var tv_p = Pointer(to=tv)

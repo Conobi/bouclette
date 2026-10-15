@@ -92,7 +92,7 @@ def test_gso_on_tcp_is_enoprotoopt() raises:
 
 def test_gro_on_unix_socket_is_eopnotsupp() raises:
     """AF_UNIX has no setsockopt for non-SOL_SOCKET levels; the kernel answers EOPNOTSUPP."""
-    var fds = InlineArray[Int32, 2](fill=Int32(0))
+    var fds = Array[Int32, 2](fill=Int32(0))
     var fds_p = Pointer(to=fds)
     var res = external_call["socketpair", Int32](
         Int32(1), Int32(2 | 2048 | 524288), Int32(0), fds_p
@@ -184,7 +184,7 @@ def test_zero_buffer_size_is_clamped_to_the_floor() raises:
 
 def test_buffer_size_on_unix_socket_works() raises:
     """`SO_RCVBUF` is a `SOL_SOCKET` option, so it applies to AF_UNIX too."""
-    var fds = InlineArray[Int32, 2](fill=Int32(0))
+    var fds = Array[Int32, 2](fill=Int32(0))
     var fds_p = Pointer(to=fds)
     var res = external_call["socketpair", Int32](
         Int32(1), Int32(2 | 2048 | 524288), Int32(0), fds_p

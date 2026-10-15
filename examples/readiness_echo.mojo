@@ -29,14 +29,14 @@ struct EchoHandler(ReadinessHandler):
     var peer: Socket
     var got_event: Bool
     var bytes_read: Int
-    var buf: InlineArray[UInt8, 64]
+    var buf: Array[UInt8, 64]
 
     def __init__(out self, var peer: Socket):
         """Construct a handler that reads from the accepted peer socket."""
         self.peer = peer^
         self.got_event = False
         self.bytes_read = 0
-        self.buf = InlineArray[UInt8, 64](fill=0)
+        self.buf = Array[UInt8, 64](fill=0)
 
     def __init__(out self, *, deinit move: Self):
         """Move constructor."""

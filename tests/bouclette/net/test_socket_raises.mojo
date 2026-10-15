@@ -15,7 +15,7 @@ from bouclette.socle.linux.raw import EBADF, EINPROGRESS, ENOTCONN, EPIPE
 
 def test_recv_on_unconnected_socket_raises_ioerror() raises:
     var s = Socket.tcp_v4()
-    var buf = InlineArray[UInt8, 8](fill=0)
+    var buf = Array[UInt8, 8](fill=0)
     var caught = False
     try:
         _ = s.recv(Span(buf))
@@ -28,7 +28,7 @@ def test_recv_on_unconnected_socket_raises_ioerror() raises:
 
 def test_send_on_unconnected_socket_raises_ioerror() raises:
     var s = Socket.tcp_v4()
-    var data = InlineArray[UInt8, 3](fill=65)
+    var data = Array[UInt8, 3](fill=65)
     var caught = False
     try:
         _ = s.send(Span(data))
@@ -74,7 +74,7 @@ def test_closed_socket_raises_ebadf() raises:
         assert_equal(e.errno_value(), EBADF)
     assert_true(caught, "raw() on a closed socket must raise EBADF")
 
-    var buf = InlineArray[UInt8, 8](fill=0)
+    var buf = Array[UInt8, 8](fill=0)
     var recv_caught = False
     try:
         _ = s.recv(Span(buf))

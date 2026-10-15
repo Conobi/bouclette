@@ -19,7 +19,7 @@ def _socketpair() raises -> Tuple[Int32, Int32]:
 
     Returns two file descriptors for the pair endpoints.
     """
-    var sv = InlineArray[Int32, 2](fill=-1)
+    var sv = Array[Int32, 2](fill=-1)
     var sv_p = Pointer(to=sv)
     var res = external_call["socketpair", Int32](
         Int32(1),  # AF_UNIX
@@ -45,7 +45,7 @@ def main() raises:
     assert_equal(sent, 4, "should send 4 bytes")
 
     # --- Recv on receiver ---
-    var buf = InlineArray[UInt8, 64](fill=0)
+    var buf = Array[UInt8, 64](fill=0)
     var received = receiver.recv(Span(buf))
     assert_equal(received, 4, "should receive 4 bytes")
 
@@ -56,7 +56,7 @@ def main() raises:
     assert_equal(buf[3], UInt8(ord("g")), "byte 3 should be 'g'")
 
     # --- Test zero-length send ---
-    var empty = InlineArray[UInt8, 1](fill=0)
+    var empty = Array[UInt8, 1](fill=0)
     var empty_span = Span[UInt8, ImmStaticOrigin](
         unsafe_ptr=Pointer[UInt8, ImmStaticOrigin](
             unsafe_from_address=Int(empty.unsafe_ptr())
@@ -82,7 +82,7 @@ def main() raises:
     _ = client.send(msg2.as_bytes())
     client.shutdown(Shutdown.WRITE)
 
-    var buf2 = InlineArray[UInt8, 64](fill=0)
+    var buf2 = Array[UInt8, 64](fill=0)
     var n = peer.recv(Span(buf2))
     assert_equal(n, 2, "should receive 2 bytes before EOF")
 

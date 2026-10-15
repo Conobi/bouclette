@@ -23,7 +23,7 @@ def _make_socketpair() raises -> Tuple[Int32, Int32]:
     Returns:
         The two raw fds; the caller wraps them in Socket.
     """
-    var fds = InlineArray[Int32, 2](fill=Int32(0))
+    var fds = Array[Int32, 2](fill=Int32(0))
     var fds_p = Pointer(to=fds)
     var res = external_call["socketpair", Int32](
         Int32(1),  # AF_UNIX

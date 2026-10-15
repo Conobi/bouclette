@@ -22,7 +22,7 @@ def test_getpid() raises:
 
 def test_write_read_roundtrip() raises:
     """__NR_pipe2 + __NR_write + __NR_read round-trip a byte."""
-    var pipefd = InlineArray[Int32, 2](fill=0)
+    var pipefd = Array[Int32, 2](fill=0)
     var ret = syscall[__NR_pipe2, Int64](
         Pointer(to=pipefd).unsafe_bitcast[Int32](), Int32(0)
     )

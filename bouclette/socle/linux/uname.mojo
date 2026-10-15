@@ -114,7 +114,7 @@ def kernel_release() raises -> String:
         The negated errno as a string if the syscall fails; on Linux
         `uname` fails only with EFAULT, which a stack buffer rules out.
     """
-    var buf = InlineArray[UInt8, UTSNAME_SIZE](fill=0)
+    var buf = Array[UInt8, UTSNAME_SIZE](fill=0)
     var res = syscall[__NR_uname, Int64](
         Pointer(to=buf).unsafe_bitcast[UInt8]()
     )

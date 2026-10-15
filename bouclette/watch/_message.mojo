@@ -42,7 +42,7 @@ struct _MessageState(_FutureCallback):
     var completion: Completion
     var msg: Message
     var _hdr: msghdr
-    var _iov: InlineArray[iovec, 1]
+    var _iov: Array[iovec, 1]
     var _receiving: Bool
     var _result: Int
     var done: Bool
@@ -63,7 +63,7 @@ struct _MessageState(_FutureCallback):
         self.completion = Completion()
         self.msg = msg^
         self._hdr = msghdr()
-        self._iov = InlineArray[iovec, 1](fill=iovec())
+        self._iov = Array[iovec, 1](fill=iovec())
         self._receiving = receiving
         self._result = 0
         self.done = False

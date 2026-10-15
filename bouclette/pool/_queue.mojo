@@ -136,19 +136,19 @@ struct _WorkQueue(Movable):
 
     var _items: Pointer[WorkItem, MutUntrackedOrigin]
     var _items_head: Int
-    var _items_count: Atomic[DType.int64]
+    var _items_count: Atomic[Int64]
     var _items_cap: Int
 
     var _results: Pointer[_CompletedWork, MutUntrackedOrigin]
     var _results_head: Int
-    var _results_count: Atomic[DType.int64]
+    var _results_count: Atomic[Int64]
     var _results_cap: Int
 
     var _mutex: _Mutex
     var _condvar: _Condvar
-    var _shutdown: Atomic[DType.uint8]
+    var _shutdown: Atomic[UInt8]
     var _wakeup_fd: OwnedHandle
-    var _active_threads: Atomic[DType.int64]
+    var _active_threads: Atomic[Int64]
 
     def __init__(
         out self,
@@ -161,42 +161,42 @@ struct _WorkQueue(Movable):
         """Create an empty queue shared by `thread_count` workers."""
         self._items = unsafe_alloc[WorkItem](items_capacity)
         self._items_head = 0
-        self._items_count = Atomic[DType.int64](0)
+        self._items_count = Atomic[Int64](0)
         self._items_cap = items_capacity
 
         self._results = unsafe_alloc[_CompletedWork](results_capacity)
         self._results_head = 0
-        self._results_count = Atomic[DType.int64](0)
+        self._results_count = Atomic[Int64](0)
         self._results_cap = results_capacity
 
         self._mutex = _Mutex()
         self._condvar = _Condvar()
-        self._shutdown = Atomic[DType.uint8](0)
+        self._shutdown = Atomic[UInt8](0)
         self._wakeup_fd = OwnedHandle(raw=wakeup_fd)
-        self._active_threads = Atomic[DType.int64](Int64(thread_count))
+        self._active_threads = Atomic[Int64](Int64(thread_count))
 
     def __init__(out self, *, deinit move: Self):
         self._items = move._items
         self._items_head = move._items_head
-        self._items_count = Atomic[DType.int64](
+        self._items_count = Atomic[Int64](
             move._items_count.load[ordering=Ordering.RELAXED]()
         )
         self._items_cap = move._items_cap
 
         self._results = move._results
         self._results_head = move._results_head
-        self._results_count = Atomic[DType.int64](
+        self._results_count = Atomic[Int64](
             move._results_count.load[ordering=Ordering.RELAXED]()
         )
         self._results_cap = move._results_cap
 
         self._mutex = move._mutex^
         self._condvar = move._condvar^
-        self._shutdown = Atomic[DType.uint8](
+        self._shutdown = Atomic[UInt8](
             move._shutdown.load[ordering=Ordering.RELAXED]()
         )
         self._wakeup_fd = move._wakeup_fd^
-        self._active_threads = Atomic[DType.int64](
+        self._active_threads = Atomic[Int64](
             move._active_threads.load[ordering=Ordering.RELAXED]()
         )
 

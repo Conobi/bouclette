@@ -30,9 +30,9 @@ def _atomic_load[
     type: DType, //, ordering: AtomicOrdering
 ](unsafe_ptr: Pointer[Scalar[type], ImmStaticOrigin]) -> Scalar[type]:
     comptime if ordering is AtomicOrdering.ACQUIRE:
-        return Atomic[type].load[ordering = Ordering.ACQUIRE](unsafe_ptr)
+        return Atomic[Scalar[type]].load[ordering = Ordering.ACQUIRE](unsafe_ptr)
     elif ordering is AtomicOrdering.RELAXED:
-        return Atomic[type].load[ordering = Ordering.RELAXED](unsafe_ptr)
+        return Atomic[Scalar[type]].load[ordering = Ordering.RELAXED](unsafe_ptr)
     else:
         comptime assert False, "unsupported atomic ordering"
 
@@ -41,7 +41,7 @@ def _atomic_load[
 def _atomic_store[
     type: DType
 ](unsafe_ptr: Pointer[Scalar[type], ImmStaticOrigin], rhs: Scalar[type]):
-    Atomic[type].store[ordering = Ordering.RELEASE](
+    Atomic[Scalar[type]].store[ordering = Ordering.RELEASE](
         unsafe_ptr.unsafe_mut_cast[True](), rhs
     )
 

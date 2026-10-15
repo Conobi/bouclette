@@ -970,8 +970,10 @@ struct IoUringDriver(IoDriver):
         if not self._supports_buffer_ring:
             raise _unsupported()
         var entries = UInt32(_next_pow2(count))
+        # Compared as UInt32: Mojo 1.1.0 constant-folds `Int(UInt32.MAX)`
+        # to -1, which would make this bound reject every ring.
         debug_assert(
-            Int(entries) <= Int(UInt32.MAX) // _IO_URING_BUF_SIZE,
+            entries <= UInt32.MAX // UInt32(_IO_URING_BUF_SIZE),
             "ring too large",
         )
         # The kernel rejects a ring whose address is not page-aligned

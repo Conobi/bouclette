@@ -39,7 +39,7 @@ def main() raises:
     assert_equal(sent, 5, "should send 5 bytes")
 
     # --- recv_from_v6 returns the payload and the IPv6 source ---
-    var buf = InlineArray[UInt8, 64](fill=0)
+    var buf = Array[UInt8, 64](fill=0)
     var result = receiver.recv_from_v6(Span(buf))
     var received = result[0]
     var src = result[1]

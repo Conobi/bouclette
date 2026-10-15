@@ -1149,8 +1149,8 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
     var last_op: UInt8
     var ops_len: UInt8
     var resv: UInt16
-    var resv2: InlineArray[UInt32, 3]
-    var ops: InlineArray[IoUringProbeOp, IO_URING_PROBE_OPS]
+    var resv2: Array[UInt32, 3]
+    var ops: Array[IoUringProbeOp, IO_URING_PROBE_OPS]
 
     def __init__(out self):
         """Construct a zeroed probe ready for registration."""
@@ -1158,8 +1158,8 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
         self.last_op = 0
         self.ops_len = 0
         self.resv = 0
-        self.resv2 = InlineArray[UInt32, 3](fill=0)
-        self.ops = InlineArray[IoUringProbeOp, IO_URING_PROBE_OPS](
+        self.resv2 = Array[UInt32, 3](fill=0)
+        self.ops = Array[IoUringProbeOp, IO_URING_PROBE_OPS](
             fill=IoUringProbeOp()
         )
 

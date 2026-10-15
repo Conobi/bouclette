@@ -36,7 +36,7 @@ def main() raises:
     assert_equal(sent, 5, "should send 5 bytes")
 
     # --- recv_from_v4 on receiver ---
-    var buf = InlineArray[UInt8, 64](fill=0)
+    var buf = Array[UInt8, 64](fill=0)
     var result = receiver.recv_from_v4(Span(buf))
     var received = result[0]
     var src_addr = result[1]

@@ -729,7 +729,7 @@ def property_ipv4_mapped_is_exactly_the_ffff_prefix(
         rng: The generator.
     """
     for _ in range(ITERATIONS):
-        var segs = InlineArray[UInt16, 8](fill=0)
+        var segs = Array[UInt16, 8](fill=0)
         for i in range(8):
             segs[i] = UInt16(rng.next() & 0xFFFF)
         var mapped = rng.chance(2)
@@ -782,7 +782,7 @@ def property_v6_storage_round_trip_keeps_the_address(
         "a mapped address must stay mapped across the storage round trip",
     )
     for _ in range(ITERATIONS):
-        var segs = InlineArray[UInt16, 8](fill=0)
+        var segs = Array[UInt16, 8](fill=0)
         for i in range(8):
             segs[i] = UInt16(rng.next() & 0xFFFF)
         var port = UInt16(rng.next() & 0xFFFF)

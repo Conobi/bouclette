@@ -111,7 +111,7 @@ def test_set_tos_writes_the_byte() raises:
 
 def test_tos_on_a_unix_socket_is_eafnosupport() raises:
     """Neither option applies to AF_UNIX; the setter says so before any syscall."""
-    var fds = InlineArray[Int32, 2](fill=Int32(0))
+    var fds = Array[Int32, 2](fill=Int32(0))
     var fds_p = Pointer(to=fds)
     var res = external_call["socketpair", Int32](
         Int32(1), Int32(2 | 2048 | 524288), Int32(0), fds_p

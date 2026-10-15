@@ -13,7 +13,7 @@ from bouclette.socle.linux.errno import get_errno
 
 def _make_socketpair() raises -> Tuple[Int32, Int32]:
     """Create a connected AF_UNIX SOCK_STREAM socketpair."""
-    var fds = InlineArray[Int32, 2](fill=Int32(0))
+    var fds = Array[Int32, 2](fill=Int32(0))
     var fds_p = Pointer(to=fds)
     var res = external_call["socketpair", Int32](
         Int32(1),
