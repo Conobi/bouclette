@@ -918,13 +918,13 @@ struct OwnedFd[is_registered: Bool = False](
             )
             try:
                 var res = io_uring_register(self, arg)
-                debug_assert(res == 1, "failed to unregister file descriptor")
+                debug_assert(res == 1, "failed to unregister ring slot")
             except e:
-                # EINVAL (-22) is expected when the ring is already torn
-                # down; only fire the diagnostic for unexpected errors.
+                # A failure leaks one of the task's 16 registered-ring
+                # slots; setup then fails with EBUSY.
                 debug_assert(
-                    String(e) == String(-Int(EINVAL)),
-                    t"OwnedFd.__deinit__: io_uring_register failed: {e}",
+                    False,
+                    t"OwnedFd.__deinit__: UNREGISTER_RING_FDS failed: {e}",
                 )
         else:
             close_unchecked(unsafe_fd=self._fd)
@@ -955,16 +955,19 @@ struct EnterArg[size: UInt, flags: IoUringEnterFlags, origin: ImmOrigin](
     Parameters:
         size: The size of the enter argument.
         flags: The bitmask of the `IoUringEnterFlags` values.
-        origin: The origin of the enter argument.
+        origin: The origin of the struct the kernel reads. It must stay
+            tracked: an untracked pointer lets the compiler end the
+            struct's lifetime before the syscall, and at -O1 and above
+            drop its stores.
     """
 
-    var arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin]
+    var arg_unsafe_ptr: Pointer[c_void, Self.origin]
 
     @always_inline("nodebug")
     def __init__(
         out self,
         *,
-        arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
+        arg_unsafe_ptr: Pointer[c_void, Self.origin],
     ):
         self.arg_unsafe_ptr = arg_unsafe_ptr
 
@@ -988,6 +991,17 @@ struct IoUringGetEventsArg(Defaultable, ImplicitlyCopyable, Movable):
         self.pad = 0
         self.ts = 0
 
+    @always_inline
+    def as_enter_arg[
+        origin: ImmOrigin
+    ](ref [origin] self) -> EnterArg[
+        24, IoUringEnterFlags.EXT_ARG, origin
+    ]:
+        """Wrap `self` as an `IORING_ENTER_EXT_ARG` argument."""
+        return EnterArg[24, IoUringEnterFlags.EXT_ARG, origin](
+            arg_unsafe_ptr=Pointer(to=self).unsafe_bitcast[c_void]()
+        )
+
 
 trait AsRegisterArg:
     def as_register_arg[
@@ -999,9 +1013,17 @@ trait AsRegisterArg:
 
 
 struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
+    """Argument for `io_uring_register`.
+
+    `origin` is that of the struct the kernel reads. It must stay tracked:
+    with an untracked pointer the compiler ends the struct's lifetime before
+    the syscall and, at -O1 and above, deletes its stores as dead, so the
+    kernel reads stack garbage.
+    """
+
     var opcode: IoUringRegisterOp
     """The operation code."""
-    var arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin]
+    var arg_unsafe_ptr: Pointer[c_void, Self.origin]
     """The pointer to resources for registration/deregistration."""
     var nr_args: UInt32
     """The number of resources for registration/deregistration."""
@@ -1011,7 +1033,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
         out self,
         *,
         opcode: IoUringRegisterOp,
-        arg_unsafe_ptr: Pointer[c_void, ImmStaticOrigin],
+        arg_unsafe_ptr: Pointer[c_void, Self.origin],
         nr_args: UInt32,
     ):
         self.opcode = opcode
@@ -1022,7 +1044,7 @@ struct RegisterArg[origin: MutOrigin](TrivialRegisterPassable):
 struct NoRegisterArg:
     comptime ENABLE_RINGS = RegisterArg[MutUntrackedOrigin](
         opcode=IoUringRegisterOp.REGISTER_ENABLE_RINGS,
-        arg_unsafe_ptr=null_ptr[c_void, ImmStaticOrigin](),
+        arg_unsafe_ptr=null_ptr[c_void, MutUntrackedOrigin](),
         nr_args=0,
     )
 
@@ -1032,7 +1054,12 @@ struct NoRegisterArg:
 # ===----------------------------------------------------------------------=== #
 
 
-struct IoUringRsrcUpdate(TrivialRegisterPassable, AsRegisterArg, Defaultable):
+struct IoUringRsrcUpdate(AsRegisterArg, Defaultable):
+    """Kernel ABI struct read by address. Deliberately not register-passable:
+    for a register-passable value the compiler ends the lifetime of the
+    constructor's slot, so at -O1 and above `__init__`'s stores are lost.
+    """
+
     var offset: UInt32
     var resv: UInt32
     var data: UInt64
@@ -1051,14 +1078,9 @@ struct IoUringRsrcUpdate(TrivialRegisterPassable, AsRegisterArg, Defaultable):
         ref [origin] self, *, unsafe_opcode: IoUringRegisterOp
     ) -> RegisterArg[origin]:
         _aligned_u64[Self]()
-        # Bind &self first: inlining Pointer(to=self) into the
-        # constructor arg list risks losing the stack address mid-marshal.
-        var self_p = Pointer(to=self)
         return RegisterArg[origin](
             opcode=unsafe_opcode,
-            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
-                unsafe_from_address=Int(self_p)
-            ),
+            arg_unsafe_ptr=Pointer(to=self).unsafe_bitcast[c_void](),
             nr_args=1,
         )
 
@@ -1104,14 +1126,9 @@ struct IoUringBufReg(AsRegisterArg, Defaultable, ImplicitlyCopyable, Movable):
     ) -> RegisterArg[origin]:
         _size_eq[Self, 40]()
         _align_eq[Self, 8]()
-        # Bind &self first: inlining Pointer(to=self) into the
-        # constructor arg list risks losing the stack address mid-marshal.
-        var self_p = Pointer(to=self)
         return RegisterArg[origin](
             opcode=unsafe_opcode,
-            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
-                unsafe_from_address=Int(self_p)
-            ),
+            arg_unsafe_ptr=Pointer(to=self).unsafe_bitcast[c_void](),
             nr_args=1,
         )
 
@@ -1170,14 +1187,9 @@ struct IoUringProbe(AsRegisterArg, Defaultable, Movable):
         ref [origin] self, *, unsafe_opcode: IoUringRegisterOp
     ) -> RegisterArg[origin]:
         """Build the register argument; `unsafe_opcode` must be `REGISTER_PROBE`."""
-        # Bind &self first: inlining Pointer(to=self) into the
-        # constructor arg list risks losing the stack address mid-marshal.
-        var self_p = Pointer(to=self)
         return RegisterArg[origin](
             opcode=unsafe_opcode,
-            arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
-                unsafe_from_address=Int(self_p)
-            ),
+            arg_unsafe_ptr=Pointer(to=self).unsafe_bitcast[c_void](),
             nr_args=UInt32(IO_URING_PROBE_OPS),
         )
 
@@ -1224,8 +1236,7 @@ def io_uring_setup[
     """
     params.flags |= OwnedFd[is_registered].SETUP_FLAGS
 
-    # Bind the &params local first: inlining Pointer(to=params) into the
-    # syscall arg list can let the stack slot be clobbered during marshaling.
+    # Tracked pointer: the compiler sees the kernel write `params`.
     var params_p = Pointer(to=params)
     var res = syscall[__NR_io_uring_setup, Scalar[DType.int64]](
         sq_entries, params_p

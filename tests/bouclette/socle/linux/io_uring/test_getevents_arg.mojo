@@ -60,12 +60,7 @@ def test_live_bounded_wait_times_out() raises:
     var ts = __kernel_timespec(tv_sec=Int64(0), tv_nsec=Int64(30_000_000))
     var arg = IoUringGetEventsArg()
     arg.ts = UInt64(Int(Pointer(to=ts)))
-    var arg_p = Pointer(to=arg)
-    var enter_arg = EnterArg[24, IoUringEnterFlags.EXT_ARG, ImmStaticOrigin](
-        arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
-            unsafe_from_address=Int(arg_p)
-        )
-    )
+    var enter_arg = arg.as_enter_arg()
     var start = perf_counter_ns()
     var timed_out = False
     try:

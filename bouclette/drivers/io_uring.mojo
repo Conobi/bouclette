@@ -362,29 +362,22 @@ struct IoUringDriver(IoDriver):
         Args:
             timeout_ms: The bound in milliseconds, >= 0.
         """
-        var ts = _timespec_from_ms(timeout_ms)
+        # The kernel reads `ts` by address through `arg.ts`, so it lives in
+        # a field rather than a local the compiler may consider dead.
+        self._sentinel_ts = _timespec_from_ms(timeout_ms)
         if self._supports_timeout_arg:
             var arg = IoUringGetEventsArg()
-            arg.ts = UInt64(Int(Pointer(to=ts)))
-            var arg_p = Pointer(to=arg)
-            var enter_arg = EnterArg[
-                24, IoUringEnterFlags.EXT_ARG, ImmStaticOrigin
-            ](
-                arg_unsafe_ptr=Pointer[c_void, ImmStaticOrigin](
-                    unsafe_from_address=Int(arg_p)
-                )
-            )
+            arg.ts = UInt64(Int(Pointer(to=self._sentinel_ts)))
             try:
-                _ = self._ring.submit_and_wait(wait_nr=UInt32(1), arg=enter_arg)
+                _ = self._ring.submit_and_wait(
+                    wait_nr=UInt32(1), arg=arg.as_enter_arg()
+                )
             except e:
                 if not _is_etime(e):
                     raise e
-            _ = ts
-            _ = arg
             return
 
         # Fallback: a sentinel timeout operation stands in for the bound.
-        self._sentinel_ts = ts
         if not self._ring.sq():
             _ = self._ring.submit_and_wait(wait_nr=0)
             if not self._ring.sq():
