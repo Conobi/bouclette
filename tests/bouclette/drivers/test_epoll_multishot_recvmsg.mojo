@@ -118,6 +118,18 @@ def _completion(ref tracker: Tracker) -> Completion:
     )
 
 
+struct _MsgFrame(Movable):
+    """A `msghdr` and the `iovec` it points at, kept in one stack object so a
+    pointer to the frame covers both."""
+
+    var hdr: msghdr
+    var iov: iovec
+
+    def __init__(out self):
+        self.hdr = msghdr()
+        self.iov = iovec()
+
+
 def _ptr[T: AnyType](ref value: T) -> Pointer[T, MutUntrackedOrigin]:
     """Untracked pointer to a caller-owned value."""
     return Pointer[T, MutUntrackedOrigin](
@@ -762,18 +774,17 @@ def test_sendmsg_on_same_fd_while_armed() raises:
     reply[0] = UInt8(ord("a"))
     reply[1] = UInt8(ord("c"))
     reply[2] = UInt8(ord("k"))
-    var iov = iovec()
-    iov.iov_base = UInt64(Int(reply.unsafe_ptr()))
-    iov.iov_len = UInt64(3)
-    var send_hdr = msghdr()
-    send_hdr.msg_name = UInt64(Int(mem.unsafe_offset(bid * BUF_SIZE + DELIVERY_HEADER_LEN)))
-    send_hdr.msg_namelen = UInt32(16)
-    send_hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
-    send_hdr.msg_iovlen = UInt64(1)
+    var frame = _MsgFrame()
+    frame.iov.iov_base = UInt64(Int(reply.unsafe_ptr()))
+    frame.iov.iov_len = UInt64(3)
+    frame.hdr.msg_name = UInt64(Int(mem.unsafe_offset(bid * BUF_SIZE + DELIVERY_HEADER_LEN)))
+    frame.hdr.msg_namelen = UInt32(16)
+    frame.hdr.msg_iov = UInt64(Int(Pointer(to=frame.iov)))
+    frame.hdr.msg_iovlen = UInt64(1)
     var send_tracker = Tracker()
     var send_cmp = _completion(send_tracker)
     driver.sendmsg(
-        receiver.raw(), _ptr(send_hdr).unsafe_bitcast[NoneType](), _ptr(send_cmp)
+        receiver.raw(), _ptr(frame).unsafe_bitcast[NoneType](), _ptr(send_cmp)
     )
     assert_equal(driver._state[].pool.free_count(), slots_armed - 1)
     _tick_until(driver, send_tracker, 1, "sendmsg did not complete")
@@ -804,8 +815,7 @@ def test_sendmsg_on_same_fd_while_armed() raises:
     _ = cmp
     _ = send_cmp
     _ = tmpl
-    _ = send_hdr
-    _ = iov
+    _ = frame
     _ = reply
 
 

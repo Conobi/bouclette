@@ -379,7 +379,7 @@ def test_multishot_submits_after_full_sq() raises:
     )
     _ = driver.tick(wait=False)
 
-    var seen_nops = _ptr(nops)
+    var seen_nops = Pointer(to=nops)
     var ticks = 0
     while seen_nops[].count < space:
         _ = driver.tick(wait=True, timeout_ms=1000)
@@ -389,7 +389,7 @@ def test_multishot_submits_after_full_sq() raises:
     # The op was really queued: a datagram is delivered through the group.
     var payload = List[UInt8](length=4, fill=UInt8(ord("x")))
     assert_true(sender.send_to(Span(payload), to) == 4, "sendto")
-    var seen_recv = _ptr(recv)
+    var seen_recv = Pointer(to=recv)
     ticks = 0
     while seen_recv[].count < 1:
         _ = driver.tick(wait=True, timeout_ms=1000)
@@ -460,7 +460,7 @@ def test_multishot_truncation_reports_full_length() raises:
     for i in range(BIG):
         payload[i] = UInt8(i & 0xFF)
     assert_true(sender.send_to(Span(payload), to) == BIG, "sendto")
-    var seen = _ptr(recv)
+    var seen = Pointer(to=recv)
     var ticks = 0
     while seen[].count < 1:
         _ = driver.tick(wait=True, timeout_ms=1000)
@@ -533,7 +533,7 @@ def test_multishot_control_messages_are_delivered() raises:
 
     var payload = List[UInt8](length=4, fill=UInt8(ord("e")))
     assert_true(sender.send_to(Span(payload), to) == 4, "sendto")
-    var seen = _ptr(recv)
+    var seen = Pointer(to=recv)
     var ticks = 0
     while seen[].count < 1:
         _ = driver.tick(wait=True, timeout_ms=1000)

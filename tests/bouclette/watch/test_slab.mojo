@@ -10,6 +10,7 @@ reports the loss without touching freed memory.
 """
 
 from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true
 
 from bouclette.timeout import Timeout
@@ -22,15 +23,15 @@ from bouclette.watch._slab import _Slab
 from bouclette.watch.timer import _TimerFutureState
 
 
-def _queue_ptr(ref queue: List[Int]) -> Pointer[List[Int], MutUntrackedOrigin]:
-    """Return an untracked pointer to a settle queue owned by the caller.
+def _heap_queue() -> Pointer[List[Int], MutUntrackedOrigin]:
+    """A heap-owned stand-in for the loop's settle queue.
 
-    Args:
-        queue: The list standing in for the loop's settle queue.
+    Heap, not stack: the slab keeps an untracked pointer to it, so a stack
+    list would be folded away by the optimizer (-O3). Never freed; tests exit.
     """
-    return Pointer[List[Int], MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=queue))
-    )
+    var q = unsafe_alloc[List[Int]](1)
+    q.unsafe_write(List[Int]())
+    return q
 
 
 def _timer_state() -> _TimerFutureState:
@@ -49,8 +50,8 @@ def _expire(state: Pointer[_TimerFutureState, MutUntrackedOrigin]):
 
 def test_slab_grows_in_chunks_and_keeps_addresses() raises:
     """Five states in chunks of two span three chunks and never move."""
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    var slab = _Slab[_TimerFutureState](2, 5, queue_ptr)
     var ptrs = List[Pointer[_TimerFutureState, MutUntrackedOrigin]]()
     for _ in range(5):
         ptrs.append(slab.alloc(_timer_state()))
@@ -71,8 +72,9 @@ def test_slab_grows_in_chunks_and_keeps_addresses() raises:
 
 def test_slot_is_queued_once_by_the_second_event() raises:
     """Completion then drop, or drop then completion, both push one key."""
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](4, 5, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_TimerFutureState](4, 5, queue_ptr)
 
     # Completion first: the live count drops, nothing is queued yet.
     var a = slab.alloc(_timer_state())
@@ -102,8 +104,9 @@ def test_slot_is_queued_once_by_the_second_event() raises:
 
 def test_freed_slot_is_reused_before_growing() raises:
     """Releasing a slot and allocating again reuses it; no new chunk."""
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_TimerFutureState](2, 5, queue_ptr)
     var a = slab.alloc(_timer_state())
     var b = slab.alloc(_timer_state())
     var addr_b = Int(b)
@@ -120,8 +123,8 @@ def test_freed_slot_is_reused_before_growing() raises:
 
 def test_detach_marks_live_handles_and_keeps_chunks() raises:
     """A state whose handle is alive at detach is marked loop_gone."""
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](2, 5, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    var slab = _Slab[_TimerFutureState](2, 5, queue_ptr)
     var held = slab.alloc(_timer_state())
     var orphan = slab.alloc(_timer_state())
     orphan[].mark_owner_dropped()
@@ -195,8 +198,9 @@ def test_future_outliving_a_tiny_loop_reports_loop_gone() raises:
 def test_key_has_room_for_ten_kinds() raises:
     """Kinds 0..9 (accept .. pool) fit in the low bits of a slot key."""
     assert_equal(_KIND_BITS, 4)
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](2, 9, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_TimerFutureState](2, 9, queue_ptr)
     var s = slab.alloc(_timer_state())
     _expire(s)
     s[].mark_owner_dropped()
@@ -209,8 +213,9 @@ def test_key_has_room_for_ten_kinds() raises:
 
 def test_active_count_and_rearmed_link() raises:
     """`active()` counts occupied slots; `rearmed()` re-counts a state as live."""
-    var queue = List[Int]()
-    var slab = _Slab[_TimerFutureState](4, 5, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_TimerFutureState](4, 5, queue_ptr)
     assert_equal(slab.active(), 0)
     assert_true(not slab.is_active(0), "no slot before the first alloc")
     var p = slab.alloc(_timer_state())

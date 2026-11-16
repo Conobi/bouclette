@@ -7,6 +7,7 @@ the loop tests.
 """
 
 from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
@@ -19,21 +20,22 @@ from bouclette.watch._message import _MessageState
 from bouclette.watch._slab import _Slab
 
 
-def _queue_ptr(ref queue: List[Int]) -> Pointer[List[Int], MutUntrackedOrigin]:
-    """Return an untracked pointer to a settle queue owned by the caller.
+def _heap_queue() -> Pointer[List[Int], MutUntrackedOrigin]:
+    """A heap-owned stand-in for the loop's settle queue.
 
-    Args:
-        queue: The list standing in for the loop's settle queue.
+    Heap, not stack: the slab keeps an untracked pointer to it, so a stack
+    list would be folded away by the optimizer (-O3). Never freed; tests exit.
     """
-    return Pointer[List[Int], MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=queue))
-    )
+    var q = unsafe_alloc[List[Int]](1)
+    q.unsafe_write(List[Int]())
+    return q
 
 
 def test_receiving_state_points_the_header_at_its_own_slot() raises:
     """A receive offers the whole name slot and the whole control area."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var payload = List[UInt8](length=64, fill=0)
     var storage = Int(payload.unsafe_ptr())
     var s = slab.alloc(_MessageState(Message(payload^, control_capacity=48), receiving=True))
@@ -72,8 +74,9 @@ def test_receiving_state_points_the_header_at_its_own_slot() raises:
 
 def test_sending_state_offers_only_what_is_set() raises:
     """A send names the peer only when set and control only when non-empty."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 7, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 7, queue_ptr)
 
     var bare = slab.alloc(_MessageState(Message(List[UInt8](length=3, fill=1)), receiving=False))
     bare[].wire()
@@ -109,8 +112,9 @@ def test_sending_state_offers_only_what_is_set() raises:
 
 def test_abandon_buffer_parks_the_message() raises:
     """`abandon_buffer` leaves an empty message behind; the slot can be released."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var s = slab.alloc(_MessageState(Message(List[UInt8](length=8, fill=2), control_capacity=8), receiving=True))
     s[].wire()
     s[].abandon_buffer()
@@ -124,8 +128,9 @@ def test_abandon_buffer_parks_the_message() raises:
 
 def test_receiving_state_with_no_control_capacity_offers_none() raises:
     """A receive with zero control capacity offers no control area at all."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var s = slab.alloc(_MessageState(Message(List[UInt8](length=4, fill=0)), receiving=True))
     s[].wire()
     assert_equal(Int(s[]._hdr.msg_control), 0, "no capacity: no control area")
@@ -137,8 +142,9 @@ def test_receiving_state_with_no_control_capacity_offers_none() raises:
 
 def test_sending_state_with_unused_control_capacity_offers_none() raises:
     """A send with reserved but unwritten control capacity offers no control area."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 7, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 7, queue_ptr)
     var msg = Message(List[UInt8](length=3, fill=1), control_capacity=24)
     var s = slab.alloc(_MessageState(msg^, receiving=False))
     s[].wire()
@@ -153,8 +159,9 @@ def test_wiring_a_receive_clears_the_previous_peer() raises:
     """A reused message never carries the previous peer into a receive:
     `wire()` zeroes the name slot, so a receive that writes no name
     (connected socket, `msg_namelen` 0) reports UNSPEC, not the old peer."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var msg = Message(List[UInt8](length=4, fill=0))
     msg.set_peer(SocketAddrV4(10, 1, 2, 3, port=4444))
     var s = slab.alloc(_MessageState(msg^, receiving=True))

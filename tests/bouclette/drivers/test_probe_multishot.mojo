@@ -35,6 +35,18 @@ def _has_io_uring() -> Bool:
         return False
 
 
+struct _MsgFrame(Movable):
+    """A `msghdr` and the `iovec` it points at, kept in one stack object so a
+    pointer to the frame covers both."""
+
+    var hdr: msghdr
+    var iov: iovec
+
+    def __init__(out self):
+        self.hdr = msghdr()
+        self.iov = iovec()
+
+
 struct Delivery:
     """Records the first multishot completion."""
 
@@ -80,12 +92,11 @@ def _run_multishot(mut driver: IoUringDriver) raises:
         buf_base, UInt32(BUF_SIZE), NUM_BUFS, group_id=GROUP_ID
     )
 
-    var iov = iovec()
-    var hdr = msghdr()
-    hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
-    hdr.msg_iovlen = 1
+    var frame = _MsgFrame()
+    frame.hdr.msg_iov = UInt64(Int(Pointer(to=frame.iov)))
+    frame.hdr.msg_iovlen = 1
     var hdr_ptr = Pointer[msghdr, MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=hdr))
+        unsafe_from_address=Int(Pointer(to=frame))
     )
 
     var delivery = Delivery()
@@ -121,8 +132,7 @@ def _run_multishot(mut driver: IoUringDriver) raises:
     driver.unregister_buf_ring(group_id=GROUP_ID)
     buf_base.unsafe_free()
     _ = cmp
-    _ = hdr
-    _ = iov
+    _ = frame
     _ = ring^
     receiver.close()
     sender.close()
@@ -132,12 +142,11 @@ def _expect_eopnotsupp(mut driver: IoUringDriver) raises:
     """An unsupported multishot recvmsg is refused at submission."""
     var receiver = Socket.udp_v4()
     receiver.bind(SocketAddrV4(127, 0, 0, 1, port=0))
-    var iov = iovec()
-    var hdr = msghdr()
-    hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
-    hdr.msg_iovlen = 1
+    var frame = _MsgFrame()
+    frame.hdr.msg_iov = UInt64(Int(Pointer(to=frame.iov)))
+    frame.hdr.msg_iovlen = 1
     var hdr_ptr = Pointer[msghdr, MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=hdr))
+        unsafe_from_address=Int(Pointer(to=frame))
     )
     var delivery = Delivery()
     var cmp = Completion(
@@ -158,8 +167,7 @@ def _expect_eopnotsupp(mut driver: IoUringDriver) raises:
         assert_equal(IOError.from_error(e).errno_value(), EOPNOTSUPP)
     assert_true(raised, "unsupported multishot recvmsg must raise")
     _ = cmp
-    _ = hdr
-    _ = iov
+    _ = frame
     receiver.close()
 
 

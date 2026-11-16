@@ -9,6 +9,7 @@ live in test_recv_msg_send_msg.mojo.
 """
 
 from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.testing import assert_equal, assert_true
 
 from bouclette.net import Message
@@ -21,21 +22,22 @@ from bouclette.watch._message import _MessageState
 from bouclette.watch._slab import _Slab
 
 
-def _queue_ptr(ref queue: List[Int]) -> Pointer[List[Int], MutUntrackedOrigin]:
-    """Return an untracked pointer to a settle queue owned by the caller.
+def _heap_queue() -> Pointer[List[Int], MutUntrackedOrigin]:
+    """A heap-owned stand-in for the loop's settle queue.
 
-    Args:
-        queue: The list standing in for the loop's settle queue.
+    Heap, not stack: the slab keeps an untracked pointer to it, so a stack
+    list would be folded away by the optimizer (-O3). Never freed; tests exit.
     """
-    return Pointer[List[Int], MutUntrackedOrigin](
-        unsafe_from_address=Int(Pointer(to=queue))
-    )
+    var q = unsafe_alloc[List[Int]](1)
+    q.unsafe_write(List[Int]())
+    return q
 
 
 def test_result_before_completion_is_not_done() raises:
     """`result()` on a pending future is NOT_DONE, returns no message, drops the handle."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var s = slab.alloc(_MessageState(Message(List[UInt8](length=4, fill=0)), receiving=True))
     s[].wire()
     var f = RecvMsgFuture(s)
@@ -64,8 +66,8 @@ def test_result_before_completion_is_not_done() raises:
 
 def test_result_after_loop_gone_is_loop_gone() raises:
     """A future outliving its loop reports LOOP_GONE and frees the state itself."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 7, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    var slab = _Slab[_MessageState](2, 7, queue_ptr)
     var s = slab.alloc(_MessageState(Message(List[UInt8](length=4, fill=0)), receiving=False))
     s[].wire()
     var f = SendMsgFuture(s)
@@ -90,8 +92,9 @@ def test_result_after_loop_gone_is_loop_gone() raises:
 
 def test_dropping_a_done_future_queues_the_slot() raises:
     """Drop after completion pushes the key; drop before does not."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var a = slab.alloc(_MessageState(Message(List[UInt8]()), receiving=True))
     a[].wire()
     a[].set_result(0)
@@ -116,8 +119,9 @@ def test_dropping_a_done_future_queues_the_slot() raises:
 
 def test_result_after_receive_decodes_the_message() raises:
     """A completed receive yields count, flags and the peer; the slot is queued once."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var payload = List[UInt8](length=8, fill=0)
     var storage = Int(payload.unsafe_ptr())
     var s = slab.alloc(
@@ -157,8 +161,9 @@ def test_result_after_receive_decodes_the_message() raises:
 
 def test_result_after_failed_receive_is_io_with_the_message() raises:
     """A negative completion raises IO and hands the very same payload back."""
-    var queue = List[Int]()
-    var slab = _Slab[_MessageState](2, 6, _queue_ptr(queue))
+    var queue_ptr = _heap_queue()
+    ref queue = queue_ptr[]
+    var slab = _Slab[_MessageState](2, 6, queue_ptr)
     var payload = List[UInt8](length=16, fill=7)
     var storage = Int(payload.unsafe_ptr())
     var s = slab.alloc(_MessageState(Message(payload^), receiving=True))

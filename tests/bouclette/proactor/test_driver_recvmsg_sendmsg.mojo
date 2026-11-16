@@ -267,6 +267,18 @@ def test_driver_recvmsg_sendmsg(backend: Backend) raises:
     _ = recv_cmp
 
 
+struct _MsgFrame(Movable):
+    """A `msghdr` and the `iovec` it points at, kept in one stack object so a
+    pointer to the frame covers both."""
+
+    var hdr: msghdr
+    var iov: iovec
+
+    def __init__(out self):
+        self.hdr = msghdr()
+        self.iov = iovec()
+
+
 def _ptr[T: AnyType](ref value: T) -> Pointer[T, MutUntrackedOrigin]:
     """Untracked pointer to a caller-owned value."""
     return Pointer[T, MutUntrackedOrigin](
@@ -289,12 +301,11 @@ def test_recvmsg_truncation_reports_full_length(backend: Backend) raises:
     comptime ROOM = 100
     comptime BIG = 300
     var inbox = List[UInt8](length=ROOM, fill=0)
-    var iov = iovec()
-    iov.iov_base = UInt64(Int(inbox.unsafe_ptr()))
-    iov.iov_len = UInt64(ROOM)
-    var hdr = msghdr()
-    hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
-    hdr.msg_iovlen = UInt64(1)
+    var frame = _MsgFrame()
+    frame.iov.iov_base = UInt64(Int(inbox.unsafe_ptr()))
+    frame.iov.iov_len = UInt64(ROOM)
+    frame.hdr.msg_iov = UInt64(Int(Pointer(to=frame.iov)))
+    frame.hdr.msg_iovlen = UInt64(1)
     var tracker = ResultTracker()
     var cmp = Completion(
         invoke=ResultTracker.on_complete,
@@ -302,7 +313,7 @@ def test_recvmsg_truncation_reports_full_length(backend: Backend) raises:
     )
     driver.recvmsg(
         receiver.raw(),
-        _ptr(hdr).unsafe_bitcast[NoneType](),
+        _ptr(frame).unsafe_bitcast[NoneType](),
         _ptr(cmp),
         UInt32(MSG_TRUNC),
     )
@@ -321,15 +332,13 @@ def test_recvmsg_truncation_reports_full_length(backend: Backend) raises:
         seen[].result == BIG,
         "result is the full datagram length, got " + String(seen[].result),
     )
-    assert_true((Int(hdr.msg_flags) & MSG_TRUNC) != 0, "MSG_TRUNC set")
+    assert_true((Int(frame.hdr.msg_flags) & MSG_TRUNC) != 0, "MSG_TRUNC set")
     for i in range(ROOM):
         assert_true(Int(inbox[i]) == (i & 0xFF), "copied bytes intact")
 
     receiver.close()
     sender.close()
     _ = cmp
-    _ = hdr
-    _ = iov
     _ = inbox
 
 
