@@ -6,7 +6,6 @@ that read happens; it returns UNSPEC for a short image or a family
 bouclette does not model.
 """
 
-from std.memory import Pointer
 from std.sys.info import size_of
 from std.testing import assert_equal, assert_true
 
@@ -26,18 +25,12 @@ def test_families_compare_by_id() raises:
 def test_from_sockaddr_reads_the_family_prefix() raises:
     """The first two bytes decode to INET, INET6 or UNIX."""
     var v4 = SocketAddrStorAny(SocketAddrV4(127, 0, 0, 1, port=1).addr_stor())
-    var v4_bytes = Span[UInt8, ImmStaticOrigin](
-        unsafe_ptr=v4.addr_unsafe_ptr(), length=Int(v4.addr_len())
-    )
-    assert_true(AddrFamily.from_sockaddr(v4_bytes) == AddrFamily.INET)
+    assert_true(AddrFamily.from_sockaddr(v4.addr_bytes()) == AddrFamily.INET)
 
     var v6 = SocketAddrStorAny(
         SocketAddrV6(0, 0, 0, 0, 0, 0, 0, 1, port=1).addr_stor()
     )
-    var v6_bytes = Span[UInt8, ImmStaticOrigin](
-        unsafe_ptr=v6.addr_unsafe_ptr(), length=Int(v6.addr_len())
-    )
-    assert_true(AddrFamily.from_sockaddr(v6_bytes) == AddrFamily.INET6)
+    assert_true(AddrFamily.from_sockaddr(v6.addr_bytes()) == AddrFamily.INET6)
 
     var unix = List[UInt8](length=4, fill=0)
     # Byte-level checks assume little-endian, true for x86_64 and aarch64 Linux.
@@ -55,9 +48,8 @@ def test_from_sockaddr_unspec_for_short_or_unknown() raises:
     # Byte-level checks assume little-endian, true for x86_64 and aarch64 Linux.
     netlink[0] = 16
     assert_true(AddrFamily.from_sockaddr(Span(netlink)) == AddrFamily.UNSPEC)
-    var raw = sockaddr_in6()
-    var zero = Span(unsafe_ptr=Pointer(to=raw).unsafe_bitcast[UInt8](), length=size_of[sockaddr_in6]())
-    assert_true(AddrFamily.from_sockaddr(zero) == AddrFamily.UNSPEC)
+    var zero = List[UInt8](length=size_of[sockaddr_in6](), fill=0)
+    assert_true(AddrFamily.from_sockaddr(Span(zero)) == AddrFamily.UNSPEC)
 
 
 def test_is_ipv4_mapped() raises:

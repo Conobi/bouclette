@@ -161,12 +161,32 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
     ) -> Pointer[UInt8, ImmStaticOrigin]:
         """Return a byte pointer to the start of the stored sockaddr.
 
+        The pointer's origin is untracked: the compiler may destroy this
+        struct before the last read. Prefer `addr_bytes()` unless the
+        pointer goes to FFI.
+
         Returns:
             A pointer to the first byte of `addr`; valid for as long as
             this struct is not moved or destroyed.
         """
         return Pointer[UInt8, ImmStaticOrigin](
             unsafe_from_address=Int(Pointer(to=self.addr))
+        )
+
+    @always_inline
+    def addr_bytes(ref self) -> Span[UInt8, origin_of(self.addr)]:
+        """Return the meaningful sockaddr bytes as a view borrowing `self`.
+
+        The span is valid only while `self` lives and is not mutated; the
+        compiler enforces this, unlike `addr_unsafe_ptr()`.
+
+        Returns:
+            Exactly `addr_len()` bytes in kernel wire layout (host-order
+            family, network-order port and address).
+        """
+        return Span[UInt8, origin_of(self.addr)](
+            unsafe_ptr=Pointer(to=self.addr).unsafe_bitcast[UInt8](),
+            length=Int(self.addr_len()),
         )
 
     @always_inline
@@ -250,11 +270,7 @@ struct SocketAddrStorAny(ImplicitlyCopyable, Movable):
             UNSPEC when fewer than two bytes are meaningful (nothing was
             stored or written), otherwise the decoded family.
         """
-        return AddrFamily.from_sockaddr(
-            Span[UInt8, ImmStaticOrigin](
-                unsafe_ptr=self.addr_unsafe_ptr(), length=Int(self.addr_len())
-            )
-        )
+        return AddrFamily.from_sockaddr(self.addr_bytes())
 
 
 # ===----------------------------------------------------------------------=== #
