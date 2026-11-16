@@ -36,8 +36,6 @@ def epoll_ctl(
     epfd: Int32, op: EpollOp, fd: Int32, ref event: epoll_event
 ) raises:
     """Add, modify, or remove a file descriptor from the epoll interest list."""
-    # Bind &event first: inlining Pointer(to=event) into the
-    # external_call arg list risks losing the stack address mid-marshal.
     var event_p = Pointer(to=event).unsafe_bitcast[epoll_event]()
     var res = external_call["epoll_ctl", Int32](
         epfd,

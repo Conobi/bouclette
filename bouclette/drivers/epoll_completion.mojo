@@ -282,6 +282,18 @@ def _event_data(op: Pointer[_EpollOp, MutUntrackedOrigin]) -> UInt64:
     return (UInt64(op[].generation) << 32) | UInt64(op[].pool_index)
 
 
+struct _RecvMsgFrame(Movable):
+    """Stack `msghdr` plus the `iovec` it points at, passed to recvmsg as one
+    object so the compiler sees the kernel reading both."""
+
+    var hdr: msghdr
+    var iov: iovec
+
+    def __init__(out self):
+        self.hdr = msghdr()
+        self.iov = iovec()
+
+
 @fieldwise_init
 struct _ReadyEntry(ImplicitlyCopyable, Movable):
     """Deferred completion for operations that complete without epoll."""
@@ -1351,28 +1363,27 @@ struct EpollCompletionDriver(IoDriver):
                 completion[].fire(-Int(EINVAL), UInt32(0))
                 return fired + 1
 
-            var iov = iovec()
-            iov.iov_base = base + UInt64(payload_off)
-            iov.iov_len = UInt64(size - payload_off)
-            var hdr = msghdr()
+            var frame = _RecvMsgFrame()
+            frame.iov.iov_base = base + UInt64(payload_off)
+            frame.iov.iov_len = UInt64(size - payload_off)
             if name_cap > 0:
-                hdr.msg_name = base + UInt64(DELIVERY_HEADER_LEN)
-                hdr.msg_namelen = UInt32(name_cap)
-            hdr.msg_iov = UInt64(Int(Pointer(to=iov)))
-            hdr.msg_iovlen = UInt64(1)
+                frame.hdr.msg_name = base + UInt64(DELIVERY_HEADER_LEN)
+                frame.hdr.msg_namelen = UInt32(name_cap)
+            frame.hdr.msg_iov = UInt64(Int(Pointer(to=frame.iov)))
+            frame.hdr.msg_iovlen = UInt64(1)
             if ctrl_cap > 0:
-                hdr.msg_control = base + UInt64(DELIVERY_HEADER_LEN + name_cap)
-                hdr.msg_controllen = UInt64(ctrl_cap)
+                frame.hdr.msg_control = base + UInt64(
+                    DELIVERY_HEADER_LEN + name_cap
+                )
+                frame.hdr.msg_controllen = UInt64(ctrl_cap)
 
+            # The pointer covers the whole frame, so the compiler sees
+            # that the kernel reads `iov` through `hdr.msg_iov` as well.
             var res = syscall[__NR_recvmsg, Scalar[DType.int64]](
                 live[].dup_fd,
-                Pointer(to=hdr),
+                Pointer(to=frame),
                 Int32(MSG_DONTWAIT | MSG_TRUNC),
             )
-            # The iovec is referenced by address from `hdr`; keep it
-            # alive past the syscall so ASAP destruction cannot reuse
-            # its stack slot before the kernel reads it.
-            _ = iov
             if res == -Scalar[DType.int64](EAGAIN):
                 self._state[].groups[gi].free.append(bid)
                 if fired > 0 or (
@@ -1395,10 +1406,10 @@ struct EpollCompletionDriver(IoDriver):
                 Pointer[UInt8, MutUntrackedOrigin](
                     unsafe_from_address=Int(base)
                 ),
-                namelen=hdr.msg_namelen,
-                controllen=UInt32(Int(hdr.msg_controllen)),
+                namelen=frame.hdr.msg_namelen,
+                controllen=UInt32(Int(frame.hdr.msg_controllen)),
                 payloadlen=UInt32(payload_len),
-                flags=UInt32(Int(hdr.msg_flags)),
+                flags=UInt32(Int(frame.hdr.msg_flags)),
             )
             var flags = UInt32(IORING_CQE_F_BUFFER | IORING_CQE_F_MORE) | (
                 UInt32(bid) << UInt32(IORING_CQE_BUFFER_SHIFT)
