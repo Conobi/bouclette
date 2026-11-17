@@ -4,13 +4,17 @@ Constructs an IoUringDriver and keeps it only when the kernel supports
 every feature the datagram path needs natively (multishot recvmsg and
 provided-buffer rings); otherwise, or when io_uring is unavailable,
 falls back to EpollCompletionDriver, which emulates them. compio applies
-the same all-or-nothing rule. Implements IoDriver by delegating every
+the same all-or-nothing rule. An AUTO fallback prints one warning line to
+stderr, once per process, naming the reason; an explicit Backend.EPOLL
+never warns. Implements IoDriver by delegating every
 method to whichever backend is active. The backend branch is perfectly
 predicted after init — essentially zero cost.
 """
 
 from std.collections import Optional
+from std.ffi import _Global
 from std.memory import Pointer
+from std.sys import stderr
 
 from bouclette.proactor.completion import Completion
 from bouclette.handle import RawHandle
@@ -34,6 +38,52 @@ def _native_datagram_path_rule(multishot: Bool, buffer_ring: Bool) -> Bool:
         buffer_ring: Whether `BUFFER_RING` is supported.
     """
     return multishot and buffer_ring
+
+
+def _missing_features(multishot: Bool, buffer_ring: Bool) -> String:
+    """Name the datagram features io_uring lacks, comma-separated."""
+    if not multishot and not buffer_ring:
+        return "multishot recvmsg, buffer ring"
+    return "buffer ring" if multishot else "multishot recvmsg"
+
+
+def _fallback_warning(reason: String) -> String:
+    """The one-line stderr message for an AUTO fallback to epoll."""
+    return "bouclette: " + reason + "; falling back to epoll"
+
+
+def _warned_init() -> Int:
+    """Initial value of the process-wide warned flag."""
+    return 0
+
+
+comptime _WARNED = _Global["bouclette_auto_fallback_warned", _warned_init]
+
+
+def _claim_fallback_warning() raises -> Bool:
+    """True for the first caller in the process, False afterwards.
+
+    Backed by a stdlib process-wide global. Not atomic: two loops racing
+    their first AUTO construction may both warn, which is harmless.
+    """
+    var flag = _WARNED.get_or_create_ptr()
+    if flag[] != 0:
+        return False
+    flag[] = 1
+    return True
+
+
+def _warn_fallback(reason: String):
+    """Print the fallback warning to stderr unless already printed.
+
+    Never raises: a failed claim only costs the warning.
+    """
+    comptime if is_linux:
+        try:
+            if _claim_fallback_warning():
+                print(_fallback_warning(reason), file=stderr)
+        except:
+            pass
 
 
 def _native_datagram_path(ref driver: IoUringDriver) -> Bool:
@@ -60,7 +110,10 @@ struct AutoDriver(IoDriver):
     restricted containers), or if the kernel lacks native multishot
     recvmsg (6.0) or buffer rings (5.19), falls back to
     EpollCompletionDriver so that `WatchLoop` behaves the same on every
-    backend. The bounded-wait feature (`TIMEOUT_ARG`) never affects the
+    backend. With Backend.AUTO, a fallback prints one warning line to
+    stderr per process, naming the reason (io_uring unavailable, or
+    present without native multishot recvmsg / buffer rings). The
+    bounded-wait feature (`TIMEOUT_ARG`) never affects the
     choice: the io_uring driver falls back internally.
 
     The caller can force a specific backend via the `backend`
@@ -94,7 +147,7 @@ struct AutoDriver(IoDriver):
                      probes for io_uring and keeps it only when the
                      datagram path is native; Backend.IO_URING requires
                      io_uring or raises and skips the rule; Backend.EPOLL
-                     skips probing entirely.
+                     skips probing entirely. Only AUTO warns on fallback.
         """
         comptime if not is_linux:
             if backend is Backend.IO_URING or backend is Backend.EPOLL:
@@ -108,10 +161,20 @@ struct AutoDriver(IoDriver):
                     self._epoll = None
                     self._backend = Backend.IO_URING
                     return
+                var multishot = uring.supports(
+                    DriverFeature.MULTISHOT_RECVMSG
+                )
+                var buffer_ring = uring.supports(DriverFeature.BUFFER_RING)
                 _ = uring^
-            except:
+                _warn_fallback(
+                    "io_uring lacks a native datagram path (missing "
+                    + _missing_features(multishot, buffer_ring)
+                    + ")"
+                )
+            except e:
                 if backend is Backend.IO_URING:
                     raise "io_uring unavailable (ENOSYS)"
+                _warn_fallback("io_uring unavailable (" + String(e) + ")")
         self._uring = None
         self._epoll = EpollCompletionDriver(capacity=capacity)
         self._backend = Backend.EPOLL

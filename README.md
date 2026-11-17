@@ -15,7 +15,7 @@
 bouclette (pronounced *booklet*, `/bu.klɛt/`) is a lightweight I/O library for Mojo. Backend-agnostic, modern Linux features, zero unnecessary abstractions.
 
 - Dual I/O models
-- Auto backend fallback
+- Auto backend fallback (io_uring to epoll, with a one-time stderr warning)
 - Owned in-flight buffers
 - Zero-copy recv
 - Multishot datagrams

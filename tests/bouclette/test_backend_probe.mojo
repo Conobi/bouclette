@@ -8,7 +8,12 @@ verifies forced-backend construction and rejection.
 from bouclette.proactor.completion_loop import CompletionLoop
 from bouclette.watch.loop import WatchLoop
 from bouclette.drivers import DriverFeature
-from bouclette.drivers.auto import _native_datagram_path_rule
+from bouclette.drivers.auto import (
+    _claim_fallback_warning,
+    _fallback_warning,
+    _missing_features,
+    _native_datagram_path_rule,
+)
 from bouclette.drivers.backend import Backend
 from bouclette.drivers.io_uring import IoUringDriver
 from std.testing import assert_false, assert_true
@@ -110,7 +115,41 @@ def test_native_datagram_path_rule_truth_table() raises:
     assert_false(_native_datagram_path_rule(False, False))
 
 
+def test_missing_features_names_each_gap() raises:
+    assert_true(_missing_features(False, True) == "multishot recvmsg")
+    assert_true(_missing_features(True, False) == "buffer ring")
+    assert_true(
+        _missing_features(False, False) == "multishot recvmsg, buffer ring"
+    )
+
+
+def test_fallback_warning_text() raises:
+    assert_true(
+        _fallback_warning("io_uring unavailable (ENOSYS)")
+        == "bouclette: io_uring unavailable (ENOSYS); falling back to epoll"
+    )
+    assert_true(
+        _fallback_warning(
+            "io_uring lacks a native datagram path (missing buffer ring)"
+        )
+        == "bouclette: io_uring lacks a native datagram path (missing buffer"
+        " ring); falling back to epoll"
+    )
+
+
+def test_fallback_warning_claimed_once_per_process() raises:
+    var first = _claim_fallback_warning()
+    assert_false(_claim_fallback_warning())
+    assert_false(_claim_fallback_warning())
+    # A fresh process would see True; here an earlier AUTO fallback may
+    # already have claimed it, so only the repeat behaviour is pinned.
+    _ = first
+
+
 def main() raises:
+    test_missing_features_names_each_gap()
+    test_fallback_warning_text()
+    test_fallback_warning_claimed_once_per_process()
     test_native_datagram_path_rule_truth_table()
     test_auto_selects_correct_backend()
     test_forced_epoll_always_works()
