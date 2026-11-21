@@ -3,6 +3,7 @@
 from std.ffi import external_call
 from std.memory import Pointer
 from std.testing import assert_true
+from tests._test_util import TempDir
 from bouclette.buffer import AlignedBuffer
 from bouclette.watch.loop import WatchLoop
 from bouclette.handle import OwnedHandle
@@ -28,7 +29,8 @@ def _make_socketpair() raises -> Tuple[Int32, Int32]:
 
 def test_batched_file_ops(backend: Backend) raises:
     """Multiple file ops in one `run()`."""
-    var path = "/tmp/bouclette_test_batch"
+    var td = TempDir()
+    var path = td.cpath("batch")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -62,12 +64,13 @@ def test_batched_file_ops(backend: Backend) raises:
     assert_true(data[16] == 0x33, "offset 16 wrong")
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def test_mixed_file_and_network(backend: Backend) raises:
     """File write + TCP socketpair send+recv in the same `run()`."""
-    var path = "/tmp/bouclette_test_mixed"
+    var td = TempDir()
+    var path = td.cpath("mixed")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -102,12 +105,13 @@ def test_mixed_file_and_network(backend: Backend) raises:
     _ = sock_b.raw()
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def test_loop_destroyed_with_file_op(backend: Backend) raises:
     """Destroy loop with a file op in flight: no crash."""
-    var path = "/tmp/bouclette_test_teardown"
+    var td = TempDir()
+    var path = td.cpath("teardown")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -117,7 +121,7 @@ def test_loop_destroyed_with_file_op(backend: Backend) raises:
     _test_teardown_inner(fd, backend)
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def _test_teardown_inner(fd: Int32, backend: Backend) raises:

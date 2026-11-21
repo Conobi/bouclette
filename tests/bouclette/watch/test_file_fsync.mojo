@@ -2,6 +2,7 @@
 
 from std.ffi import external_call
 from std.testing import assert_true
+from tests._test_util import TempDir
 from bouclette.buffer import AlignedBuffer
 from bouclette.watch.loop import WatchLoop
 from bouclette.drivers.backend import Backend
@@ -9,7 +10,8 @@ from bouclette.drivers.backend import Backend
 
 def _test_fsync(backend: Backend) raises:
     """Write, fsync, fdatasync — all complete without error."""
-    var path = "/tmp/bouclette_test_fsync"
+    var td = TempDir()
+    var path = td.cpath("fsync")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -32,7 +34,7 @@ def _test_fsync(backend: Backend) raises:
     sf2^.result()
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def main() raises:

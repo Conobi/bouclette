@@ -2,6 +2,7 @@
 
 from std.ffi import external_call
 from std.testing import assert_true
+from tests._test_util import TempDir
 from bouclette.buffer import AlignedBuffer
 from bouclette.watch.loop import WatchLoop
 from bouclette.drivers.backend import Backend
@@ -9,7 +10,8 @@ from bouclette.drivers.backend import Backend
 
 def _test_roundtrip(backend: Backend) raises:
     """Write bytes, read them back, compare."""
-    var path = "/tmp/bouclette_test_roundtrip"
+    var td = TempDir()
+    var path = td.cpath("roundtrip")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),  # O_RDWR | O_CREAT | O_TRUNC
@@ -39,12 +41,13 @@ def _test_roundtrip(backend: Backend) raises:
         assert_true(data[i] == UInt8(i), "data mismatch")
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def _test_read_at_offset(backend: Backend) raises:
     """Read at a non-zero offset, verify partial content."""
-    var path = "/tmp/bouclette_test_offset"
+    var td = TempDir()
+    var path = td.cpath("offset")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -72,12 +75,13 @@ def _test_read_at_offset(backend: Backend) raises:
     assert_true(data[3] == 0x0B, "offset read byte 3 wrong")
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def _test_o_direct(backend: Backend) raises:
     """O_DIRECT write+read with 512-aligned buffer."""
-    var path = "/tmp/bouclette_test_odirect"
+    var td = TempDir()
+    var path = td.cpath("odirect")
     # O_DIRECT = 0x4000 = 16384 on x86_64
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
@@ -108,7 +112,7 @@ def _test_o_direct(backend: Backend) raises:
     )
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def main() raises:

@@ -28,6 +28,8 @@ prerelease = "allow"
 [tool.mojox]
 packages = ["bouclette"]
 test-parallel = true
+# Lets tests import the shared helper as `tests._test_util`.
+flags = ["-I", "."]
 
 [tool.mojox.lints]
 warnings = "error"

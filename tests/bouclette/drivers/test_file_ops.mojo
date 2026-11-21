@@ -4,6 +4,7 @@ from std.ffi import external_call
 from std.memory import Pointer
 from std.memory.alloc import unsafe_alloc
 from std.testing import assert_true
+from tests._test_util import TempDir
 from bouclette.drivers.auto import AutoDriver
 from bouclette.drivers.backend import Backend
 from bouclette.proactor.completion import Completion
@@ -35,7 +36,8 @@ def _test_on_backend(backend: Backend) raises:
     """Write 4 bytes, fsync, read them back, verify."""
     var driver = AutoDriver(backend=backend)
 
-    var path = "/tmp/bouclette_test_file_ops"
+    var td = TempDir()
+    var path = td.cpath("file_ops")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),  # O_RDWR | O_CREAT | O_TRUNC
@@ -89,7 +91,7 @@ def _test_on_backend(backend: Backend) raises:
 
     # Clean up.
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
     write_buf.unsafe_free()
     read_buf.unsafe_free()
     c.unsafe_free()

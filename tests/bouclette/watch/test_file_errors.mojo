@@ -2,6 +2,7 @@
 
 from std.ffi import external_call
 from std.testing import assert_true
+from tests._test_util import TempDir
 from bouclette.buffer import AlignedBuffer
 from bouclette.watch.loop import WatchLoop
 from bouclette.watch.transfer import FileTransferFailed, FailureReason
@@ -10,7 +11,8 @@ from bouclette.drivers.backend import Backend
 
 def test_read_past_eof(backend: Backend) raises:
     """Read past EOF returns a short read."""
-    var path = "/tmp/bouclette_test_eof"
+    var td = TempDir()
+    var path = td.cpath("eof")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -33,12 +35,13 @@ def test_read_past_eof(backend: Backend) raises:
     assert_true(rr.count() == 4, "should be a short read of 4")
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def test_drop_future_before_run(backend: Backend) raises:
     """Dropping a file future before `run()` is safe."""
-    var path = "/tmp/bouclette_test_drop"
+    var td = TempDir()
+    var path = td.cpath("drop")
     var fd = external_call["open", Int32](
         path.unsafe_ptr(),
         Int32(2 | 64 | 512),
@@ -52,7 +55,7 @@ def test_drop_future_before_run(backend: Backend) raises:
     loop.run()  # Should complete without crash.
 
     _ = external_call["close", Int32](fd)
-    _ = external_call["unlink", Int32](path.unsafe_ptr())
+    _ = td^
 
 
 def main() raises:
